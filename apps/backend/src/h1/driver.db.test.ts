@@ -48,7 +48,13 @@ import {
 import { createSessionNoticeListener } from '../trading/session-notice-listener';
 import { replayH1Entry } from '@binarius/signal';
 import type { ClosedSecond } from '../market-data/seconds';
-import { createH1Driver, type H1Driver, type H1DriverDeps } from './driver';
+import {
+  createH1Driver,
+  h1ShownDecisionInput,
+  h1ShownStartDecisionInput,
+  type H1Driver,
+  type H1DriverDeps,
+} from './driver';
 
 // The driver against the real operations (#707, docs/h1.md -> The driver) on a temporary migrated
 // database: an unmarked account's v5 session (#828), a scripted series whose ramp from F signals up.
@@ -314,6 +320,106 @@ describe('the H1 driver on the database (#707)', () => {
     expect(own).toHaveLength(1);
     const entry = h1ShadowEntrySchema.parse(journalEntryOf(own[0]!.decision));
     expect(replayH1Entry(entry)).toEqual(own[0]!.decision.decision);
+  });
+});
+
+describe('the shown start on the database (#829)', () => {
+  // the builders' rows against every CHECK of signal_decisions: here and not in packages/db, so a
+  // change of the builders is what the case runs
+  it('SD20: the three h1-start rows pass the CHECKs and come back as written', async () => {
+    const { seed, session } = await botSession();
+    const second = Date.now() - 6_000;
+    const facts = {
+      assetId: ASSET,
+      shown: {
+        action: 'up' as const,
+        second,
+        decidedAt: second + 400,
+        shownAtMs: second + 2_000,
+        source: 'list' as const,
+      },
+      takenAtMs: second + 5_000,
+      payout: 96,
+      brokerAccountId: seed.brokerAccountId,
+    };
+    const inputs = [
+      h1ShownStartDecisionInput(facts, { sessionId: session.id }),
+      h1ShownStartDecisionInput(facts, { refusal: 'trading_paused' }),
+      h1ShownDecisionInput({ ...facts, sessionId: session.id }, 1, 'intent', null),
+    ];
+    for (const input of inputs) {
+      const { id } = await recordSignalDecision(tmp.db, input);
+      const [row] = await tmp.db.select().from(signalDecisions).where(eq(signalDecisions.id, id));
+      expect(row).toMatchObject({ ...input, series: [] });
+    }
+    expect(inputs.map((one) => [one.context, one.outcome, one.tradingSessionId, one.step])).toEqual(
+      [
+        ['session_start', 'started', session.id, null],
+        ['session_start', 'refused', null, null],
+        ['session', 'intent', session.id, 1],
+      ],
+    );
+  });
+
+  it('H1-DB8: the shown Шаг 1: the intent without a deadline, its h1-start row by signal_decision_id, the outbox event', async () => {
+    const { seed, session } = await botSession();
+    const { driver, wakes } = driverOn(scriptedSeries());
+    const second = Date.now() - 4_000;
+    driver.adopt(
+      {
+        id: session.id,
+        brokerAccountId: session.brokerAccountId,
+        mode: session.mode,
+        telegramUserId: seed.telegramUserId,
+        settings: session.settings,
+        startedAt: session.startedAt,
+      },
+      {
+        shown: {
+          action: 'down',
+          second,
+          decidedAt: second + 400,
+          shownAtMs: second + 1_000,
+          source: 'analysis',
+        },
+        pair: { payout: 96, symbol: 'EUR/USD' },
+      },
+    );
+    await until('the driver to wake the publisher', () => Promise.resolve(wakes.n === 1));
+    await driver.stop();
+    const [intent] = await tmp.db
+      .select()
+      .from(tradeIntents)
+      .where(eq(tradeIntents.tradingSessionId, session.id));
+    expect(intent).toMatchObject({
+      status: 'queued',
+      action: 'down',
+      amount: '1.00000000',
+      submitDeadlineAt: null,
+      clientRequestId: `session:${session.id}:1`,
+    });
+    const [row] = await tmp.db
+      .select()
+      .from(signalDecisions)
+      .where(eq(signalDecisions.id, intent!.signalDecisionId!));
+    expect(row).toMatchObject({
+      context: 'session',
+      tradingSessionId: session.id,
+      step: 1,
+      version: 'h1-start',
+      kind: 'signal',
+      action: 'down',
+      decidedAtMs: second,
+      outcome: 'intent',
+      digits: null,
+      series: [],
+      source: { kind: 'shown', source: 'analysis', shownAtMs: second + 1_000 },
+    });
+    const events = await tmp.db
+      .select({ id: outboxEvents.id })
+      .from(outboxEvents)
+      .where(eq(outboxEvents.intentId, intent!.id));
+    expect(events).toHaveLength(1);
   });
 });
 

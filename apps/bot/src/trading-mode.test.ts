@@ -37,6 +37,7 @@ import {
   inlineRoles,
   inlineRows,
   inlineStyles,
+  stubShownSignals,
 } from './testing';
 import {
   MODE_CONFIRM_CALLBACK_DATA,
@@ -89,6 +90,7 @@ function setup(
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

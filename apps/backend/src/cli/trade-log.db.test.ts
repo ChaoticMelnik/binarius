@@ -61,6 +61,8 @@ import {
   h1DriverDecisionInput,
   h1RepeatDecisionInput,
   H1RepeatTrigger,
+  h1ShownDecisionInput,
+  h1ShownStartDecisionInput,
   h1StartDecisionInput,
 } from '../h1/driver';
 import { parseTradeLogArgs, runTradeLogCli, TRADE_LOG_PAGE_ROWS } from './trade-log';
@@ -1024,6 +1026,104 @@ describe('trade-log export (#666)', () => {
     const entry = h1ShadowEntrySchema.parse(line!.signal);
     expect(entry.params.set).toBe('session');
     expect(replayH1Entry(entry)).toEqual(entry.decision);
+  });
+
+  it("X19 a shown start's two h1-start rows (#829): exported with the session and the trade, the shown direction as stored, no interval length", async () => {
+    const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+    const built = buildH1SessionSettings({
+      assetId: 101,
+      cycles: 5,
+      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 0 },
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    if (!built.success || !isH1Settings(built.data)) throw new Error('fixture: H1 settings');
+    const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
+      settings: built.data,
+    });
+    const second = 1_170_000_200_000;
+    const facts = {
+      assetId: 101,
+      shown: {
+        action: TradeAction.Down,
+        second,
+        decidedAt: second + 400,
+        shownAtMs: second + 3_000,
+        source: 'list' as const,
+      },
+      takenAtMs: second + 9_000,
+      payout: 92,
+      brokerAccountId: seed.brokerAccountId,
+    };
+    await recordSignalDecision(tmp.db, h1ShownStartDecisionInput(facts, { sessionId: session.id }));
+    const { intent } = await createSessionIntent(tmp.db, {
+      sessionId: session.id,
+      step: 1,
+      telegramUserId: seed.telegramUserId,
+      brokerAccountId: seed.brokerAccountId,
+      mode: TradeMode.Demo,
+      assetId: 101,
+      amount: decimalStringSchema.parse('1'),
+      action: TradeAction.Down,
+      durationSec: 5,
+      decision: h1ShownDecisionInput(
+        { ...facts, sessionId: session.id, takenAtMs: second + 9_100 },
+        1,
+        SignalDecisionOutcome.Intent,
+        null,
+      ),
+    });
+    await seedBrokerTradeFor(tmp.db, intent, { profit: '0.92' as DecimalString });
+    await tmp.db.execute(
+      sql`update ${signalDecisions} set recorded_at = '2007-03-01T00:00:01Z'::timestamptz + (coalesce(step, 0) * interval '1 microsecond') where trading_session_id = ${session.id}::uuid`,
+    );
+    const { code, out, err } = await run(
+      'export',
+      '--from',
+      '2007-03-01T00:00:00Z',
+      '--to',
+      '2007-03-02T00:00:00Z',
+      '--session',
+      session.id,
+    );
+    expect(code).toBe(0);
+    expect(err).toEqual(['строк: 2']);
+    const [started, traded] = linesOf(out);
+    expect(started?.decision).toMatchObject({
+      context: 'session_start',
+      version: 'h1-start',
+      kind: 'signal',
+      action: 'down',
+      outcome: 'started',
+      step: null,
+      decidedAtMs: second,
+      takenAtMs: second + 9_000,
+    });
+    expect(started?.session).toMatchObject({ id: session.id });
+    expect(traded?.decision).toMatchObject({
+      context: 'session',
+      version: 'h1-start',
+      outcome: 'intent',
+      step: 1,
+      decidedAtMs: second,
+    });
+    expect(traded?.trade).toMatchObject({ intentId: intent.id });
+    for (const line of [started, traded]) {
+      expect(line?.signal).toEqual({
+        assetId: 101,
+        interval: null,
+        nowMs: second,
+        source: { kind: 'shown', source: 'list', shownAtMs: second + 3_000 },
+        version: 'h1-start',
+        params: { rule: 'shown_signal', ...H1_R1_PARAMS },
+        series: [],
+        decision: {
+          kind: 'signal',
+          version: 'h1-start',
+          action: 'down',
+          shown: { second, decidedAt: second + 400, source: 'list' },
+        },
+      });
+    }
   });
 
   describe('the ticks around a decision (#668)', () => {

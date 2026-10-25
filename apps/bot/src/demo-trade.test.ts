@@ -75,6 +75,7 @@ import {
   inlineRows,
   inlineStyles,
   keyboardRows,
+  stubShownSignals,
 } from './testing';
 import { intentStatusText, LABELS, setBotTextSources, TEXTS } from './texts';
 
@@ -125,6 +126,7 @@ function setup(
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.languages === undefined ? {} : { languages: options.languages }),
   });

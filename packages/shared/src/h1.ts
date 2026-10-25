@@ -13,6 +13,10 @@ export const H1_VERSION = 'h1';
 // after a lost or tied Шаг 1, in that trade's direction, decided by the rule, not by the detector.
 // A stored shape the stand does not replay, not a signal algorithm
 export const H1_REPEAT_VERSION = 'h1-repeat';
+// the version of a start on the direction the bot showed (#829, docs/h1.md -> The shown
+// direction): the start route's session_start row and the driver's Шаг 1 intent row. A stored
+// shape the stand does not replay, as h1-repeat
+export const H1_START_VERSION = 'h1-start';
 
 export const H1NoSignalReason = {
   NoPrice: 'no_price',
@@ -110,6 +114,22 @@ export const H1_SECOND_CLOSE_MARGIN_MS = 500;
 // pair's next second closes; an older f means the series fell behind. The start (#796), the H1
 // scanner's list and the analysis's `h1` (#828) serve by the same bound.
 export const H1_START_SECOND_MAX_AGE_MS = 1_600;
+
+// The screen a shown direction was drawn on (#829): a jsonb value of the h1-start row, not a status
+export const ShownSignalSource = { List: 'list', Analysis: 'analysis' } as const;
+export type ShownSignalSource = (typeof ShownSignalSource)[keyof typeof ShownSignalSource];
+
+// The direction the bot showed for a pair, echoed back by the start (#829, Rule 55): action,
+// second and decidedAt as the backend answered them (GET /trading/signals, POST /trading/signal's
+// h1), shownAtMs the bot's clock when the screen went out. The shape only, no age bound (decision 5)
+export const shownSignalSchema = z.strictObject({
+  action: tradeActionSchema,
+  second: z.int().positive(),
+  decidedAt: z.int().positive(),
+  shownAtMs: z.int().positive(),
+  source: z.enum(ShownSignalSource),
+});
+export type ShownSignalStart = z.infer<typeof shownSignalSchema>;
 
 // --- H1 sessions (#670, docs/h1.md -> Sessions) ---------------------------------------------------
 

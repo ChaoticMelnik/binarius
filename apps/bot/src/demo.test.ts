@@ -106,6 +106,7 @@ import {
   inlineRoles,
   inlineRows,
   inlineStyles,
+  stubShownSignals,
 } from './testing';
 import {
   DEMO_DURATION_LABELS,
@@ -156,11 +157,13 @@ function setup(
   const loginDialog = createLoginDialog(clock === undefined ? {} : { now: () => clock.at });
   if (options.dialog !== undefined) loginDialog.set(USER.id, options.dialog);
   const signalWaiter = stubSignalWaiter();
+  const shownSignals = stubShownSignals();
   const bot = createBot({
     intentTracker: stubTracker(),
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter,
+    shownSignals,
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       readPairs,
@@ -189,6 +192,7 @@ function setup(
     logger,
     loginDialog,
     signalWaiter,
+    shownSignals,
     press,
     pressOnPhoto,
     ...api,
@@ -346,7 +350,7 @@ describe('the signals screen', () => {
     });
     const shownIds = (route: readonly number[], pairs: readonly PairView[]) =>
       signalsShown(
-        route.map((assetId) => ({ assetId, action: TradeAction.Up })),
+        route.map((assetId) => ({ assetId, action: TradeAction.Up, second: NOW, decidedAt: NOW })),
         pairsResponse({ pairs: [...pairs] }),
         NOW,
       ).map(({ pair }) => pair.id);
@@ -3423,5 +3427,118 @@ ${BOT_TEXT_SOURCES_EN.cycleStakeChoose}`,
         .map((key) => key.text),
     ).toContain('🚀 Open a trade: ⬆️ Up · $1.00');
     expectEnglish(calls);
+  });
+});
+
+// #829: the screens record the directions they showed, once they are on their way, from the
+// backend's answers; the doors record nothing
+describe('the record of the shown directions (#829)', () => {
+  const ROUTE = signalsOf([PAIR_EURUSD.id, TradeAction.Up], [PAIR_SHORT.id, TradeAction.Down]);
+  const LISTED = [
+    { assetId: PAIR_EURUSD.id, action: 'up', second: NOW - 900, decidedAt: NOW - 500 },
+    { assetId: PAIR_SHORT.id, action: 'down', second: NOW - 900, decidedAt: NOW - 500 },
+  ];
+  const ANALYSIS = demoAnalysisCallbackData(PAIR_EURUSD.id, 5);
+  const PHOTO_REFUSED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: wrong file identifier/HTTP URL specified',
+  };
+  const SEND_REFUSED: ApiError = {
+    ok: false,
+    error_code: 403,
+    description: 'Forbidden: bot was blocked by the user',
+  };
+
+  it.each([
+    ["the card's button", DEMO_CALLBACK_DATA, 'sendMessage'],
+    ['the list', DEMO_SIGNALS_CALLBACK_DATA, 'editMessageText'],
+    ['a legacy datum', 'demo:l:101', 'sendMessage'],
+  ] as const)(
+    'W-shown1 %s records the drawn pairs as a list, after the screen went out',
+    async (_name, data, method) => {
+      const { press, shownSignals } = setup({ readSignals: () => Promise.resolve(ROUTE) });
+      await press(data);
+      expect(shownSignals.remember.mock.calls).toEqual([[USER.id, 'list', NOW, LISTED]]);
+      const refused = setup({ readSignals: () => Promise.resolve(ROUTE) });
+      refused.apiErrors.set(method, SEND_REFUSED);
+      await refused.press(data).catch(() => undefined);
+      expect(refused.shownSignals.remember).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['the reads failed', { readSignals: () => Promise.reject(new Error('down')) }],
+    [
+      'no 5s list',
+      {
+        readSignals: () =>
+          Promise.resolve({
+            ...ROUTE,
+            lists: ROUTE.lists.filter((list) => list.interval !== '5s'),
+          }),
+      },
+    ],
+    ['a stale catalog', { readPairs: () => Promise.resolve(pairsResponse({ fresh: false })) }],
+  ] as const)('W-shown2 a refused list (%s) records nothing', async (_name, options) => {
+    const { press, shownSignals } = setup({
+      readSignals: () => Promise.resolve(ROUTE),
+      ...options,
+    });
+    await press(DEMO_SIGNALS_CALLBACK_DATA);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  it("W-shown3 the analysis card records its answer's h1 as the analysis; its text too; a failed photo not", async () => {
+    const h1 = { assetId: PAIR_EURUSD.id, action: 'down', second: 1_790_000_044_000 };
+    const photo = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
+    await photo.press(ANALYSIS);
+    expect(photo.shownSignals.remember.mock.calls).toEqual([
+      [USER.id, 'analysis', NOW, [{ ...h1, decidedAt: 1_790_000_044_320 }]],
+    ]);
+    const text = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
+    text.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await text.press(ANALYSIS);
+    expect(text.shownSignals.remember.mock.calls).toEqual(photo.shownSignals.remember.mock.calls);
+    const lost = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
+    lost.apiErrors.set('sendPhoto', TRANSPORT('sendPhoto'));
+    await lost.press(ANALYSIS);
+    expect(lost.shownSignals.remember).not.toHaveBeenCalled();
+    const unedited = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
+    unedited.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    failFromSecondCall(unedited, 'editMessageText', EDIT_GONE);
+    await unedited.press(ANALYSIS);
+    expect(unedited.shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['l', demoLaunchCallbackData(PAIR_EURUSD.id, 5)],
+    ['a', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'a')],
+    ['n with the pair in the list', demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n')],
+  ] as const)('W-shown4 the door %s records nothing', async (_name, data) => {
+    const { press, shownSignals } = setup({ readSignals: () => Promise.resolve(ROUTE) });
+    await press(data);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  it('W-shown5 the analysis without an H1 signal (the wait) records nothing', async () => {
+    const { press, shownSignals, signalWaiter } = setup({
+      evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
+    });
+    await press(ANALYSIS);
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  it("W-shown6 the door n's wait records the other pairs' buttons as a list, after the screen went out", async () => {
+    const others = signalsOf([PAIR_SHORT.id, TradeAction.Down]);
+    const door = demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n');
+    const { press, shownSignals } = setup({ readSignals: () => Promise.resolve(others) });
+    await press(door);
+    expect(shownSignals.remember.mock.calls).toEqual([[USER.id, 'list', NOW, [LISTED[1]]]]);
+    const refused = setup({ readSignals: () => Promise.resolve(others) });
+    refused.apiErrors.set('sendMessage', SEND_REFUSED);
+    await refused.press(door).catch(() => undefined);
+    expect(refused.shownSignals.remember).not.toHaveBeenCalled();
   });
 });

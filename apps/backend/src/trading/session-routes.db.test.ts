@@ -2481,4 +2481,212 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
     expect(driverCalls.currentCalls).toEqual([]);
     expect(driverCalls.adoptCalls).toEqual([]);
   });
+
+  // #829: the direction the bot showed, older than any reading; the fake reading says up
+  const shownSignal = {
+    action: 'down',
+    second: F - 20_000,
+    decidedAt: F - 19_600,
+    shownAtMs: F - 15_000,
+    source: 'analysis',
+  } as const;
+  const shownBody = (seed: { telegramUserId: string }, patch: object = {}) =>
+    h1Body(seed, { shownSignal: { ...shownSignal, ...patch } });
+
+  it('H1-R17 a start with a shown signal: 201 in its direction, no reading, the shown hand-over, the h1-start row, one info line (#829)', async () => {
+    const seed = await seedReady();
+    const response = await start(h1App(), shownBody(seed));
+    expect(response.statusCode).toBe(201);
+    const session = sessionOf(response);
+    expect(session.signalAction).toBe('down');
+    const [row] = await tmp.db
+      .select()
+      .from(tradingSessions)
+      .where(eq(tradingSessions.id, session.id));
+    expect(row?.startSignalAction).toBe('down');
+    expect(driverCalls.currentCalls).toEqual([]);
+    expect(driverCalls.adoptCalls).toHaveLength(1);
+    expect(driverCalls.adoptCalls[0]![1]).toEqual({ shown: shownSignal, pair: h1Pair });
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      context: 'session_start',
+      tradingSessionId: session.id,
+      step: null,
+      interval: null,
+      version: 'h1-start',
+      outcome: 'started',
+      detail: null,
+      kind: 'signal',
+      action: 'down',
+      decidedAtMs: shownSignal.second,
+      takenAtMs: NOW,
+      payout: h1Pair.payout,
+      digits: null,
+      params: { rule: 'shown_signal', ...H1_R1_PARAMS },
+      decision: {
+        kind: 'signal',
+        version: 'h1-start',
+        action: 'down',
+        shown: {
+          second: shownSignal.second,
+          decidedAt: shownSignal.decidedAt,
+          source: 'analysis',
+        },
+      },
+      source: { kind: 'shown', source: 'analysis', shownAtMs: shownSignal.shownAtMs },
+      series: [],
+      lastTick: null,
+      ticksUntilMs: null,
+    });
+    const infos = lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry.msg === 'h1 start on a shown signal');
+    expect(infos).toEqual([
+      expect.objectContaining({
+        accountId: seed.brokerAccountId,
+        assetId: ASSET,
+        source: 'analysis',
+        ageMs: NOW - shownSignal.second,
+      }),
+    ]);
+  });
+
+  it('H1-R18 a shown signal without the driver (no data socket): 201 in its direction, no reading line, no h1 row (#829)', async () => {
+    const seed = await seedReady();
+    const response = await start(appWith({ catalog: freshCatalog([h1Pair]) }), shownBody(seed));
+    expect(response.statusCode).toBe(201);
+    expect(sessionOf(response).signalAction).toBe('down');
+    expect(lines.some((line) => line.includes('h1 start without a reading'))).toBe(false);
+    const rows = await startRows(seed.brokerAccountId);
+    expect(rows.map((one) => [one.version, one.outcome])).toEqual([['h1-start', 'started']]);
+  });
+
+  it('H1-R19 a refusal at the insert after a shown signal: the h1-start row refused with its code, no session, no hand-over (#829)', async () => {
+    const seed = await seedUserWithAccount(tmp.db);
+    const before = await sessionCount();
+    const closeFirst = async () => {
+      await stopTrading(tmp.db, { source: 'operator', reason: 'test' });
+      await snapshotFor(seed.brokerAccountId);
+    };
+    try {
+      const response = await start(h1App({ refresh: closeFirst }), shownBody(seed));
+      await expectRefusal(response, 409, 'trading_paused', before);
+    } finally {
+      await openTrading(tmp.db);
+    }
+    const rows = await startRows(seed.brokerAccountId);
+    expect(
+      rows.map((row) => [row.version, row.context, row.outcome, row.detail, row.tradingSessionId]),
+    ).toEqual([['h1-start', 'session_start', 'refused', 'trading_paused', null]]);
+    expect(driverCalls.adoptCalls).toEqual([]);
+    expect(driverCalls.currentCalls).toEqual([]);
+  });
+
+  it('H1-R20 a stake refusal with a shown signal writes no row, reads nothing, hands nothing over (#829)', async () => {
+    const seed = await seedReady();
+    await setStake(
+      tmp.db,
+      BigInt(seed.telegramUserId),
+      TradeMode.Demo,
+      decimalStringSchema.parse('0.5'),
+    );
+    const before = await sessionCount();
+    await expectRefusal(await start(h1App(), shownBody(seed)), 409, 'stake_below_minimum', before);
+    expect(await startRows(seed.brokerAccountId)).toEqual([]);
+    expect(driverCalls.currentCalls).toEqual([]);
+    expect(driverCalls.adoptCalls).toEqual([]);
+  });
+
+  it.each([
+    ['an unknown source', { source: 'card' }],
+    ['a zero second', { second: 0 }],
+    ['an extra key', { extra: 1 }],
+    ['no shownAtMs', { shownAtMs: undefined }],
+  ])(
+    'H1-R21 a malformed shown signal (%s) is 400 validation, nothing created (#829)',
+    async (_name, patch) => {
+      const seed = await seedReady();
+      const before = await sessionCount();
+      const response = await start(h1App(), shownBody(seed, patch));
+      expect(response.statusCode).toBe(400);
+      expect(response.json()).toMatchObject({ error: 'validation' });
+      expect(await sessionCount()).toBe(before);
+      expect(await startRows(seed.brokerAccountId)).toEqual([]);
+      expect(driverCalls.adoptCalls).toEqual([]);
+    },
+  );
+
+  it('H1-R22 the real driver on a quiet series trades the shown direction at once: Шаг 1 without a deadline, both h1-start rows (#829)', async () => {
+    const seed = await seedReady();
+    const T = F - 300_000;
+    const series = createSecondSeries({ capacitySec: 320, closeMarginMs: 500 });
+    QUIET.forEach((price, i) => {
+      const second = T + i * 1_000;
+      series.push(ASSET, 5, { price, timestamp: second - 500 }, second - 460);
+    });
+    series.advance(F + 500);
+    const wakes = { n: 0 };
+    const driver = createH1Driver({
+      series,
+      catalog: { read: () => freshCatalog([h1Pair]) },
+      streaming: () => true,
+      sessions: {
+        list: () => listActiveH1Sessions(tmp.db),
+        history: (id, options) => readSessionHistory(tmp.db, id, options),
+        balance: (id, options) => readSessionBalance(tmp.db, id, options),
+        createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
+        stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
+        record: (input) => recordSignalDecision(tmp.db, input),
+      },
+      wake: () => void (wakes.n += 1),
+      logger: pino(logOptions('silent')),
+      now: () => F + 600,
+      config: {
+        scanMs: 60_000,
+        tickMs: 60_000,
+        logMs: 60_000,
+        submitBudgetMs: 5_000,
+        startMaxAgeMs: 1_600,
+      },
+    });
+    try {
+      const response = await start(
+        appWith({ catalog: freshCatalog([h1Pair]), h1Driver: driver }),
+        shownBody(seed, { action: 'up' }),
+      );
+      expect(response.statusCode).toBe(201);
+      const session = sessionOf(response);
+      expect(session.signalAction).toBe('up');
+      await until('the driver to wake the publisher', () => Promise.resolve(wakes.n === 1));
+      const intents = await tmp.db
+        .select()
+        .from(tradeIntents)
+        .where(eq(tradeIntents.tradingSessionId, session.id));
+      expect(intents).toHaveLength(1);
+      const rows = await tmp.db
+        .select()
+        .from(signalDecisions)
+        .where(eq(signalDecisions.tradingSessionId, session.id));
+      const startRow = rows.find((one) => one.context === 'session_start')!;
+      const intentRow = rows.find((one) => one.context === 'session')!;
+      expect(startRow).toMatchObject({ version: 'h1-start', outcome: 'started' });
+      expect(intentRow).toMatchObject({
+        version: 'h1-start',
+        outcome: 'intent',
+        step: 1,
+        decidedAtMs: shownSignal.second,
+        takenAtMs: F + 600,
+        action: 'up',
+      });
+      expect(intents[0]).toMatchObject({
+        clientRequestId: `session:${session.id}:1`,
+        action: 'up',
+        signalDecisionId: intentRow.id,
+        submitDeadlineAt: null,
+      });
+    } finally {
+      await driver.stop();
+    }
+  });
 });

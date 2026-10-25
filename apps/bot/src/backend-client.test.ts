@@ -64,6 +64,7 @@ import {
   USER_ACCOUNT_LIST_LIMIT,
   UserStatus,
   userReferralResponseSchema,
+  ShownSignalSource,
   TradeAction,
   TradeIntentErrorCode,
   TradeMode,
@@ -1279,6 +1280,24 @@ describe('startSession', () => {
     expect(capture.url).toBe('/trading/sessions');
     expect(capture.authorization).toBe(`Bearer ${TOKEN}`);
     expect(JSON.parse(capture.body ?? '')).toEqual(sessionRequest);
+  });
+
+  it('posts a shown direction as given (#829)', async () => {
+    const served = await serve((_request, reply) => {
+      json(reply, 201, { session: SESSION_VIEW });
+    });
+    const shownSignal = {
+      action: TradeAction.Down,
+      second: 1_790_000_000_000,
+      decidedAt: 1_790_000_000_400,
+      shownAtMs: 1_790_000_003_000,
+      source: ShownSignalSource.List,
+    };
+    await createBackendClient({ baseUrl: served.baseUrl, token: TOKEN }).startSession({
+      ...sessionRequest,
+      shownSignal,
+    });
+    expect(JSON.parse(served.capture.body ?? '')).toEqual({ ...sessionRequest, shownSignal });
   });
 
   it.each([

@@ -138,4 +138,27 @@ describe('parseJournalLine', () => {
       kind: 'malformed_line',
     });
   });
+
+  // #829: a shown start's row is a stored shape, not a signal algorithm - the stand replays none
+  it('JL-h1start an exported h1-start line is unsupported_version with its version', () => {
+    const signal = {
+      assetId: PAIR.id,
+      interval: null,
+      nowMs: T0,
+      source: { kind: 'shown', source: 'list', shownAtMs: T0 + 3_000 },
+      version: 'h1-start',
+      params: { rule: 'shown_signal', moveSec: 3, sdWindowSec: 300, sdStepSec: 5, threshold: 1 },
+      series: [],
+      decision: {
+        kind: 'signal',
+        version: 'h1-start',
+        action: 'up',
+        shown: { second: T0, decidedAt: T0 + 400, source: 'list' },
+      },
+    };
+    expect(parseJournalLine(JSON.stringify({ decision: {}, signal }))).toEqual({
+      kind: 'unsupported_version',
+      version: 'h1-start',
+    });
+  });
 });

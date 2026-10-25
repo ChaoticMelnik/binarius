@@ -10,12 +10,14 @@ import {
   H1_PRICE_RANGE,
   H1_R1_PARAMS,
   H1_REPEAT_VERSION,
+  H1_START_VERSION,
   H1_VERSION,
   h1DecisionSchema,
   h1ShadowEntrySchema,
   h1ShadowParamsSchema,
   h1ShadowResultSchema,
   h1ShadowSourceSchema,
+  shownSignalSchema,
   tradeOutcomeOf,
 } from './h1';
 import { SIGNAL_ALGORITHM_VERSIONS } from './signal';
@@ -167,5 +169,37 @@ describe('the repeat step of an H1 session (#775)', () => {
       false,
     );
     expect(H1_REPEAT_VERSION).not.toBe(H1_VERSION);
+  });
+});
+
+describe('the shown direction of a start (#829)', () => {
+  const shown = {
+    action: 'up',
+    second: 1_700_000_000_000,
+    decidedAt: 1_700_000_000_400,
+    shownAtMs: 1_700_000_002_000,
+    source: 'analysis',
+  };
+
+  it('H-S11: the record parses; an unknown source, an extra key, a zero or fractional second do not', () => {
+    expect(shownSignalSchema.parse(shown)).toEqual(shown);
+    expect(shownSignalSchema.parse({ ...shown, source: 'list' }).source).toBe('list');
+    for (const bad of [
+      { ...shown, source: 'card' },
+      { ...shown, extra: 1 },
+      { ...shown, second: 0 },
+      { ...shown, second: 1.5 },
+      { ...shown, action: 'sideways' },
+      { ...shown, shownAtMs: undefined },
+    ]) {
+      expect(shownSignalSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false);
+    }
+  });
+
+  it("H-S12: the start row's version fits the pattern, is no signal algorithm, neither H1's nor the repeat's", () => {
+    expect(H1_START_VERSION).toMatch(SIGNAL_VERSION_PATTERN);
+    expect((SIGNAL_ALGORITHM_VERSIONS as readonly string[]).includes(H1_START_VERSION)).toBe(false);
+    expect(H1_START_VERSION).not.toBe(H1_VERSION);
+    expect(H1_START_VERSION).not.toBe(H1_REPEAT_VERSION);
   });
 });

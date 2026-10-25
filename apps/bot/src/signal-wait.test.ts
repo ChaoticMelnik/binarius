@@ -16,7 +16,7 @@ import {
   type TradingSignalsResponse,
 } from '@binarius/shared';
 import type { BackendClient } from './backend-client';
-import type { DemoScreen } from './demo';
+import type { DemoScreen, ShownSignal } from './demo';
 import { currentLanguage } from './language';
 import {
   createSignalWaiter,
@@ -38,6 +38,7 @@ import {
   SIGNAL_H1_ONLY,
   SIGNAL_NO_SIGNAL,
   signalsResponse,
+  stubShownSignals,
 } from './testing';
 import { SIGNAL_WAIT_POLL_MS, SIGNAL_WAIT_POLL_OFFSET_MS } from './timing';
 
@@ -74,6 +75,16 @@ const NOT_MODIFIED = () =>
   refusal(400, 'Bad Request: message is not modified: specified new message content is the same');
 const TRANSPORT = () => new HttpError("Network request for 'editMessageText' failed!", new Error());
 
+// the listed pairs the catalog has, with their signals' second and decision time (#829)
+const shownOf = (
+  signals: TradingSignalsResponse['lists'][number]['signals'],
+  catalog: PairsCatalogResponse,
+): ShownSignal[] =>
+  signals.flatMap(({ assetId, action, second, decidedAt }) => {
+    const pair = catalog.pairs.find((listedPair) => listedPair.id === assetId);
+    return pair === undefined ? [] : [{ pair, action, second, decidedAt }];
+  });
+
 function setup(
   options: {
     maxMs?: number;
@@ -96,21 +107,21 @@ function setup(
   };
   const languages: string[] = [];
   const screens: SignalWaitScreens = {
-    list: vi.fn((signals: TradingSignalsResponse) => {
+    list: vi.fn((signals: TradingSignalsResponse, catalog: PairsCatalogResponse) => {
       languages.push(currentLanguage());
       const list = signals.lists.find((candidate) => candidate.interval === '5s');
       if (list === undefined) return undefined;
       const ids = list.signals.map((signal) => signal.assetId).join(',');
-      return { screen: screen(`list:${ids}`), listed: list.signals.length };
+      return {
+        screen: screen(`list:${ids}`),
+        listed: list.signals.length,
+        shown: shownOf(list.signals, catalog),
+      };
     }),
     expired: () => screen('expired'),
     waiting: (base: TelegramHtml, alternatives) =>
       screen(`${base.value}|${alternatives.map(({ pair }) => pair.id).join(',')}`),
-    alternatives: (signals, catalog) =>
-      signals.flatMap((signal) => {
-        const pair = catalog.pairs.find((listedPair) => listedPair.id === signal.assetId);
-        return pair === undefined ? [] : [{ pair, action: signal.action }];
-      }),
+    alternatives: shownOf,
     nextStep: (step, pair, access) =>
       screen(`next:${pair.id}:${access?.tradingMode ?? 'none'}:${step.back}`),
     refusal: (check) => screen(`refusal:${check.reason}`),
@@ -125,9 +136,11 @@ function setup(
     photos: { photo: vi.fn(() => 'file-id'), remember: vi.fn(), forget: vi.fn() },
   };
   const logger = fakeLogger();
+  const shownSignals = stubShownSignals();
   const waiter = createSignalWaiter({
     backend,
     logger,
+    shownSignals,
     pollMs: options.pollMs ?? POLL,
     pollOffsetMs: options.pollOffsetMs ?? 1_000,
     listTtlMs: TTL,
@@ -173,6 +186,7 @@ function setup(
     waiter,
     backend,
     screens,
+    shownSignals,
     logger,
     languages,
     editMessageText,
@@ -461,6 +475,125 @@ describe('the wait for a signal', () => {
     expect(texts()).toHaveLength(1);
     await at(FIRST_TICK + TTL);
     expect(texts()).toEqual([`base|${PAIR_SHORT.id}`, 'base|']);
+  });
+
+  // #829: what the wait draws is recorded for the start once it is on screen
+  it('W19 a list drawn by the wait records its pairs once the edit is on screen', async () => {
+    const { waiter, list, at, setListed, shownSignals } = setup();
+    setListed([[PAIR_EURUSD.id, TradeAction.Down]]);
+    waiter.waitList(list());
+    await at(FIRST_TICK);
+    expect(shownSignals.remember.mock.calls).toEqual([
+      [
+        7,
+        'list',
+        FIRST_TICK,
+        [
+          {
+            assetId: PAIR_EURUSD.id,
+            action: 'down',
+            second: FIRST_TICK - 900,
+            decidedAt: FIRST_TICK - 500,
+          },
+        ],
+      ],
+    ]);
+  });
+
+  it.each([
+    ['a 429', () => LIMITED(1)],
+    ['a message gone', GONE],
+  ])('W19b a list edit refused by %s records nothing', async (_name, failure) => {
+    const { waiter, list, at, setListed, shownSignals, editMessageText } = setup();
+    editMessageText.mockRejectedValueOnce(failure());
+    setListed([[PAIR_EURUSD.id, TradeAction.Down]]);
+    waiter.waitList(list());
+    await at(FIRST_TICK);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  const CARD_RECORD = [
+    {
+      assetId: PAIR_EURUSD.id,
+      action: 'up',
+      second: 1_790_000_044_000,
+      decidedAt: 1_790_000_044_320,
+    },
+  ];
+
+  it("W20 a card drawn by the wait records the answer's h1 as the analysis, not the list's item", async () => {
+    const { waiter, pair, at, setListed, editMessageMedia, shownSignals } = setup();
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(shownSignals.remember.mock.calls).toEqual([[7, 'analysis', FIRST_TICK, CARD_RECORD]]);
+  });
+
+  it("W20b the card's text fallback records it too", async () => {
+    const { waiter, pair, at, setListed, editMessageMedia, texts, shownSignals } = setup();
+    editMessageMedia.mockRejectedValueOnce(OTHER());
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 1_000);
+    expect(texts()).toEqual(['card']);
+    expect(shownSignals.remember.mock.calls).toEqual([
+      [7, 'analysis', expect.any(Number), CARD_RECORD],
+    ]);
+  });
+
+  it('W20c a card edit paused by a 429 records nothing', async () => {
+    const { waiter, pair, at, setListed, editMessageMedia, shownSignals } = setup();
+    editMessageMedia.mockRejectedValueOnce(LIMITED(1));
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+  });
+
+  it('W21 an analysis whose own read has no H1 signal records nothing', async () => {
+    const { waiter, pair, at, setListed, backend, shownSignals } = setup();
+    backend.evaluateSignal.mockResolvedValue(SIGNAL_CANDLE_ONLY);
+    waiter.waitPair(pair({ origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + POLL);
+    expect(backend.evaluateSignal).toHaveBeenCalledTimes(2);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(true);
+  });
+
+  it("W22 the other pairs' buttons the wait draws are recorded as a list once on screen", async () => {
+    const { waiter, pair, at, setListed, shownSignals } = setup();
+    setListed([[PAIR_SHORT.id, TradeAction.Up]]);
+    waiter.waitPair(pair({ origin: 'door', alternatives: 'pending' }));
+    await at(FIRST_TICK);
+    expect(shownSignals.remember.mock.calls).toEqual([
+      [
+        7,
+        'list',
+        FIRST_TICK,
+        [
+          {
+            assetId: PAIR_SHORT.id,
+            action: 'up',
+            second: FIRST_TICK - 900,
+            decidedAt: FIRST_TICK - 500,
+          },
+        ],
+      ],
+    ]);
+  });
+
+  it("W22b the other pairs' buttons refused by their edit are not recorded", async () => {
+    const { waiter, pair, at, setListed, shownSignals, editMessageText } = setup();
+    editMessageText.mockRejectedValueOnce(GONE());
+    setListed([[PAIR_SHORT.id, TradeAction.Up]]);
+    waiter.waitPair(pair({ origin: 'door', alternatives: 'pending' }));
+    await at(FIRST_TICK);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    expect(shownSignals.remember).not.toHaveBeenCalled();
   });
 
   it('W7c waits for the pair alone once the first poll found no other pair', async () => {

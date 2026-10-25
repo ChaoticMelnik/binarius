@@ -11,6 +11,7 @@ import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionResumer } from './session-resume';
 import type { SessionTracker } from './session-tracker';
+import type { ShownSignals } from './shown-signals';
 import type { SignalWaiter } from './signal-wait';
 import { createUserLanguages, type UserLanguages } from './language';
 import { LABELS } from './texts';
@@ -27,6 +28,7 @@ import {
   MomentumDirection,
   NoSignalReason,
   NotificationLevel,
+  ShownSignalSource,
   SignalFeedOutcome,
   SIGNAL_ALGORITHM_VERSION,
   SIGNAL_SCAN_INTERVALS,
@@ -48,6 +50,7 @@ import {
   type PairsCatalogResponse,
   type PairView,
   type SessionShare,
+  type ShownSignalStart,
   type PendingLinkedAccountView,
   type ScanInterval,
   type SignalDecision,
@@ -590,6 +593,26 @@ export const stubSignalWaiter = (): {
   waitPair: Mock<SignalWaiter['waitPair']>;
   leave: Mock<SignalWaiter['leave']>;
 } => ({ attach: vi.fn(), waitList: vi.fn(), waitPair: vi.fn(), leave: vi.fn() });
+
+// the record of the shown directions (#829): records the writes, and a take answers `taken` (none
+// by default, so a start goes as before #829)
+export const stubShownSignals = (
+  taken?: ShownSignalStart,
+): {
+  remember: Mock<ShownSignals['remember']>;
+  take: Mock<ShownSignals['take']>;
+  size: Mock<ShownSignals['size']>;
+} => ({ remember: vi.fn(), take: vi.fn(() => taken), size: vi.fn(() => 0) });
+
+// a shown direction as the start sends it
+export const shownRecord = (patch: Partial<ShownSignalStart> = {}): ShownSignalStart => ({
+  action: TradeAction.Down,
+  second: 1_790_000_000_000,
+  decidedAt: 1_790_000_000_400,
+  shownAtMs: 1_790_000_003_000,
+  source: ShownSignalSource.List,
+  ...patch,
+});
 
 export const EMAIL = 'ada@example.test';
 export const CODE = '123456';

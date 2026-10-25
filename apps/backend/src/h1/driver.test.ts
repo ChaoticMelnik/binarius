@@ -12,6 +12,7 @@ import {
   sessionStakeParams,
   type BinaryPair,
   type H1SessionSettings,
+  type ShownSignalStart,
   type PairsCatalogView,
   SessionStakeStrategy,
 } from '@binarius/shared';
@@ -641,6 +642,7 @@ describe('the H1 driver (#707)', () => {
       signals: 0,
       noSignal: { no_volatility: 1 },
       warming: 300,
+      shown: 0,
       lagMsP50: 320,
       lagMsP95: 320,
     });
@@ -1380,5 +1382,175 @@ describe("the H1 start's reading and hand-over (#796)", () => {
     await flush();
     expect(h.creates).toEqual([]);
     expect(h.logs('h1 driver session skipped')).toHaveLength(1);
+  });
+});
+
+describe('the shown start of an H1 session (#829)', () => {
+  const shownOf = (patch: Partial<ShownSignalStart> = {}): ShownSignalStart => ({
+    action: 'down',
+    second: T + 290_000,
+    decidedAt: T + 290_400,
+    shownAtMs: T + 291_000,
+    source: 'list',
+    ...patch,
+  });
+  // the start's pair: 95 against the catalog's 96, so the row's payout is the plan's
+  const shownStart = (shown = shownOf()) => ({ shown, pair: { payout: 95, symbol: `P${A}` } });
+
+  it("H1-DR45: adopt with a shown direction creates Шаг 1 at once: its action, the sizer's stake, no window, the h1-start row; then takenAt + 6 s", async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, flat(300));
+    const takenAtMs = clock.now;
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    const input = h.creates[0]!;
+    expect(input).toMatchObject({
+      sessionId: 's1',
+      step: 1,
+      action: 'down',
+      amount: sizerStake(emptyHistory(), h1Settings(), 95),
+      durationSec: 5,
+    });
+    expect('submitDeadlineAt' in input).toBe(false);
+    expect(input.decision).toEqual({
+      context: 'session',
+      tradingSessionId: 's1',
+      brokerAccountId: 'acc-s1',
+      step: 1,
+      assetId: A,
+      interval: null,
+      version: 'h1-start',
+      decidedAtMs: T + 290_000,
+      takenAtMs,
+      kind: 'signal',
+      action: 'down',
+      payout: 95,
+      digits: null,
+      params: { rule: 'shown_signal', ...H1_R1_PARAMS },
+      decision: {
+        kind: 'signal',
+        version: 'h1-start',
+        action: 'down',
+        shown: { second: T + 290_000, decidedAt: T + 290_400, source: 'list' },
+      },
+      source: { kind: 'shown', source: 'list', shownAtMs: T + 291_000 },
+      series: [],
+      lastTick: null,
+      outcome: 'intent',
+      detail: null,
+      ticksUntilMs: null,
+    });
+    expect(h.wakes.n).toBe(1);
+    expect(h.line()).toMatchObject({ shown: 1, intents: 1, signals: 0, decisions: 0 });
+    // one trade at a time: the seconds before takenAt + 6 s are held (takenAt = F - 680 ms)
+    h.histories.set('s1', emptyHistory([{}]));
+    await h.feedSettled(A, F, ramp(7).slice(300));
+    await flush();
+    expect(h.creates.map((one) => one.decision!.decidedAtMs)).toEqual([T + 290_000, F + 6_000]);
+    expect(h.line()).toMatchObject({ shown: 1, intents: 2, held: 6 });
+  });
+
+  it('H1-DR46: a shown start while a run is in flight is skipped; inside the cadence it is held', async () => {
+    const h = await harness();
+    let resolve!: (result: CreateTradeIntentResult) => void;
+    h.answers.push(() => new Promise((done) => (resolve = done)));
+    h.feed(A, T, ramp(1));
+    await flush();
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.line()).toMatchObject({ skippedLive: 1, shown: 0 });
+    resolve(created());
+    await flush();
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.line()).toMatchObject({ held: 1, shown: 0, intents: 1 });
+  });
+
+  it('H1-DR47: a stop refusal of the shown Шаг 1 stops the session with its h1-start refused row; a reschedule refusal keeps it', async () => {
+    const h = await harness({ sessions: [] });
+    clock.now = T + 299_000;
+    h.answers.push(() => Promise.reject(new TradeIntentError(TradeIntentErrorCode.AccountHalted)));
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.stops).toEqual([{ id: 's1', reason: 'manual_review' }]);
+    expect(h.records).toEqual([
+      expect.objectContaining({
+        version: 'h1-start',
+        context: 'session',
+        step: 1,
+        outcome: 'refused',
+        detail: 'account_halted',
+        decidedAtMs: T + 290_000,
+        source: { kind: 'shown', source: 'list', shownAtMs: T + 291_000 },
+      }),
+    ]);
+    expect(h.line()).toMatchObject({ refused: 1, stops: 1, shown: 0, sessions: 0 });
+
+    const kept = await harness({ sessions: [] });
+    kept.answers.push(() =>
+      Promise.reject(new TradeIntentError(TradeIntentErrorCode.ActiveIntentExists)),
+    );
+    kept.driver.adopt(sessionOf('s2'), shownStart(shownOf({ source: 'analysis' })));
+    await flush();
+    expect(kept.stops).toEqual([]);
+    expect(kept.records).toEqual([
+      expect.objectContaining({
+        version: 'h1-start',
+        outcome: 'refused',
+        detail: 'active_intent_exists',
+        tradingSessionId: 's2',
+      }),
+    ]);
+    expect(kept.line()).toMatchObject({ refused: 1, stops: 0, sessions: 1 });
+  });
+
+  it('H1-DR48: a gone session, invalid settings and a stopped driver: a shown start creates nothing', async () => {
+    const h = await harness({ sessions: [] });
+    clock.now = T + 299_000;
+    h.histories.set('s1', undefined);
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    h.histories.delete('s1');
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    h.driver.adopt(sessionOf('bad', { version: 5 }), shownStart());
+    await flush();
+    expect(h.creates).toEqual([]);
+    expect(h.line()).toMatchObject({ gone: 1, shown: 0, invalidSettings: 1 });
+    await h.driver.stop();
+    h.driver.adopt(sessionOf('s3'), shownStart());
+    await flush();
+    expect(h.creates).toEqual([]);
+  });
+
+  it('H1-DR49: a replayed shown step holds the cadence, counts replayed and wakes nothing', async () => {
+    const h = await harness({ sessions: [] });
+    clock.now = T + 299_000;
+    h.answers.push(() => Promise.resolve({ ...created(), created: false }));
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.wakes.n).toBe(0);
+    h.driver.adopt(sessionOf('s1'), shownStart());
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.line()).toMatchObject({ replayed: 1, shown: 0, intents: 0, held: 1 });
+  });
+
+  it("H1-DR50: a due repeat beats the shown plan: Шаг 2 in the lost trade's direction, version h1-repeat", async () => {
+    const h = await harness({ sessions: [] });
+    clock.now = T + 299_000;
+    h.histories.set('s1', lostStep1);
+    h.driver.adopt(sessionOf('s1'), shownStart(shownOf({ action: 'up' })));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({ step: 2, action: 'down', amount: sizerStake(lostStep1) });
+    expect(h.creates[0]!.decision).toMatchObject({
+      version: 'h1-repeat',
+      source: { kind: 'settlement', trigger: 'signal' },
+    });
+    expect(h.line()).toMatchObject({ repeats: 1, shown: 0 });
   });
 });

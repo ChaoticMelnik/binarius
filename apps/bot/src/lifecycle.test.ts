@@ -23,6 +23,7 @@ import {
   stubSignalWaiter,
   stubSessionTracker,
   stubTracker,
+  stubShownSignals,
 } from './testing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
@@ -1001,6 +1002,7 @@ function scene(options: SceneOptions = {}) {
     sessionTracker: stubSessionTracker(),
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
+    shownSignals: stubShownSignals(),
     token: TOKEN,
     backend,
     logger: log,

@@ -6,6 +6,7 @@ import {
   createIntentTracker,
   createSessionResumer,
   createSessionTracker,
+  createShownSignals,
   createSignalWaiter,
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
@@ -24,6 +25,7 @@ import {
   textUpdate,
   USER,
 } from '@binarius/bot/e2e';
+import type { ShownSignalStart } from '@binarius/shared';
 import { BOT_TOKEN, INTERNAL_API_TOKEN } from './env';
 import type { LogSink } from './logs';
 import { findButton, pressUpdate, type createTelegram, type TelegramSide } from './telegram';
@@ -43,6 +45,8 @@ export interface E2eBot {
   press(label: string | ((label: string) => boolean)): Promise<Update>;
   // Telegram's re-delivery: the same update, its update_id and callback_query.id, a second time
   replay(update: Update): Promise<void>;
+  // the shown directions the starts took (#829), in order
+  shownTaken: ShownSignalStart[];
   stop(): Promise<void>;
 }
 
@@ -77,10 +81,23 @@ export function startE2eBot(deps: {
     logger,
     intervalMs: SESSION_RESUME_INTERVAL_MS,
   });
+  // the directions the bot showed (#829), one store for the waiter and the bot, as index.ts; the
+  // takes are kept for the run's oracle
+  const store = createShownSignals();
+  const shownTaken: ShownSignalStart[] = [];
+  const shownSignals = {
+    ...store,
+    take(telegramUserId: number, assetId: number) {
+      const taken = store.take(telegramUserId, assetId);
+      if (taken !== undefined) shownTaken.push(taken);
+      return taken;
+    },
+  };
   // the wait for a signal (#664) at production's bounds
   const signalWaiter = createSignalWaiter({
     backend,
     logger,
+    shownSignals,
     pollMs: SIGNAL_WAIT_POLL_MS,
     pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
     listTtlMs: SIGNALS_LIST_TTL_MS,
@@ -98,6 +115,7 @@ export function startE2eBot(deps: {
     sessionTracker,
     sessionResumer,
     signalWaiter,
+    shownSignals,
   });
   const telegram = deps.telegram.bot(bot);
   const handle = async (update: Update) => {
@@ -108,6 +126,7 @@ export function startE2eBot(deps: {
 
   return {
     telegram,
+    shownTaken,
     start: (payload) => handle(startUpdate(startText(payload))),
     startAs: (from, payload) => handle(startUpdate(startText(payload), 'private', from)),
     send: (text) => handle(textUpdate(text)),

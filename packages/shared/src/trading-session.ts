@@ -7,6 +7,7 @@ import {
   H1_R1_PARAMS,
   H1_SESSION_SIGNAL_KIND,
   h1SessionSignalSchema,
+  shownSignalSchema,
 } from './h1';
 import { REFERRAL_CODE_PATTERN } from './referral';
 import { SessionStakeStrategy } from './session-steps';
@@ -533,6 +534,8 @@ export const createTradingSessionRequestSchema = z.strictObject({
   assetId: sessionSettingsFields.assetId,
   durationSec: sessionSettingsFields.durationSec,
   cycles: sessionCyclesField.default(DEFAULT_SESSION_CYCLES),
+  // the direction the bot showed for the pair (#829): the route trades it without a reading
+  shownSignal: shownSignalSchema.optional(),
 });
 export type CreateTradingSessionRequest = z.infer<typeof createTradingSessionRequestSchema>;
 
