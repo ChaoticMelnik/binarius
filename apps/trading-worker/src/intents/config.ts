@@ -7,7 +7,7 @@ import {
   isTimerMs,
 } from '@binarius/broker-socket';
 import { SESSION_STOP_BUDGET_MS, SESSION_TICK_MS } from '../broker/session-config';
-import { WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
+import { WORKER_HEARTBEAT_MS, WORKER_HEARTBEAT_TIMEOUT_MS } from '../fleet/config';
 import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 
 // The worker's time constants form one chain, and every link has a reason:
@@ -72,10 +72,22 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
 //     alongside the other steps: one attempt at most
 // The intent router (#347, intents/router.ts) adds these:
-//   MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the own
-//     queue's consumer waits out a submit, then the router requeues and closes, in one step
-//   INTENT_RECOVERY_DELAY_MS and INTENT_ROUTER_STOP_BUDGET_MS are timer delays (BullMQ's delay, a
-//     timer)
+//   MAX_SUBMIT_ACK_TIMEOUT_MS + 2 × INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the
+//     own queue's consumer waits out a submit, and the drain starts before its cut (notAfter =
+//     the phase-1 start + SHUTDOWN_PHASE1_BUDGET_MS - 2 × INTENT_ROUTER_STOP_BUDGET_MS), so one
+//     move pass and the final one always run
+//   2 × INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the router's stop ends by
+//     notAfter + INTENT_ROUTER_STOP_BUDGET_MS, inside phase 1, whatever the deregister does
+//   WORKER_HEARTBEAT_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_POLL_MS
+//     < INTENT_ROUTER_DRAIN_TAIL_MS — the tail after our deregister outlasts every peer's view of
+//     us, and its last pass sees a forward that landed up to a poll before it ends
+//   INTENT_ROUTER_DRAIN_POLL_MS < INTENT_ROUTER_STOP_BUDGET_MS — a poll's sleep never outlives the
+//     final pass's budget
+//   the whole tail fits before notAfter for SUBMIT_ACK_TIMEOUT_MS ≤ 18 s (the default 10 s: 10 +
+//     2 + 2 + 9 ≤ 31, stated, pinned by literal in intents/config.test.ts); above that, a stop
+//     that meets a submit waiting out nearly its deadline cuts the tail with a warn line
+//   INTENT_RECOVERY_DELAY_MS, INTENT_ROUTER_STOP_BUDGET_MS, INTENT_ROUTER_DRAIN_POLL_MS and
+//     INTENT_ROUTER_DRAIN_TAIL_MS are timer delays (BullMQ's delay, a timer)
 //   INTENT_RECOVERY_DELAY_MS < the backend publisher's staleQueuedMs (30 s) and < INTENT_MAX_AGE_MS's
 //     default (60 s) — stated across processes, pinned by literal in intents/config.test.ts
 export const MIN_SUBMIT_ACK_TIMEOUT_MS = 6_000;
@@ -91,8 +103,13 @@ export const STALE_SUBMITTING_MS = 60_000;
 // how long a forwarded intent may wait in its owner's queue before the forwarder takes it itself
 // (#347, the insurance job in the forwarder's own queue)
 export const INTENT_RECOVERY_DELAY_MS = 20_000;
-// bounds router.stop(): the requeue of the own queue, its obliterate and the queues' close
+// bounds router.stop() after its drain was cut: the final move pass, the obliterate of the own
+// queue and the queues' close
 export const INTENT_ROUTER_STOP_BUDGET_MS = 2_000;
+// the drain's interval between move passes of the own queue at a clean stop
+export const INTENT_ROUTER_DRAIN_POLL_MS = 250;
+// how long the drain goes on after our deregister settled
+export const INTENT_ROUTER_DRAIN_TAIL_MS = 9_000;
 
 export const SWEEP_INTERVAL_MS = 15_000;
 export const SWEEP_BATCH_SIZE = 50;
@@ -180,9 +197,15 @@ const TIMING_CHAIN_HOLDS =
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  MAX_SUBMIT_ACK_TIMEOUT_MS + INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  2 * INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  WORKER_HEARTBEAT_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_POLL_MS <
+    INTENT_ROUTER_DRAIN_TAIL_MS &&
+  INTENT_ROUTER_DRAIN_POLL_MS < INTENT_ROUTER_STOP_BUDGET_MS &&
   isTimerMs(INTENT_RECOVERY_DELAY_MS) &&
-  isTimerMs(INTENT_ROUTER_STOP_BUDGET_MS);
+  isTimerMs(INTENT_ROUTER_STOP_BUDGET_MS) &&
+  isTimerMs(INTENT_ROUTER_DRAIN_POLL_MS) &&
+  isTimerMs(INTENT_ROUTER_DRAIN_TAIL_MS);
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('trading-worker timing constants are out of order (see intents/config.ts)');
 }

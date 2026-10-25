@@ -42,6 +42,8 @@ import {
   CATCHUP_TICK_MS,
   CATCHUP_TRADES_PAGE_SIZE,
   INTENT_RECOVERY_DELAY_MS,
+  INTENT_ROUTER_DRAIN_POLL_MS,
+  INTENT_ROUTER_DRAIN_TAIL_MS,
   INTENT_ROUTER_STOP_BUDGET_MS,
   RECONCILE_ATTEMPT_TIMEOUT_MS,
   RECONCILE_BATCH_SIZE,
@@ -131,6 +133,8 @@ const PRODUCTION_TUNING: Omit<WorkerTuning, 'sessions'> = {
   intentRouter: {
     recoveryDelayMs: INTENT_RECOVERY_DELAY_MS,
     stopBudgetMs: INTENT_ROUTER_STOP_BUDGET_MS,
+    drainPollMs: INTENT_ROUTER_DRAIN_POLL_MS,
+    drainTailMs: INTENT_ROUTER_DRAIN_TAIL_MS,
   },
   orchestrator: TRADING_SESSION_CONFIG,
   staleSubmittingMs: STALE_SUBMITTING_MS,
@@ -413,23 +417,25 @@ export function createWorker({
   // or fails is 'dirty' and the process exits hard; the intent stays submitting (the sweeper
   // resolves it after the restart) or reconciling (the pass takes it again once its lease lapses).
   async function runShutdown(signal: string): Promise<ShutdownResult> {
+    const shutdownStartedAt = performance.now();
     logger.info({ signal }, 'shutting down');
     sweeper.stop();
     capacity.stop();
+    const closed = Promise.all([consumer.worker.close(), ownConsumer.worker.close()]);
+    const deregistered = closed
+      .then(() => Promise.all([consumer.drainDeadLetters(), ownConsumer.drainDeadLetters()]))
+      .then(() => sessions?.stop())
+      // after our leases went back: a successor that takes our accounts meets no lease busy
+      .then(() => registry.stop());
+    // the router's cut leaves its final pass and close a budget of their own inside phase 1
+    const notAfter =
+      shutdownStartedAt + tuning.phase1BudgetMs - 2 * tuning.intentRouter.stopBudgetMs;
     const drained = await closeAll(
       [
-        () =>
-          Promise.all([consumer.worker.close(), ownConsumer.worker.close()])
-            .then(() => Promise.all([consumer.drainDeadLetters(), ownConsumer.drainDeadLetters()]))
-            .then(() => sessions?.stop())
-            // after our leases went back: a successor that takes our accounts meets no lease busy
-            .then(() => registry.stop()),
-        // the same closes (BullMQ returns the close in flight): no job of ours forwards or runs
-        // while our own queue is requeued as direct jobs, still under our live row
-        () =>
-          Promise.all([consumer.worker.close(), ownConsumer.worker.close()]).then(() =>
-            router.stop(),
-          ),
+        () => deregistered,
+        // no job of ours forwards or runs while our own queue drains to the shared one; a peer
+        // names us until its next heartbeat after our deregister, so the drain outlasts it
+        () => closed.then(() => router.stop({ deregistered, notAfter })),
         () =>
           reconciliationConsumer.worker
             .close()

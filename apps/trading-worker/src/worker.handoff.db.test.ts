@@ -990,7 +990,7 @@ describe('intent routing to the owner (#347)', () => {
     await until('both see the two of them', () => [a, b].every((w) => capacityOf(w)?.live === 2));
     const live = [idOf(a), idOf(b)];
     const mine: Account[] = [];
-    for (let n = 0; n < 16 && mine.length < 4; n += 1) {
+    for (let n = 0; n < 64 && mine.length < 4; n += 1) {
       const account = await seedAccount({ snapshot: true, requested: true });
       if (ownerOf(account.brokerAccountId, live) === idOf(b)) mine.push(account);
     }
@@ -1095,11 +1095,86 @@ describe('intent routing to the owner (#347)', () => {
       { jobId: intentId, attempts: 1, removeOnComplete: true, removeOnFail: true, delay: 60_000 },
     );
     expect(await shutdown(a)).toBe('clean');
-    const requeued = (await queues.get(OutboxTopic.TradingIntents)!.getJob(intentId))!;
+    const requeued = (await queues.get(OutboxTopic.TradingIntents)!.getJob(`${intentId}-direct`))!;
     expect(requeued.name).toBe(INTENT_DIRECT_JOB);
-    expect(await requeued.getState()).toBe('waiting');
+    // what is left of the insurance's wait
+    expect(await requeued.getState()).toBe('delayed');
     const counts = await ownQueueOf(idOf(a)).getJobCounts();
     expect(Object.values(counts).every((n) => n === 0)).toBe(true);
     await requeued.remove();
+  });
+
+  it('H18 forwards that reach a stopping process before and after its deregister are taken at once, not at the insurance', async () => {
+    // A drains for 1.5 s after its deregister; B heartbeats rarely, so it names A throughout the
+    // case, and its insurance (15 s) lies past every wait below
+    const a = startWorker('A', {
+      sockets: false,
+      tuning: { intentRouter: { ...TEST_WORKER_TUNING.intentRouter!, drainTailMs: 1_500 } },
+    });
+    const rowOfA = async () =>
+      (await tmp.db.execute(sql`select 1 from worker_processes where owner_id = ${idOf(a)}`)).rows
+        .length;
+    // B's first heartbeat, the one view it keeps through the case, lists A
+    await until("A's row", async () => (await rowOfA()) === 1);
+    const b = startWorker('B', {
+      sockets: false,
+      tuning: {
+        fleet: {
+          ...TEST_WORKER_TUNING.fleet!,
+          heartbeatMs: 20_000,
+          liveFenceMs: 45_000,
+          processTtlMs: 50_000,
+        },
+        intentRouter: { ...TEST_WORKER_TUNING.intentRouter!, recoveryDelayMs: 15_000 },
+      },
+    });
+    await until('both see the two of them', () => [a, b].every((w) => capacityOf(w)?.live === 2));
+    const live = [idOf(a), idOf(b)];
+    const ofA: Account[] = [];
+    for (let n = 0; n < 20 && ofA.length < 2; n += 1) {
+      const account = await seedAccount();
+      if (ownerOf(account.brokerAccountId, live) === idOf(a)) ofA.push(account);
+    }
+    expect(ofA).toHaveLength(2);
+    const [first, second] = ofA as [Account, Account];
+    const before = await newIntent(first);
+    const after = await newIntent(second);
+
+    let stopResult: ShutdownResult | undefined;
+    const stopping = shutdown(a).then((result) => {
+      stopResult = result;
+      return result;
+    });
+    const firstAt = performance.now();
+    expect(await publishPending([before])).toBe(1);
+    await until('A deregistered', async () => (await rowOfA()) === 0);
+    expect(stopResult).toBeUndefined();
+    const secondAt = performance.now();
+    expect(await publishPending([after])).toBe(1);
+
+    for (const [id, at] of [
+      [before, firstAt],
+      [after, secondAt],
+    ] as const) {
+      await until(`${id} terminal`, () => allIn([id], OPEN_OR_SETTLED));
+      expect(performance.now() - at).toBeLessThan(3_000);
+      expect(logsOf(b, 'intent forwarded')).toContainEqual(
+        expect.objectContaining({ intentId: id, owner: idOf(a) }),
+      );
+      expect(recordedBy(b).has(id)).toBe(true);
+    }
+    expect(await stopping).toBe('clean');
+    const [, keys] = await publisher.scan(
+      0,
+      'MATCH',
+      `${prefix}:${ownIntentQueueName(idOf(a))}:*`,
+      'COUNT',
+      10_000,
+    );
+    expect(keys).toEqual([]);
+    for (const account of ofA) {
+      expect(broker.trades.list(account.brokerUserId)).toHaveLength(1);
+    }
+    expect(await shutdown(b)).toBe('clean');
   });
 });

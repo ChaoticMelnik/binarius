@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import { errorLogFields, type TradeIntentJobPayload } from '@binarius/shared';
@@ -11,6 +12,11 @@ import type { Logger } from './processor';
 // process's own queue once, before the take, so the order goes over the owner's socket. The
 // forwarder keeps an insurance job in its own queue: if the owner died with the job, the
 // forwarder takes the intent itself after recoveryDelayMs.
+
+// A clean stop drains our own queue into the shared one from the consumers' close until
+// drainTailMs after our deregister settled: a peer names us until its next heartbeat after that,
+// and every forward it makes meanwhile reaches a survivor within drainPollMs, not at its
+// insurance. Bounded by notAfter, the phase-1 budget less the final pass and the close.
 
 // the name of a job requeued to the shared queue at a clean stop: processed where it lands, never
 // forwarded, or the survivors would hand it straight back to the stopping process
@@ -26,16 +32,28 @@ const JOB_OPTIONS = { attempts: 1, removeOnComplete: true, removeOnFail: true } 
 export interface IntentRouterConfig {
   // how long the insurance waits in our own queue (INTENT_RECOVERY_DELAY_MS)
   recoveryDelayMs: number;
-  // bounds stop() (INTENT_ROUTER_STOP_BUDGET_MS)
+  // bounds stop()'s final pass and close after notAfter (INTENT_ROUTER_STOP_BUDGET_MS)
   stopBudgetMs: number;
+  // the drain's interval between move passes (INTENT_ROUTER_DRAIN_POLL_MS)
+  drainPollMs: number;
+  // how long the drain runs after the deregister settled (INTENT_ROUTER_DRAIN_TAIL_MS)
+  drainTailMs: number;
+}
+
+export interface IntentRouterStop {
+  // the deregister's chain; settled either way, the tail starts
+  deregistered: Promise<unknown>;
+  // a monotonic time (performance.now()) after which the drain is cut
+  notAfter: number;
 }
 
 export interface IntentRouter {
   // true when the intent went to its owner's queue; false: process it here. Never rejects
   forward(intent: TradeIntentRow): Promise<boolean>;
-  // after our own queue's consumer closed: requeues its jobs to the shared queue as
-  // INTENT_DIRECT_JOB, deletes it, closes every queue. Bounded by stopBudgetMs; never rejects
-  stop(): Promise<void>;
+  // after our own queue's consumer closed: moves its jobs to the shared queue as INTENT_DIRECT_JOB
+  // until the tail after the deregister, then deletes it and closes every queue. Ends by
+  // notAfter + stopBudgetMs; never rejects
+  stop(when: IntentRouterStop): Promise<void>;
 }
 
 export interface IntentRouterDeps {
@@ -45,10 +63,12 @@ export interface IntentRouterDeps {
   prefix?: string;
   logger: Logger;
   config: IntentRouterConfig;
+  monotonicNow?: () => number;
 }
 
 export function createIntentRouter(deps: IntentRouterDeps): IntentRouter {
   const { ownerId, registry, connection, logger, config } = deps;
+  const now = deps.monotonicNow ?? (() => performance.now());
   const options = deps.prefix === undefined ? { connection } : { connection, prefix: deps.prefix };
   const own = new Queue<TradeIntentJobPayload>(ownIntentQueueName(ownerId), options);
   const shared = new Queue<TradeIntentJobPayload>(OutboxTopic.TradingIntents, options);
@@ -63,11 +83,47 @@ export function createIntentRouter(deps: IntentRouterDeps): IntentRouter {
     return queue;
   };
 
-  async function requeueAndClose() {
+  // add first, then remove: a crash between the two leaves two copies, and both meet the CAS. The
+  // -direct id: the forwarder's shared job with the intent's id is still active while it forwards
+  async function movePass() {
     const left = await own.getJobs(['waiting', 'delayed', 'prioritized']);
     for (const job of left) {
-      await shared.add(INTENT_DIRECT_JOB, job.data, { ...JOB_OPTIONS, jobId: job.data.intentId });
+      await shared.add(INTENT_DIRECT_JOB, job.data, {
+        ...JOB_OPTIONS,
+        jobId: `${job.data.intentId}-direct`,
+        // an insurance keeps what is left of its wait; job.timestamp is the adder's clock, ours
+        delay: Math.max(0, job.timestamp + job.delay - Date.now()),
+      });
+      await job.remove();
     }
+  }
+
+  async function drainAndClose({ deregistered, notAfter }: IntentRouterStop) {
+    let deregisteredAt: number | undefined;
+    const settle = () => {
+      deregisteredAt = now();
+    };
+    void deregistered.then(settle, settle);
+    const startedAt = now();
+    for (;;) {
+      try {
+        await movePass();
+      } catch (error) {
+        logger.warn(errorLogFields(error), 'intent router move pass failed');
+      }
+      const at = now();
+      if (deregisteredAt !== undefined && at >= deregisteredAt + config.drainTailMs) break;
+      if (at >= notAfter) {
+        logger.warn(
+          { timeoutMs: notAfter - startedAt },
+          'intent router drain cut by the shutdown budget',
+        );
+        break;
+      }
+      await sleep(Math.min(config.drainPollMs, notAfter - at));
+    }
+    // unguarded: a failed final pass leaves the queue for an operator rather than obliterating jobs
+    await movePass();
     await own.obliterate({ force: true });
     await Promise.all([own, shared, ...owners.values()].map((queue) => queue.close()));
   }
@@ -98,11 +154,12 @@ export function createIntentRouter(deps: IntentRouterDeps): IntentRouter {
       );
       return true;
     },
-    async stop() {
+    async stop(when) {
+      const timeoutMs = Math.max(0, when.notAfter + config.stopBudgetMs - now());
       try {
-        const result = await withTimeout(requeueAndClose(), config.stopBudgetMs);
+        const result = await withTimeout(drainAndClose(when), timeoutMs);
         if (result === 'timeout') {
-          logger.warn({ timeoutMs: config.stopBudgetMs }, 'intent router stop timed out');
+          logger.warn({ timeoutMs }, 'intent router stop timed out');
         }
       } catch (error) {
         logger.error(errorLogFields(error), 'intent router stop failed');
