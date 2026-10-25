@@ -15,10 +15,14 @@ export interface ConsumerDeps<Outcome extends string> {
   // trading-intents (the executor) or trading-reconciliation (#89, the hand-off to the pass)
   topic: OutboxTopic;
   connection: Redis;
-  processor: (payload: unknown) => Promise<Outcome>;
+  // the job's name is the second argument: the shared intent queue marks a requeued job by it (#347)
+  processor: (payload: unknown, name: string) => Promise<Outcome>;
   logger: Logger;
   concurrency: number;
   prefix?: string;
+  // the queue consumed, when it is not the topic's own: a process's own intent queue (#347); the
+  // dead-letter entry still carries the topic
+  queueName?: string;
 }
 
 export interface IntentConsumer {
@@ -69,10 +73,11 @@ export function startIntentConsumer<Outcome extends string>({
   logger,
   concurrency,
   prefix,
+  queueName,
 }: ConsumerDeps<Outcome>): IntentConsumer {
   const options = prefix === undefined ? {} : { prefix };
   const dlq = new Queue<DeadLetter>(TRADING_INTENTS_DEAD_LETTER_QUEUE, { connection, ...options });
-  const worker = new Worker(topic, (job) => processor(job.data), {
+  const worker = new Worker(queueName ?? topic, (job) => processor(job.data, job.name), {
     connection,
     ...options,
     concurrency,

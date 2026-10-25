@@ -693,3 +693,75 @@ describe('processIntentJob', () => {
     });
   });
 });
+
+describe('processIntentJob: the forward to the owner (#347)', () => {
+  const forwardOf = (answer: boolean) => {
+    const calls: TradeIntentRow[] = [];
+    return {
+      calls,
+      forward: async (intent: TradeIntentRow) => {
+        calls.push(intent);
+        return answer;
+      },
+    };
+  };
+
+  it('P1 a forwarded queued intent stays queued at its version; the executor and the ledger see nothing', async () => {
+    const { intentId, version } = await newIntent();
+    const executor = acceptingExecutor();
+    const routed = forwardOf(true);
+    expect(
+      await processIntentJob({ ...deps(executor), forward: routed.forward }, { intentId }),
+    ).toBe('forwarded');
+    expect(await statusOf(intentId)).toMatchObject({ status: 'queued', version });
+    expect(executor.calls).toBe(0);
+    expect(await ledgerKinds(intentId)).toEqual(['reserve']);
+    expect(routed.calls.map((row) => [row.id, row.version])).toEqual([[intentId, version]]);
+  });
+
+  it('P2 a forward that declines leaves the usual take', async () => {
+    const { intentId } = await newIntent();
+    const executor = acceptingExecutor();
+    const routed = forwardOf(false);
+    expect(
+      await processIntentJob({ ...deps(executor), forward: routed.forward }, { intentId }),
+    ).toBe('accepted');
+    expect(executor.calls).toBe(1);
+    expect(routed.calls).toHaveLength(1);
+  });
+
+  it('P3 DEMO_ONLY rejects a real intent before any forward', async () => {
+    const seed = await seedQueuedIntent(tmp.db, { mode: TradeMode.Real });
+    const routed = forwardOf(true);
+    expect(
+      await processIntentJob(
+        { ...deps(acceptingExecutor(), { demoOnly: true }), forward: routed.forward },
+        { intentId: seed.intent.id },
+      ),
+    ).toBe('rejected');
+    expect((await statusOf(seed.intent.id)).lastError).toBe('demo_only');
+    expect(routed.calls).toHaveLength(0);
+  });
+
+  it('P4 a submitting or a terminal intent is never forwarded', async () => {
+    const submitting = await newIntent();
+    await takeIntent(tmp.db, {
+      id: submitting.intentId,
+      expectedVersion: submitting.version,
+      maxAgeMs: MAX_AGE_MS,
+    });
+    const terminal = await newIntent();
+    expect(await processIntentJob(deps(rejectingExecutor()), { intentId: terminal.intentId })).toBe(
+      'rejected',
+    );
+    const routed = forwardOf(true);
+    const executor = acceptingExecutor();
+    for (const { intentId } of [submitting, terminal]) {
+      expect(
+        await processIntentJob({ ...deps(executor), forward: routed.forward }, { intentId }),
+      ).toBe('noop');
+    }
+    expect(routed.calls).toHaveLength(0);
+    expect(executor.calls).toBe(0);
+  });
+});

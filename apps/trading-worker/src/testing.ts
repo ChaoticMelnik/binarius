@@ -35,6 +35,9 @@ export const TEST_WORKER_TUNING: Partial<WorkerTuning> = {
     processPruneMs: 60_000,
     capacityLogMs: 1_000,
   },
+  // the insurance above the handoff's held socket submit (HELD_SOCKET_MS 800), so it never
+  // overtakes one, and well inside a case's wait ceiling (#347)
+  intentRouter: { recoveryDelayMs: 1_500, stopBudgetMs: 2_000 },
   socketTiming: {
     // above the handoff's held socket submit (HELD_SOCKET_MS 800), below the shed grace
     commandTimeoutMs: 900,

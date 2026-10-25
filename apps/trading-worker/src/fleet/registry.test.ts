@@ -157,4 +157,22 @@ describe('the fleet registry (#94)', () => {
       liveView: liveViewOf([ME, OTHERS[0]!].sort()),
     });
   });
+
+  it('F7 ownerOf (#347): undefined before the first answer, the rendezvous owner after it, undefined from the fence and after stop()', async () => {
+    const h = harness();
+    const ids = ACCOUNTS.slice(0, 50);
+    h.setClock(2_000);
+    expect(ids.some((id) => h.registry.ownerOf(id) !== undefined)).toBe(false);
+    await h.registry.heartbeat();
+    const sorted = [...h.state.answer].sort();
+    expect(ids.map((id) => h.registry.ownerOf(id))).toEqual(ids.map((id) => ownerOf(id, sorted)));
+    expect(new Set(ids.map((id) => h.registry.ownerOf(id))).size).toBeGreaterThan(1);
+    expect(ids.every((id) => h.registry.owns(id) === (h.registry.ownerOf(id) === ME))).toBe(true);
+    h.setClock(2_000 + CONFIG.liveFenceMs);
+    expect(ids.some((id) => h.registry.ownerOf(id) !== undefined)).toBe(false);
+    h.setClock(2_000);
+    expect(h.registry.ownerOf(ids[0]!)).toBe(ownerOf(ids[0]!, sorted));
+    await h.registry.stop();
+    expect(ids.some((id) => h.registry.ownerOf(id) !== undefined)).toBe(false);
+  });
 });
