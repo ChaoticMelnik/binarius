@@ -60,7 +60,9 @@ current directory:
 4. **The old container stops.** `docker stop -t 40 <old>` (40 = `stop_grace_period`): SIGTERM and
    the worker's own two-phase shutdown. Phase 1 drains the consumers (the jobs in flight finish,
    the new process takes everything else), then stops the broker sessions and releases their
-   leases (#93); phase 2 closes the connections.
+   leases (#93), then deletes its `worker_processes` row (#94); phase 2 closes the connections.
+   With the sockets on, the old process already shed the accounts the new one owns once it saw
+   the new one's first heartbeat ([worker-capacity.md](worker-capacity.md) → Start and shutdown).
 5. **Cleanup.** The old container's shutdown lines and exit code are read, the container is
    removed, and `--scale trading-worker=1 --no-recreate` leaves exactly the new one. A later plain
    `docker compose up -d` does not recreate it: its image and config are the current ones (seen
@@ -129,6 +131,16 @@ was emitted on its side). After the release the account is a candidate on the ne
 `dirty` old process (drain overrun) releases nothing: its leases lapse after `SESSION_LEASE_TTL_MS`
 and the new process takes them as after a crash (docs/broker-session.md → The lease, ~95 s).
 
+**The registry during the overlap** (#94). Both processes register in `worker_processes`. Within
+one heartbeat (6 s) of the new one's start each sees both, and rendezvous gives the new one about
+half of the accounts: the old one stops handing those sockets to the executor at once (REST from
+then), closes them after `SESSION_SHED_GRACE_MS` (6 s; a command already on a socket ends within
+its 5 s timeout first) and releases each lease, and the new one opens them on its next tick. The
+rest move at the old one's stop, as above. An old image without the registry is not in
+`worker_processes`: the new process owns everything and takes the accounts at the old one's
+release — the handoff before #94. `worker.handoff.db.test.ts` H1/H2 run under the registry, H14
+checks the split.
+
 **The overlap's length.** From the new container's start (its consumers take jobs before the ready
 line) to the old one's exit: the readiness wait, seconds when the worker starts cleanly and at most
 `READY_TIMEOUT_S` (120 s), plus the old container's stop (≤ 40 s: phase 1 ≤ 35 s, phase 2 ≤ 4 s);
@@ -166,7 +178,9 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
   The next run refuses and names the stopped one (step 1).
 - **`BROKER_WS_URL` unset.** No sessions and no leases: the overlap is the consumers, the
   orchestrator, the reconciliation pass and the catch-up only.
-- **Several shards** (#94) reuse this script per shard; that is #94's concern.
+- **Several replicas** (#94, [worker-capacity.md](worker-capacity.md)): `compose.yaml` takes
+  `TRADING_WORKER_REPLICAS` (default 1). This script still refuses two running workers (exit 2)
+  and rolls one; rolling N is #815, and the replicas stay 1 until then.
 
 ## Accepted risks
 

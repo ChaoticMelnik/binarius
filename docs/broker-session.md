@@ -38,7 +38,9 @@ see every account in work to tell a running session's account from an idle one, 
 cap in memory. No token-expiry filter: the token is asked for with `mayRefresh: false` and an
 account whose token needs an exchange is held back. `exclude` is the manager's held-back set.
 `ownerId` (#93) leaves out an account whose live lease belongs to another process: an
-optimisation for several processes, not the guarantee — the acquire is.
+optimisation for several processes, not the guarantee — the acquire is. Of the candidates the
+manager keeps only the accounts this process owns (`owns`, the fleet registry of #94:
+rendezvous over the live processes, [worker-capacity.md](worker-capacity.md) → Ownership).
 
 ## The lifecycle
 
@@ -54,10 +56,12 @@ process may hold an account's socket at all is the lease's ([The lease](#the-lea
 3. An entry whose account is no longer a candidate: a `starting` one is dropped at once (its
    fetch finds it gone and starts nothing); a `running` one is closed once it has been missing for
    `SESSION_IDLE_GRACE_MS` (`broker session closed`, `reason: idle`). One that is back loses its
-   idle mark.
-4. The start queue is replaced: the candidates without an entry, in candidate order, cut to
-   `MAX_SESSIONS_PER_WORKER − size` (`size` counts `starting` too). More candidates than the cap →
-   one `broker sessions capped` per tick; the rest trade over REST.
+   idle mark. An entry whose account is still a candidate but owned by another process is shed
+   (#94): a `starting` one at once, a `running` one after `SESSION_SHED_GRACE_MS`
+   ([worker-capacity.md](worker-capacity.md) → Ownership).
+4. The start queue is replaced: the owned candidates without an entry, in candidate order, cut to
+   `MAX_SESSIONS_PER_WORKER − size` (`size` counts `starting` and shedding entries too). More owned
+   candidates than the cap → one `broker sessions capped` per tick; the rest trade over REST.
 
 The tick never waits for a start, so a revoked or blocked account's session closes within
 `SESSION_TICK_MS + SESSION_IDLE_GRACE_MS` (65 s) whatever the backend's speed.
@@ -163,8 +167,8 @@ the executor's command goes over REST.
 ## The lease (#93)
 
 One row per account in `broker_session_leases`: `owner_id` (a fresh `randomUUID()` per worker
-start, logged in `trading-worker started` as `sessionOwnerId`; never a hostname, so a restarted
-container inherits nothing), `acquired_at`, `expires_at` (CHECK `expires_at > acquired_at`, FK to
+start, the process id of the fleet registry too (#94), logged in `trading-worker started` as
+`ownerId`; never a hostname, so a restarted container inherits nothing), `acquired_at`, `expires_at` (CHECK `expires_at > acquired_at`, FK to
 `broker_accounts`). Each operation is one autocommit statement on the pool, outside the lock chain
 (Rule 5), with the database's clock. No statement shortens a lease (`greatest`): a renewal that
 stalled in the database and commits after a later one leaves the later expiry, so a lease sent at
@@ -172,9 +176,10 @@ stalled in the database and commits after a later one leaves the later expiry, s
 
 | Operation | Statement | Answer |
 |---|---|---|
-| `acquireSessionLease` | `insert … on conflict (broker_account_id) do update set … expires_at = greatest(expires_at, excluded.expires_at) where expires_at <= now() or owner_id = excluded.owner_id` | `true` for a free or lapsed lease, or our own; two concurrent acquires serialize on the row and the second re-checks the predicate against the first's commit, so one wins (`session-lease-ops.db.test.ts` A5) |
+| `acquireSessionLease` | `insert … on conflict (broker_account_id) do update set … expires_at = greatest(expires_at, excluded.expires_at) where expires_at <= now() or owner_id = excluded.owner_id` | `{ acquiredAt }` (the column's text, microseconds included: the CAS token of `releaseSessionLease`, A6) for a free or lapsed lease, or our own; `undefined` when refused; two concurrent acquires serialize on the row and the second re-checks the predicate against the first's commit, so one wins (`session-lease-ops.db.test.ts` A5) |
 | `renewSessionLeases` | `update … set expires_at = greatest(expires_at, now() + ttl) where owner_id = $me and id = any($ids) and expires_at > now()` | the ids still held; a lapsed lease is not renewed even when nobody took it — lapsed means lost |
 | `releaseSessionLeases` | `delete … where owner_id = $me` | at a graceful stop only |
+| `releaseSessionLease` (#94) | `delete … where broker_account_id = $1 and owner_id = $me and acquired_at = $2` | at a shed only: the lease this acquire took; after our own re-acquire `acquired_at` moved and it deletes nothing (D2) |
 
 **The manager.**
 - `startOne` acquires before the token fetch. Refused → `debug` `broker session lease busy`, held
@@ -205,7 +210,8 @@ stalled in the database and commits after a later one leaves the later expiry, s
   throws (`error` `broker session lease release failed`) or overruns leaves the leases to lapse.
 - An account dropped for another reason (idle, a refusal, `disconnected_by_server`) keeps its row
   until it lapses: the same process re-acquires it, another one after the TTL. A per-drop delete
-  could race a later re-acquire by the same owner.
+  could race a later re-acquire by the same owner; the shed's release (#94) is a CAS on
+  `acquired_at` for that reason.
 
 A dead owner's account is picked up by another process within about TTL + one hold-back + one tick
 (~95 s; owner, 2026-10-09): until then it trades over REST. Falsifiable: `broker session lease
@@ -214,7 +220,9 @@ worker; two run during a deploy's overlap, the readiness wait and the drain, or 
 resolves an interrupted run (`scripts/deploy-worker.sh`, #95, [worker-deploy.md](worker-deploy.md)
 → The overlap's length): the old process's `stop()` deletes its rows after closing its sockets,
 and the new one, whose scan skipped those accounts while another owner held them, opens
-them on its next tick. More replicas, sharding and routing intent jobs to the owner are #94.
+them on its next tick. Which process tries an account is the fleet registry's (#94,
+[worker-capacity.md](worker-capacity.md)); the loops under several processes are #815, routing
+intent jobs to the owner #347.
 
 ## Losses for the circuit breaker (#96)
 
@@ -239,7 +247,7 @@ executor in place of `noTradeSessions`; `sessions?.start()` runs after the recon
 the catch-up, and `trading-worker started` carries `sessions: true|false` (and `demoOnly`, #396).
 
 Shutdown phase 1: the intents consumer's step is `worker.close()` → `drainDeadLetters()` →
-`sessions.stop()`, so the sockets close after the jobs in flight finished and our own shutdown
+`sessions.stop()` → `registry.stop()` (#94: our `worker_processes` row goes after our leases), so the sockets close after the jobs in flight finished and our own shutdown
 never cuts a submit waiting on its socket. `stop()`: the timers cleared (the scan, the lease
 renewal, the fence, the loss check), the token fetches aborted
 (the pool exits), every client stopped (a command still waiting settles `unknown`/`state_changed`,
@@ -263,7 +271,8 @@ expected close.
 | `SESSION_REFUSAL_RETRY_MS` | 300 000 | the hold-back after a durable refusal or a `user.data` id mismatch |
 | `SESSION_START_CONCURRENCY` | 4 | token fetches in flight in the start pool |
 | `SESSION_STOP_BUDGET_MS` | 2 000 | how long `stop()` waits for the writes in flight |
-| `MAX_SESSIONS_PER_WORKER` | 500 | sessions (running + starting) one process holds; a safety cap, not a measured limit (#94) |
+| `MAX_SESSIONS_PER_WORKER` | 500 | the default of the env `MAX_SESSIONS_PER_WORKER` (1..`MAX_SESSIONS_PER_WORKER_CEILING`, 10 000; #94): sessions (running + starting) one process holds among the accounts it owns; a safety cap, not a measured limit (#87) |
+| `SESSION_SHED_GRACE_MS` | 6 000 | how long a session whose account moved to another process keeps its socket (no command from the mark on); above `BROKER_SOCKET_COMMAND_TIMEOUT_MS` (5 000), asserted at import (#94) |
 | `SESSION_LEASE_TTL_MS` | 30 000 | how long a lease outlives its last acquire or renewal in the database (#93) |
 | `SESSION_LEASE_RENEW_MS` | 6 000 | the renewal interval |
 | `SESSION_LEASE_RENEW_TIMEOUT_MS` | 3 000 | how long one acquire or renewal may take before it counts as failed |
@@ -306,9 +315,10 @@ redacted key).
 
 | `msg` | Level | Fields |
 |---|---|---|
-| `broker session tick` | debug | `candidates`, `sessions`, `starting`, `queued`, `closed`, `heldBack` |
+| `broker session tick` | debug | `candidates`, `owned`, `sessions`, `starting`, `queued`, `closed`, `heldBack` |
 | `broker session tick failed` | error | `err` |
-| `broker sessions capped` | warn, once per tick | `candidates`, `cap` |
+| `broker sessions capped` | warn, once per tick | `candidates` (the owned ones), `cap` |
+| `broker session shed` | info | `accountId`, `graceMs` — the account moved to another process (#94) |
 | `broker session closed` | info | `accountId`, `reason` (`idle`, `disconnected_by_server`) |
 | `broker session start failed` | error | `accountId`, `err` |
 | `broker session waits for a token exchange` | info | `accountId` |
@@ -330,7 +340,7 @@ redacted key).
 | `broker session lease renewal timed out` | warn | `leases` — the renewal took longer than its timeout; its answer is ignored |
 | `broker session lease acquire timed out` | warn | `accountId` — the acquire took longer than the renewal timeout; held back |
 | `broker session lease renewal threw` | error | `err` — the bookkeeping after an answer, not the database |
-| `broker session lease release failed` | error | `err` |
+| `broker session lease release failed` | error / warn | `err`; at a shed `accountId` too, and `timedOut` (warn) when the release overran its bound |
 
 `session-manager.test.ts` U14 reads every line its cases wrote through a `logOptions('debug')`
 sink: no `SECRET-` sentinel (U17a's thrown error carries one in its message, which
@@ -441,16 +451,19 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
    acquire answered after `stop()` released leaves one row of the dead owner until it lapses.
    Falsifiable: `broker session lease fenced` with `lateMs` above 5 000. One worker container
    runs, two during a deploy's overlap or until an operator resolves an interrupted run (#95,
-   [worker-deploy.md](worker-deploy.md)); more is #94.
+   [worker-deploy.md](worker-deploy.md)); more: [worker-capacity.md](worker-capacity.md) (#94)
+   and #815.
 6. **A revocation or a block reaches the session only through the candidates**, within 65 s; until
    then the session writes that account's balance events — rows of an account that cannot trade.
 7. **Writes queued at `stop()` are dropped**; the snapshot is rewritten by the next `user.data` or
    the backend tick, a close is settled by the catch-up.
 8. **`rest_observed_at` moves with every `user.data`**: `restSnapshotAgeSec` is the age of the last
    full snapshot, REST or socket.
-9. **Accounts beyond the cap trade over REST**, in `broker_accounts.id` order; the pilot's load
-   exceeds 500 (#94's sharding). Falsifiable: `broker sessions capped`. The scan has no limit,
-   assuming fewer than ~10 000 accounts in work at once.
+9. **Accounts beyond the cap trade over REST**, in `broker_accounts.id` order; the cap counts the
+   accounts this process owns (#94) and comes from env `MAX_SESSIONS_PER_WORKER`; the pilot's
+   load exceeds 500 for one process. Falsifiable: `broker sessions capped`, `cappedOut` in
+   `worker capacity`. The scan has no limit, assuming fewer than ~10 000 accounts in work at once
+   — the env's ceiling.
 10. **Whether the WebSocket handshake counts against the broker's 600/min per-IP limit is
     unknown.** Falsifiable: `connect_error`s with a 429 during a reconnect storm.
 11. **`mayRefresh: false` costs one REST-fallback trade per weekly token expiry** per account when
@@ -462,8 +475,9 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
 
 ## Boundaries
 
-- ARCH-02: #93 the lease (shipped, above), #94 the measured per-process limit, sharding and the
-  orchestrator and catch-up under several processes, #95 the deploy's overlap (shipped,
+- ARCH-02: #93 the lease (shipped, above), #94 the fleet registry, socket ownership and the cap
+  from env ([worker-capacity.md](worker-capacity.md)), #815 the orchestrator, the catch-up and the
+  pass under several processes and the N-replica deploy, #347 intent routing, #95 the deploy's overlap (shipped,
   [worker-deploy.md](worker-deploy.md); single-flight refresh across processes is the backend's
   row lock, Rule 12), #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
