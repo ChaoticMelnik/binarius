@@ -86,6 +86,19 @@ switch is hidden and the system setting decides.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
 `/admin/sessions`. Timestamps are printed as the ISO instants the backend sent.
 
+The lists (#656) — users, staff sessions, intents, trading sessions, the token ledger, deposits,
+broker accounts, Stars refunds, and the tables of the user card — are one table component
+([admin-design-system.md → Table and row card](admin-design-system.md#table-and-row-card)): from
+64rem a dense table, one line a row, a table wider than the content column scrolling inside its own
+frame (the header row is not pinned); below 64rem every row is a card, each value under its
+column's name. A status is a coloured badge around its old text or code (the colour of each status
+is the table in that section); «В начало»/«Далее» look like buttons; an empty list is a framed
+«… нет.». The ids a page prints as a code (an account, a payment, a reference of the ledger, the
+ids of the user and intent cards) carry a «Копировать» button; it is there only with JavaScript and
+a browser clipboard (an https page), and the id stays selectable without it. The cards are a framed
+list of fields per section. The audit log and the service accounts keep their tables from before
+(#817), as do the bot texts (#657).
+
 ### Overview — `GET /admin/overview`
 
 One `SELECT` with subqueries, so all the numbers come from one snapshot and agree with each other:
@@ -276,7 +289,8 @@ Every key of the intent's wire view: the 17 fields the bot sees (`GET /trading/i
 three only staff navigate by — `userId` (a link to the user card), `tradingSessionId` (with
 «Заявки этой сессии →», the list filtered by that session) and `reconcileClaimedAt`: when the
 reconciliation pass last took the intent (its lease, #89); empty — never. `brokerAccountId` is
-text. An empty value is shown as «—». The card reads any user's intent: it is behind the staff
+printed as its code, not a link. The status is a badge around its code; the five ids (the intent,
+the user, the account, the trading session, the client request) each have a copy button. An empty value is shown as «—». The card reads any user's intent: it is behind the staff
 session, not the bot's owner-scoped read.
 
 ### Trading sessions — `GET /admin/trading-sessions?cursor=`
@@ -286,7 +300,7 @@ session, not the bot's owner-scoped read.
 `broker_accounts` and `users`. Columns: the session id with «Заявки →» (the intents list filtered by
 this session), the owner's Telegram id (a link to the user card), the broker id, mode, status, stop
 reason, then asset, duration, length («Длина»: «5 циклов» for settings v3, «5 сделок» for v1/v2,
-#552) and base stake from `settings`, then started, ended and last decision. Codes are printed as codes, an empty value as «—».
+#552) and base stake from `settings`, then started, ended and last decision. Codes are printed as codes, the status as its code in a badge, an empty value as «—».
 
 `settings` is parsed against every version (`tradingSessionSettingsSchema`) at read, as the
 orchestrator and the bot's view do: a row that does not parse — the column default `{}`, an extra
@@ -343,7 +357,7 @@ something a view checks.
 other lists: one `SELECT` left-joined to `users` for the owner's Telegram id (`listDepositsForAdmin`,
 `packages/db/src/admin-ledger-ops.ts`). Columns: the time of the row, the owner's Telegram id (a link
 to the user card), the broker account id, the trader id the postback named (`broker_user_id`), the
-payment id, the amount, the currency, the status as its code, the time it was processed. The amount
+payment id, the amount, the currency, the status as its code in a badge, the time it was processed. The amount
 is the stored `numeric(20,8)` as PostgreSQL prints it (`10.50000000`); nothing is computed from it.
 An empty value is shown as «—»; the trader id, the payment id and the amount are never empty
 (#141: `NOT NULL`).
@@ -383,7 +397,7 @@ is now and says nothing about its history.
 per page, keyset on `(created_at, id)` as on the other lists: one `SELECT` joined to `users` for the
 owner's Telegram id (`listBrokerAccountsForAdmin`, `packages/db/src/admin-read-ops.ts`). Columns:
 the owner's Telegram id (a link to the user card), the account id, then the columns of the user
-card's section — broker id, address, partner client, status (its Russian label, as on the card),
+card's section — broker id, address, partner client, status (its Russian label in a badge, as on the card),
 revocation reason, halt and its reason (both codes), token expiry and rotation, «Служебный» (#391),
 «H1» (#745), created and updated.
 An empty value is shown as «—»; the times are the ISO instants the backend sent, the token expiry
