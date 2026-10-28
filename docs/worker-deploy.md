@@ -212,8 +212,9 @@ production wiring) over one Postgres, one Redis prefix and one mock broker, with
 shortened (`WorkerTestSeams`) and the backend's routes stubbed:
 
 - **H1** (with and without `BROKER_WS_URL`): A holds two submits at the broker, B starts, A gets
-  SIGTERM, two more intents follow. Every intent ends `accepted` with no error, A recorded exactly
-  its two and B the rest, one broker trade per intent, A's shutdown `clean`.
+  SIGTERM, two more intents follow. Every intent ends `accepted` with no error and is recorded
+  exactly once: A's two among A's (a late one published inside A's close window may be A's too),
+  the rest B's; one broker trade per intent, A's shutdown `clean`.
 - **H2** (with sockets): at every poll during H1 at most one socket per broker user; after A's
   shutdown B holds one for every account in work.
 - **H3**: A's phase 1 overruns while a REST submit is held (`dirty`), A's pool ends as the exit
