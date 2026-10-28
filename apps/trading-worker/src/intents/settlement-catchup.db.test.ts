@@ -104,7 +104,8 @@ const catchupOf = (
       batchSize: 20,
       pageSize: 50,
       maxPages: 2,
-      attemptTimeoutMs: 2_000,
+      // a real deadline over the token, the broker's page and the settle, below until's 15 s
+      attemptTimeoutMs: 10_000,
       stalledRetryMs: 60_000,
       ...config,
     },

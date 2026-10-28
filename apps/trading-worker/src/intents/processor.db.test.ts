@@ -478,7 +478,7 @@ describe('processIntentJob', () => {
         logger,
       });
       expect(
-        await processIntentJob(deps(executor, { submitAckTimeoutMs: 5_000 }), {
+        await processIntentJob(deps(executor, { submitAckTimeoutMs: 10_000 }), {
           intentId: seed.intent.id,
         }),
       ).toBe('accepted');
@@ -513,7 +513,7 @@ describe('processIntentJob', () => {
           logger,
         });
         expect(
-          await processIntentJob(deps(executor, { submitAckTimeoutMs: 5_000 }), {
+          await processIntentJob(deps(executor, { submitAckTimeoutMs: 10_000 }), {
             intentId: seed.intent.id,
           }),
         ).toBe('accepted');

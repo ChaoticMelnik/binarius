@@ -6,7 +6,7 @@ import { Redis } from 'ioredis';
 import { Pool } from 'pg';
 import pino from 'pino';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { createBrokerRestClient } from '@binarius/broker-rest';
+import { BROKER_REST_TIMEOUT_MS, createBrokerRestClient } from '@binarius/broker-rest';
 import {
   brokerBalanceSnapshots,
   brokerSessionLeases,
@@ -59,7 +59,7 @@ import { until } from '@binarius/shared/testing';
 import type { Env } from './env';
 import { ownerOf } from './fleet/rendezvous';
 import { INTENT_DIRECT_JOB, ownIntentQueueName } from './intents/router';
-import { TEST_WORKER_TUNING, watchSockets } from './testing';
+import { TEST_SUBMIT_ACK_TIMEOUT_MS, TEST_WORKER_TUNING, watchSockets } from './testing';
 import { eurUsd } from './trading-session/testing';
 import { createWorker, type ShutdownResult, type TradingWorker, type WorkerTuning } from './worker';
 
@@ -90,6 +90,15 @@ const prefix = `test-${randomBytes(4).toString('hex')}`;
 const DIRTY_PHASE1_MS = 200;
 const HELD_SOCKET_MS = 800;
 const HELD_REST_MS = 1_500;
+// a held submit ends inside its transport's timeout and before the sweeper marks it, or a case
+// meant to be accepted ends unknown; checked at import, not as a flaky case
+if (!(
+  HELD_SOCKET_MS < TEST_WORKER_TUNING.socketTiming!.commandTimeoutMs! &&
+  HELD_REST_MS < BROKER_REST_TIMEOUT_MS &&
+  HELD_REST_MS < TEST_WORKER_TUNING.staleSubmittingMs!
+)) {
+  throw new Error('the held submits are out of order (see worker.handoff.db.test.ts)');
+}
 
 let tmp: TempDatabase;
 let broker: MockBroker;
@@ -157,7 +166,7 @@ function envOf(sockets: boolean, demoOnly = false): Env {
     redisUrl: redisUrl!,
     logLevel: 'debug',
     intentMaxAgeMs: 60_000,
-    submitAckTimeoutMs: 5_000,
+    submitAckTimeoutMs: TEST_SUBMIT_ACK_TIMEOUT_MS,
     workerConcurrency: 4,
     maxSessionsPerWorker: 50,
     backendUrl: 'http://127.0.0.1:9',
@@ -498,7 +507,8 @@ describe('a deploy whose old worker overruns its drain', () => {
       'the submit held at the broker',
       async () => (await statusOf(intentId)) === TradeIntentStatus.Submitting,
     );
-    const b = startWorker('B', { sockets: false });
+    // the sweeper's mark is what this case covers, and B holds no submit of its own
+    const b = startWorker('B', { sockets: false, tuning: { staleSubmittingMs: 3_000 } });
     expect(await shutdown(a)).toBe('dirty');
     // the exit: whatever A's held call brings back can no longer be written
     if (!a.pool.ending) await a.pool.end();
@@ -585,7 +595,8 @@ describe('a demo session whose worker dies (#131)', () => {
       await publishPending([intent.id]);
       return (await statusOf(intent.id)) === TradeIntentStatus.Submitting;
     });
-    const b = startWorker('B', { sockets: false });
+    // the sweeper's mark is what this case covers, and B holds no submit of its own
+    const b = startWorker('B', { sockets: false, tuning: { staleSubmittingMs: 3_000 } });
     expect(await shutdown(a)).toBe('dirty');
     if (!a.pool.ending) await a.pool.end();
 

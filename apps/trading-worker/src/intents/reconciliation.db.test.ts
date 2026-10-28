@@ -130,7 +130,8 @@ const passOf = (
     config: {
       tickMs: 60_000,
       retryMs: RETRY_MS,
-      attemptTimeoutMs: 1_000,
+      // a real deadline over the REST reconciler's broker and database calls, below until's 15 s
+      attemptTimeoutMs: 10_000,
       batchSize: 50,
       balanceCheckTimeoutMs: 1_000,
       ...config,

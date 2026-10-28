@@ -3,4 +3,4 @@
 
 export type { Env } from './env';
 export { createWorker, type ShutdownResult, type TradingWorker, type WorkerTuning } from './worker';
-export { TEST_WORKER_TUNING, watchSockets } from './testing';
+export { TEST_SUBMIT_ACK_TIMEOUT_MS, TEST_WORKER_TUNING, watchSockets } from './testing';

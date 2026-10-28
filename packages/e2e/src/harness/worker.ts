@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { createDb } from '@binarius/db';
 import {
   createWorker,
+  TEST_SUBMIT_ACK_TIMEOUT_MS,
   TEST_WORKER_TUNING,
   type Env,
   type TradingWorker,
@@ -25,7 +26,7 @@ export function startE2eWorker(deps: {
     redisUrl: deps.redisUrl,
     logLevel: 'info',
     intentMaxAgeMs: 60_000,
-    submitAckTimeoutMs: 5_000,
+    submitAckTimeoutMs: TEST_SUBMIT_ACK_TIMEOUT_MS,
     workerConcurrency: 4,
     maxSessionsPerWorker: 50,
     backendUrl: deps.backendUrl,
