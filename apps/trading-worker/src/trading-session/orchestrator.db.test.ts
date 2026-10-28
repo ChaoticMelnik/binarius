@@ -123,7 +123,9 @@ const DRIVER = 'trading session waits for the H1 driver';
 const CONFIG: SessionOrchestratorConfig = {
   tickMs: 5_000,
   batchSize: 50,
-  attemptTimeoutMs: 2_000,
+  // a wall-clock deadline while the hold-backs run on the fake clock: kept under the 15 s ceiling of
+  // `until` and the 20 s test timeout, far above what an attempt takes on a loaded host
+  attemptTimeoutMs: 10_000,
   retryMs: 60_000,
   h1CheckMs: 5_000,
   maxDurationMs: SESSION_MAX_DURATION_MS,
@@ -325,7 +327,7 @@ const processIntent = (intentId: string) =>
       logger,
       config: {
         intentMaxAgeMs: 60_000,
-        submitAckTimeoutMs: 2_000,
+        submitAckTimeoutMs: 10_000,
         staleSubmittingMs: 60_000,
         demoOnly: false,
       },
@@ -535,7 +537,7 @@ describe('the attempt and the sequence (#287)', () => {
       );
       return fresh();
     });
-    const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 5_000 } });
+    const orchestrator = orchestratorOf({ pairs });
     await orchestrator.tick();
     // both were listed by the scan, so the stop below is the attempt's, not the sweep's
     expect(lines.filter((line) => line.msg === 'trading session tick').at(-1)).toMatchObject({
@@ -569,7 +571,7 @@ describe('the attempt and the sequence (#287)', () => {
           });
         }),
     );
-    const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 5_000 } });
+    const orchestrator = orchestratorOf({ pairs });
     orchestrator.start();
     await until('the catalog read', () => pairs.calls === 1);
     await orchestrator.stop();
@@ -814,7 +816,7 @@ const passOf = (reconciler = restReconcilerOf()) =>
     config: {
       tickMs: 60_000,
       retryMs: 60_000,
-      attemptTimeoutMs: 5_000,
+      attemptTimeoutMs: 10_000,
       batchSize: 20,
       balanceCheckTimeoutMs: 1_000,
     },
@@ -831,7 +833,7 @@ const catchupOf = () =>
       batchSize: 20,
       pageSize: 50,
       maxPages: 2,
-      attemptTimeoutMs: 5_000,
+      attemptTimeoutMs: 10_000,
       stalledRetryMs: 60_000,
     },
   });
@@ -849,7 +851,7 @@ const processNow = (intentId: string) =>
       logger,
       config: {
         intentMaxAgeMs: 60_000,
-        submitAckTimeoutMs: 2_000,
+        submitAckTimeoutMs: 10_000,
         staleSubmittingMs: 0,
         demoOnly: false,
       },
@@ -1524,7 +1526,6 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     const { pairs } = gatedPairs();
     const orchestrator = wakeful({
       pairs,
-      config: { attemptTimeoutMs: 5_000 },
       log: tagged('WK4b'),
     });
     const first = orchestrator.tick();

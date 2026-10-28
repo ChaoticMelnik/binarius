@@ -43,17 +43,22 @@ function run(dir: string, extra: Partial<H1RunOptions> = {}) {
 }
 
 describe('stand h1 (#667)', () => {
-  it('H-U1: a run writes both reports and prints table (a) and the report path', () => {
-    const dir = cacheWith(secondsPath(T0, 2 * HOUR_S));
-    const { code, out, outDir } = run(dir);
-    expect(code).toBe(0);
-    expect(existsSync(path.join(outDir, 'report-h1.md'))).toBe(true);
-    expect(existsSync(path.join(outDir, 'report-h1.json'))).toBe(true);
-    expect(out[0]).toMatch(
-      /^\| rule \| move s \| sd step s \| threshold \| delay s \| expiry s \|/,
-    );
-    expect(out.at(-1)).toBe(`report: ${path.join(outDir, 'report-h1.md')}`);
-  });
+  // an in-process run over two hours of seconds: about 1 s alone, more under the full suite
+  it(
+    'H-U1: a run writes both reports and prints table (a) and the report path',
+    { timeout: 30_000 },
+    () => {
+      const dir = cacheWith(secondsPath(T0, 2 * HOUR_S));
+      const { code, out, outDir } = run(dir);
+      expect(code).toBe(0);
+      expect(existsSync(path.join(outDir, 'report-h1.md'))).toBe(true);
+      expect(existsSync(path.join(outDir, 'report-h1.json'))).toBe(true);
+      expect(out[0]).toMatch(
+        /^\| rule \| move s \| sd step s \| threshold \| delay s \| expiry s \|/,
+      );
+      expect(out.at(-1)).toBe(`report: ${path.join(outDir, 'report-h1.md')}`);
+    },
+  );
 
   it('H-U2: a cache without a 1s series is refused before any file', () => {
     const dir = tempDir();

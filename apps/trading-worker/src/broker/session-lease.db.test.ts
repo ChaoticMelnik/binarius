@@ -191,8 +191,11 @@ describe('the session lease across processes (#93)', () => {
 
   it('M2 a dead owner’s lease lapses: its socket is fenced first, then another process takes the account', async () => {
     const accountId = await accountInWork();
-    // short leases; the owner never renews, the way a process that died does
-    const lease = { leaseTtlMs: 600, leaseFenceMs: 450, leaseRenewMs: 100, retryMs: 700 };
+    // short leases; the owner never renews, the way a process that died does. Wall-clock budgets:
+    // the next process's first scan must come within the TTL of the acquire (the dead owner's
+    // socket and auth lie between), and the fence's timer must fire before the lapse; a second of
+    // margin each, so a loaded host does not reorder them
+    const lease = { leaseTtlMs: 3_000, leaseFenceMs: 2_000, leaseRenewMs: 100, retryMs: 3_100 };
     const dead = managerOf('dead', lease);
     await dead.tick();
     await until('the dead owner’s client', () => dead.clientFor(accountId) !== undefined);

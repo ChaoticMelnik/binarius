@@ -659,44 +659,49 @@ describe('the rules in this repository', () => {
     }
   });
 
-  it('G8 every tracked file and a new file in every directory gets directly exactly the rules whose text names it', () => {
-    const inputs = [
-      ...repo.entries,
-      ...[...directoriesOf(repo.entries)].flatMap((d) => [
-        `${d}/zz-new.ts`,
-        `${d}/zz-new/zz-new.ts`,
-      ]),
-    ];
-    const words = new Map(rules.map((r) => [r.number, oracleWords(r.body)]));
-    const { perFile } = rulesFor(inputs, rules, repo.entries);
-    const diffs: string[] = [];
-    let pairs = 0;
-    perFile.forEach(({ file, direct }) => {
-      const router = new Set(direct.map((r) => r.number));
-      const forms = formsOf(file);
-      const oracle = new Set(
-        rules
-          .filter((r) => {
-            const own = words.get(r.number) ?? new Set<string>();
-            return (
-              [...forms].some((form) => own.has(form)) ||
-              [...own].some((w) => oracleGlob(w, file, forms))
-            );
-          })
-          .map((r) => r.number),
-      );
-      pairs += oracle.size;
-      const routerOnly = [...router].filter((n) => !oracle.has(n));
-      const oracleOnly = [...oracle].filter((n) => !router.has(n));
-      if (routerOnly.length > 0 || oracleOnly.length > 0)
-        diffs.push(
-          `${file}: router-only [${routerOnly.join(', ')}] oracle-only [${oracleOnly.join(', ')}]`,
+  // ~1 s alone for the ~1 300 inputs (the router's own cost), several times more under the full suite
+  it(
+    'G8 every tracked file and a new file in every directory gets directly exactly the rules whose text names it',
+    { timeout: 30_000 },
+    () => {
+      const inputs = [
+        ...repo.entries,
+        ...[...directoriesOf(repo.entries)].flatMap((d) => [
+          `${d}/zz-new.ts`,
+          `${d}/zz-new/zz-new.ts`,
+        ]),
+      ];
+      const words = new Map(rules.map((r) => [r.number, oracleWords(r.body)]));
+      const { perFile } = rulesFor(inputs, rules, repo.entries);
+      const diffs: string[] = [];
+      let pairs = 0;
+      perFile.forEach(({ file, direct }) => {
+        const router = new Set(direct.map((r) => r.number));
+        const forms = formsOf(file);
+        const oracle = new Set(
+          rules
+            .filter((r) => {
+              const own = words.get(r.number) ?? new Set<string>();
+              return (
+                [...forms].some((form) => own.has(form)) ||
+                [...own].some((w) => oracleGlob(w, file, forms))
+              );
+            })
+            .map((r) => r.number),
         );
-    });
-    expect(inputs.length).toBeGreaterThan(1000);
-    expect(pairs).toBeGreaterThan(500);
-    expect(diffs.slice(0, 20), `${diffs.length} inputs differ`).toEqual([]);
-  });
+        pairs += oracle.size;
+        const routerOnly = [...router].filter((n) => !oracle.has(n));
+        const oracleOnly = [...oracle].filter((n) => !router.has(n));
+        if (routerOnly.length > 0 || oracleOnly.length > 0)
+          diffs.push(
+            `${file}: router-only [${routerOnly.join(', ')}] oracle-only [${oracleOnly.join(', ')}]`,
+          );
+      });
+      expect(inputs.length).toBeGreaterThan(1000);
+      expect(pairs).toBeGreaterThan(500);
+      expect(diffs.slice(0, 20), `${diffs.length} inputs differ`).toEqual([]);
+    },
+  );
 
   it('G9 every piece of a backticked token that names an entry is a word of its rule', () => {
     let pieces = 0;
