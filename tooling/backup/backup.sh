@@ -1,6 +1,7 @@
 # One backup run (docs/backups.md -> The service): pg_dump -> age -> the remote, the server's .env
-# beside it, the first run of a day copied into daily/, then the old runs pruned. Nothing touches
-# a local disk but a byte counter. Prints one line on stdout: `backup ok: ...` or
+# beside it, the first run of a day copied into daily/, then the old runs pruned. The local disk
+# holds only a byte counter, a fifo and the stages' exit codes in a temporary directory. Prints
+# one line on stdout: `backup ok: ...` or
 # `backup failed: <step> (...)`; a failure exits 1 and pings <BACKUP_PING_URL>/fail.
 set -eu
 . "$(dirname "$0")/lib.sh"
@@ -56,8 +57,9 @@ upload() {
   wait "$counter"
 }
 
-# The stages are read from the last one back: a failed rclone kills the stages before it with
-# SIGPIPE, while a failed pg_dump leaves the stages after it at 0.
+# The stages are read from the last one back. Busybox tee ignores SIGPIPE and reads its input to
+# the end, so a failed upload leaves the stages before it at 0; a failed pg_dump or age hands
+# rclone a short object it stores with 0. Either way the cause is the first failure from the end.
 check_upload() {
   for stage in upload encrypt; do
     rc="$(stage_rc "$s/$stage.rc")"
@@ -111,18 +113,27 @@ fi
 partial=''
 
 # The first run of a UTC day is the day's copy, whatever minute the container started at. The
-# listing is recursive from the root because a missing daily/ is an error on a local remote.
+# day counts as copied only by its objects: a cut-off copy leaves a directory without them, and
+# the next run of the day copies it again. The listing is recursive from the root because a
+# missing daily/ is an error on a local remote.
 rc=0
-listing="$(rclone lsf --dirs-only -R --max-depth 2 "$(remote)")" || rc=$?
+objects="$(rclone lsf --files-only -R --max-depth 3 "$(remote)")" || rc=$?
 if [ "$rc" -ne 0 ]; then
   fail daily "exit $rc"
 fi
-if printf '%s\n' "$listing" | grep -q "^daily/binarius-$(date_key "$run")"; then
+copied=''
+for day in $(printf '%s\n' "$objects" | sed -n "s,^daily/\(binarius-$(date_key "$run")[0-9TZ]*\)/binarius\.dump\.age$,\1,p"); do
+  if [ -z "${BACKUP_ENV_FILE:-}" ] || printf '%s\n' "$objects" | grep -qx "daily/$day/env.age"; then
+    copied=1
+  fi
+done
+if [ -n "$copied" ]; then
   daily='daily exists'
 else
   rc=0
   rclone copy "$dir" "$(remote)/daily/$run" || rc=$?
   if [ "$rc" -ne 0 ]; then
+    rclone purge "$(remote)/daily/$run" || log warn "the partial day's copy was not removed (exit $?)"
     fail daily "exit $rc"
   fi
   daily='daily copied'

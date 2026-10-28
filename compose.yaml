@@ -452,7 +452,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    # a run cut off by a deploy leaves no finished object; the next hour covers it
+    # a run cut off during the dump's upload leaves no finished dump; one cut off later can leave a
+    # dump without env.age or part of the day's copy, which the next run of the day copies again
     stop_grace_period: 30s
     environment:
       PGHOST: postgres

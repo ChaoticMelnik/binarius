@@ -10,6 +10,9 @@ MIN_DUMP_BYTES=512
 # two hourly runs and a margin: the same window as the compose healthcheck's -mmin -130
 STALE_AFTER=130m
 RESTORE_CHECK_MAX_BYTES_DEFAULT=524288000
+# 63 bytes of a Postgres identifier minus the longest suffix, _before_restore_<14 digits>: a longer
+# name would be truncated into another database's name
+MAX_DATABASE_NAME=33
 
 # test seams: compose sets neither, the tests cannot create /run/backup on their host
 BACKUP_STATE_DIR="${BACKUP_STATE_DIR:-/run/backup}"
@@ -62,8 +65,8 @@ is_run_name() {
 is_database_name() {
   case "$1" in
     '' | *[!a-z0-9_]*) return 1 ;;
-    *) return 0 ;;
   esac
+  [ "${#1}" -le "$MAX_DATABASE_NAME" ]
 }
 
 # binarius-20261009T030000Z -> 20261009
@@ -84,7 +87,9 @@ ping() {
   if [ "$1" = fail ]; then
     url="$url/fail"
   fi
-  curl -fsS -m 10 --retry 2 -o /dev/null "$url" || log warn "the $1 ping failed"
+  # the URL goes in on stdin, not in argv: the host's ps shows every container's argv
+  printf 'url = "%s"\n' "$url" | curl -fsS -m 10 --retry 2 -o /dev/null -K - \
+    || log warn "the $1 ping failed"
 }
 
 # BACKUP_AGE_IDENTITY into a file only its owner reads, inside the caller's temporary directory
@@ -99,6 +104,43 @@ stage_rc() {
   else
     printf '255'
   fi
+}
+
+# <dir> <stage>...: the stages of one pipeline in its order. Prints `<stage>, exit N` of the first
+# stage that failed other than by 141, else of the first one at 141, else nothing. A stage at 141
+# died of SIGPIPE because the one after it stopped reading, so the cause is further down.
+failed_stage() {
+  d="$1"
+  shift
+  sigpipe=''
+  for stage in "$@"; do
+    rc="$(stage_rc "$d/$stage.rc")"
+    if [ "$rc" -eq 141 ]; then
+      if [ -z "$sigpipe" ]; then
+        sigpipe="$stage, exit 141"
+      fi
+    elif [ "$rc" -ne 0 ]; then
+      printf '%s, exit %s' "$stage" "$rc"
+      return 0
+    fi
+  done
+  printf '%s' "$sigpipe"
+}
+
+# <run> <object>: <remote>/hourly/<run> or <remote>/daily/<run>, the first tier where the run
+# holds <object>; nothing when neither does. A failed listing returns its exit code.
+find_run() {
+  rc=0
+  objects="$(rclone lsf --files-only -R --max-depth 3 "$(remote)")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    return "$rc"
+  fi
+  for tier in hourly daily; do
+    if printf '%s\n' "$objects" | grep -qx "$tier/$1/$2"; then
+      printf '%s/%s/%s' "$(remote)" "$tier" "$1"
+      return 0
+    fi
+  done
 }
 
 # rclone cat <object> | age -d | <the rest of the pipeline, on stdout>; the stages' codes go to

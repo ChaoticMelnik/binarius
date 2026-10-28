@@ -53,6 +53,7 @@ if [ -n "$schema_only" ]; then
   exit 0
 fi
 if fails pg_dump; then printf 'PGDMP partial'; exit 1; fi
+if [ -n "\${SHIM_DUMP_TINY:-}" ]; then printf 'PGDMP'; exit 0; fi
 i=0
 while [ "$i" -lt 20 ]; do echo 'PGDMP a line of the custom-format archive, about fifty bytes'; i=$((i + 1)); done`,
   pg_restore: `
@@ -101,7 +102,7 @@ cat`,
   rclone: `
 log "rclone $*"
 sub="$1"; shift
-fails "rclone-$sub" && exit 3
+[ "$sub" != copy ] && fails "rclone-$sub" && exit 3
 dirs=''; files=''; recursive=''; depth=1; min_age=''; set_args=''
 for a in "$@"; do
   case "$prev" in --max-depth) depth="$a" ;; --min-age) min_age="$a" ;; esac
@@ -123,7 +124,9 @@ case "$sub" in
   lsf)
     [ -d "$1" ] || exit 3
     cd "$1"
-    if [ -n "$recursive" ]; then
+    if [ -n "$recursive" ] && [ -n "$files" ]; then
+      find . -mindepth 1 -maxdepth "$depth" -type f | sed 's,^\\./,,' | sort
+    elif [ -n "$recursive" ]; then
       find . -mindepth 1 -maxdepth "$depth" -type d | sed 's,^\\./,,; s,$,/,' | sort
     elif [ -n "$dirs" ]; then
       for x in *; do if [ -d "$x" ]; then echo "$x/"; fi; done
@@ -132,13 +135,18 @@ case "$sub" in
     else
       for x in *; do if [ -f "$x" ]; then echo "$x"; fi; done
     fi ;;
-  copy) mkdir -p "$2"; cp -R "$1/." "$2/" ;;
+  copy)
+    mkdir -p "$2"
+    # a copy cut off after its first object
+    if fails rclone-copy; then cp "$1/env.age" "$2/"; exit 3; fi
+    cp -R "$1/." "$2/" ;;
   purge) [ -d "$1" ] || exit 3; rm -rf "$1" ;;
   cat) [ -f "$1" ] || exit 3; cat "$1" ;;
 esac
 exit 0`,
   curl: `
 log "curl $*"
+log "curl-config $(cat)"
 fails curl && exit 7
 exit 0`,
 };
@@ -254,6 +262,13 @@ function expectInOrder(calls: string[], steps: (RegExp | RegExp[])[]): void {
 const matching = (calls: string[], pattern: RegExp): string[] =>
   calls.filter((call) => pattern.test(call));
 
+// the URL reaches curl on stdin (a config line), never in its argv
+const CURL_ARGV = 'curl -fsS -m 10 --retry 2 -o /dev/null -K -';
+const pings = (calls: string[]): string[] =>
+  calls
+    .filter((call) => call.startsWith('curl-config '))
+    .map((call) => call.slice('curl-config '.length));
+
 const runOf = (stdout: string): string =>
   /binarius-\d{8}T\d{6}Z/.exec(stdout)?.[0] ?? 'no run in the output';
 
@@ -300,15 +315,17 @@ describe('backup.sh', () => {
       new RegExp(`^rclone lsl ${hourly}/binarius\\.dump\\.age$`),
       [new RegExp(`^age -r ${RECIPIENT}$`), new RegExp(`^rclone rcat ${hourly}/env\\.age$`)],
       new RegExp(`^rclone lsl ${hourly}/env\\.age$`),
-      new RegExp(`^rclone lsf --dirs-only -R --max-depth 2 ${REMOTE}$`),
+      new RegExp(`^rclone lsf --files-only -R --max-depth 3 ${REMOTE}$`),
       new RegExp(`^rclone copy ${hourly} ${REMOTE}/daily/${runName}$`),
       new RegExp(`^rclone delete --min-age 7d ${REMOTE}/hourly$`),
       new RegExp(`^rclone rmdirs --leave-root ${REMOTE}/hourly$`),
       new RegExp(`^rclone delete --min-age 30d ${REMOTE}/daily$`),
       new RegExp(`^rclone rmdirs --leave-root ${REMOTE}/daily$`),
-      new RegExp(`^curl -fsS -m 10 --retry 2 -o /dev/null ${PING}$`),
+      /^curl /,
     ]);
-    expect(matching(r.calls, /^curl /)).toHaveLength(1);
+    expect(matching(r.calls, /^curl /)).toEqual([CURL_ARGV]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}"`]);
+    expect(matching(r.calls, /^curl .*hc-ping/)).toEqual([]);
     expect(matching(r.calls, /^rclone purge /)).toEqual([]);
     expect(existsSync(path.join(c.state, 'ok'))).toBe(true);
     const stored = path.join(c.store, 'bucket/pilot');
@@ -338,9 +355,7 @@ describe('backup.sh', () => {
       expect(r.status).toBe(1);
       expect(r.stdout).toBe(`backup failed: ${reason}\n`);
       expect(matching(r.calls, /^rclone (lsl|delete|copy|lsf) /)).toEqual([]);
-      expect(matching(r.calls, /^curl /)).toEqual([
-        `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-      ]);
+      expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
       expect(matching(r.calls, /^rclone purge /)).toEqual([
         expect.stringMatching(
           new RegExp(`^rclone purge ${REMOTE}/hourly/binarius-\\d{8}T\\d{6}Z$`),
@@ -368,9 +383,7 @@ describe('backup.sh', () => {
     expect(matching(r.calls, /^rclone (delete|copy) /)).toEqual([]);
     expect(matching(r.calls, /^rclone purge /)).toHaveLength(1);
     expect(readdirSync(path.join(c.store, 'bucket/pilot/hourly'))).toEqual([]);
-    expect(matching(r.calls, /^curl /)).toEqual([
-      `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
   });
 
   it('B5 pings nothing without BACKUP_PING_URL', () => {
@@ -397,7 +410,7 @@ describe('backup.sh', () => {
     expect(r.stdout).toMatch(
       /^backup failed: env \(BACKUP_ENV_FILE is set, but .* is not a non-empty file\)\n$/,
     );
-    expect(r.calls).toEqual([`curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`]);
+    expect(r.calls).toEqual([CURL_ARGV, `curl-config url = "${PING}/fail"`]);
   });
 
   it.each([
@@ -416,7 +429,7 @@ describe('backup.sh', () => {
     const r = run(c, 'backup.sh', [], env);
     expect(r.status).toBe(1);
     expect(r.stdout).toBe(`backup failed: config (${name})\n`);
-    expect(r.calls).toEqual([`curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`]);
+    expect(r.calls).toEqual([CURL_ARGV, `curl-config url = "${PING}/fail"`]);
   });
 
   it('B9 a failed prune after a stored run fails the run, keeps it and leaves no marker', () => {
@@ -427,9 +440,7 @@ describe('backup.sh', () => {
     expect(matching(r.calls, /^rclone purge /)).toEqual([]);
     expect(readdirSync(path.join(c.store, 'bucket/pilot/hourly'))).toHaveLength(1);
     expect(existsSync(path.join(c.state, 'ok'))).toBe(false);
-    expect(matching(r.calls, /^curl /)).toEqual([
-      `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
   });
 
   it('B11 the ok line ends with the run time in seconds', () => {
@@ -438,6 +449,68 @@ describe('backup.sh', () => {
     expect(r.stdout).toMatch(
       /^backup ok: binarius-\d{8}T\d{6}Z, dump \d+ bytes, env none, daily copied, \d+ s\n$/,
     );
+  });
+
+  const putDaily = (c: Case, objects: string[]): void => {
+    const dir = path.join(c.store, 'bucket/pilot/daily', `binarius-${utcDateKey(0)}T000000Z`);
+    mkdirSync(dir, { recursive: true });
+    for (const object of objects) writeFileSync(path.join(dir, object), 'age-encryption.org/v1\n');
+  };
+
+  it('B12 copies the day again when its daily/ directory holds no dump', () => {
+    const c = newCase();
+    putDaily(c, ['env.age']);
+    const r = run(c, 'backup.sh');
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/, daily copied, \d+ s\n$/);
+    const copy = path.join(c.store, 'bucket/pilot/daily', runOf(r.stdout));
+    expect(readdirSync(copy).sort()).toEqual(['binarius.dump.age', 'env.age']);
+  });
+
+  it.each([
+    ['B13a', '/opt/binarius/.env', 'daily copied', 1],
+    ['B13b', undefined, 'daily exists', 0],
+  ])(
+    '%s a day copy holding only the dump, BACKUP_ENV_FILE %s: %s',
+    (_id, envFile, daily, copies) => {
+      const c = newCase();
+      putDaily(c, ['binarius.dump.age']);
+      const r = run(c, 'backup.sh', [], { BACKUP_ENV_FILE: envFile });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stdout).toMatch(new RegExp(`, ${daily}, \\d+ s\\n$`));
+      expect(matching(r.calls, /^rclone copy /)).toHaveLength(copies);
+    },
+  );
+
+  it('B15 a failed day copy is removed, fails the run and keeps the hourly run', () => {
+    const c = newCase();
+    const r = run(c, 'backup.sh', [], { SHIM_FAIL: 'rclone-copy' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('backup failed: daily (exit 3)\n');
+    const runName = runOf(r.calls.find((call) => call.startsWith('rclone copy ')) ?? '');
+    expect(matching(r.calls, /^rclone purge /)).toEqual([
+      `rclone purge ${REMOTE}/daily/${runName}`,
+    ]);
+    expect(existsSync(path.join(c.store, 'bucket/pilot/daily', runName))).toBe(false);
+    expect(readdirSync(path.join(c.store, 'bucket/pilot/hourly', runName)).sort()).toEqual([
+      'binarius.dump.age',
+      'env.age',
+    ]);
+    expect(existsSync(path.join(c.state, 'ok'))).toBe(false);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
+  });
+
+  it('B16 a dump object below the floor fails verify and removes the run', () => {
+    const c = newCase();
+    const r = run(c, 'backup.sh', [], { SHIM_DUMP_TINY: '1' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(
+      /^backup failed: verify \(binarius\.dump\.age: \d+ bytes, below 512\)\n$/,
+    );
+    expect(matching(r.calls, /^rclone purge /)).toEqual([
+      expect.stringMatching(new RegExp(`^rclone purge ${REMOTE}/hourly/binarius-\\d{8}T\\d{6}Z$`)),
+    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
   });
 });
 
@@ -501,10 +574,16 @@ describe('restore-check.sh', () => {
     const r = run(c, 'restore-check.sh');
     expect(r.status).toBe(1);
     expect(r.stdout).toBe('restore-check failed: no-backups (exit 3)\n');
-    expect(matching(r.calls, /^curl /)).toEqual([
-      `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
     expect(matching(r.calls, /create database/)).toEqual([]);
+  });
+
+  it('R2b fails as no-backups, naming no exit code, when hourly/ is empty', () => {
+    const c = newCase();
+    mkdirSync(path.join(c.store, 'bucket/pilot/hourly'), { recursive: true });
+    const r = run(c, 'restore-check.sh');
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('restore-check failed: no-backups (hourly/ holds no run)\n');
   });
 
   it('R3 fails as stale when the latest dump is older than two hourly runs', () => {
@@ -521,9 +600,7 @@ describe('restore-check.sh', () => {
     expect(r.status).toBe(1);
     expect(r.stdout).toBe('restore-check failed: restore (restore, exit 1)\n');
     expectBothDroppedLast(r.calls);
-    expect(matching(r.calls, /^curl /)).toEqual([
-      `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
   });
 
   it('R5 a restored schema that differs fails with the first lines of the diff', () => {
@@ -566,9 +643,7 @@ describe('restore-check.sh', () => {
       'restore-check failed: schema (load the live schema into binarius_restore_check_schema, exit 3)\n',
     );
     expectBothDroppedLast(r.calls);
-    expect(matching(r.calls, /^curl /)).toEqual([
-      `curl -fsS -m 10 --retry 2 -o /dev/null ${PING}/fail`,
-    ]);
+    expect(pings(r.calls)).toEqual([`url = "${PING}/fail"`]);
   });
 });
 
@@ -606,6 +681,7 @@ describe('restore.sh', () => {
   it('RS3 restores into binarius_restored, then swaps the names in one transaction', () => {
     const c = newCase();
     putRun(c, 'hourly', RUN, 'THE RUN');
+    putRun(c, 'daily', RUN, 'DAILY COPY');
     const r = run(c, 'restore.sh', [RUN], { BACKUP_RESTORE_CONFIRM: RUN });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toMatch(
@@ -614,7 +690,8 @@ describe('restore.sh', () => {
       ),
     );
     expectInOrder(r.calls, [
-      /pg_stat_activity where datname = 'binarius'/,
+      /pg_stat_activity where datname = 'binarius' and backend_type = 'client backend'/,
+      new RegExp(`^rclone lsf --files-only -R --max-depth 3 ${REMOTE}$`),
       /drop database if exists "binarius_restored" with \(force\) -c create database "binarius_restored"/,
       [
         new RegExp(`^rclone cat ${REMOTE}/hourly/${RUN}/binarius\\.dump\\.age$`),
@@ -625,6 +702,111 @@ describe('restore.sh', () => {
     ]);
     expect(r.calls.at(-1)).toMatch(/alter database/);
     expect(readFileSync(path.join(c.dir, 'restored'), 'utf8')).toBe('THE RUN\n');
+  });
+
+  it('RS4 restores a run kept only in daily/', () => {
+    const c = newCase();
+    putRun(c, 'daily', RUN, 'DAILY ONLY');
+    const r = run(c, 'restore.sh', [RUN], { BACKUP_RESTORE_CONFIRM: RUN });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`^restore ok: ${RUN} now serves as binarius;`));
+    expect(matching(r.calls, /^rclone cat /)).toEqual([
+      `rclone cat ${REMOTE}/daily/${RUN}/binarius.dump.age`,
+    ]);
+    expect(readFileSync(path.join(c.dir, 'restored'), 'utf8')).toBe('DAILY ONLY\n');
+  });
+
+  it('RS6 a run without a dump in either tier is not-found, before any database is created', () => {
+    const c = newCase();
+    const dir = path.join(c.store, 'bucket/pilot/daily', RUN);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'env.age'), 'age-encryption.org/v1\n');
+    const r = run(c, 'restore.sh', [RUN], { BACKUP_RESTORE_CONFIRM: RUN });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe(
+      `restore failed: not-found (${RUN} has no binarius.dump.age under hourly/ or daily/)\n`,
+    );
+    expect(matching(r.calls, /create database|drop database/)).toEqual([]);
+  });
+
+  it('RS7 refuses a PGDATABASE longer than 33 characters, calling nothing', () => {
+    const c = newCase();
+    putRun(c, 'hourly', RUN);
+    const r = run(c, 'restore.sh', [RUN], {
+      BACKUP_RESTORE_CONFIRM: RUN,
+      PGDATABASE: 'a'.repeat(34),
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe(
+      'restore failed: config (PGDATABASE is not [a-z0-9_] of at most 33 characters)\n',
+    );
+    expect(r.calls).toEqual([]);
+  });
+
+  it('RS8 names the first stage of the pipeline that failed, and drops the restored copy', () => {
+    const c = newCase();
+    putRun(c, 'hourly', RUN);
+    const r = run(c, 'restore.sh', [RUN], {
+      BACKUP_RESTORE_CONFIRM: RUN,
+      SHIM_FAIL: 'rclone-cat age-decrypt pg_restore',
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('restore failed: restore (cat, exit 3)\n');
+    expect(r.calls.at(-1)).toMatch(/drop database if exists "binarius_restored" with \(force\) $/);
+  });
+
+  it('RS9 a failed rename keeps binarius_restored for another try', () => {
+    const c = newCase();
+    putRun(c, 'hourly', RUN);
+    const r = run(c, 'restore.sh', [RUN], {
+      BACKUP_RESTORE_CONFIRM: RUN,
+      SHIM_FAIL: 'psql-rename',
+    });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe(
+      'restore failed: rename (exit 3; binarius is unchanged, binarius_restored is kept for another try)\n',
+    );
+    expect(r.calls.at(-1)).toMatch(/alter database/);
+  });
+});
+
+describe('fetch-env.sh', () => {
+  const RUN = 'binarius-20261009T030000Z';
+  const ENV = 'TOKEN_ENCRYPTION_KEY=abc\n';
+
+  it.each([
+    ['F1', 'hourly'],
+    ['F2', 'daily'],
+  ])('%s prints the .env of a run kept in %s/, and nothing else', (_id, tier) => {
+    const c = newCase();
+    putRun(c, tier, RUN);
+    const r = run(c, 'fetch-env.sh', [RUN]);
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe(ENV);
+    expect(r.stderr).toBe('');
+    expect(matching(r.calls, /^rclone cat /)).toEqual([
+      `rclone cat ${REMOTE}/${tier}/${RUN}/env.age`,
+    ]);
+  });
+
+  it('F3 a run in neither tier is not-found on stderr, with nothing on stdout', () => {
+    const c = newCase();
+    putRun(c, 'hourly', 'binarius-20261009T020000Z');
+    const r = run(c, 'fetch-env.sh', [RUN]);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toBe(
+      `fetch-env failed: not-found (${RUN} has no env.age under hourly/ or daily/)\n`,
+    );
+    expect(matching(r.calls, /^rclone cat /)).toEqual([]);
+  });
+
+  it('F4 answers a name that is not a run with the usage and 64, calling nothing', () => {
+    const c = newCase();
+    const r = run(c, 'fetch-env.sh', ['latest']);
+    expect(r.status).toBe(64);
+    expect(r.stderr).toBe('usage: fetch-env binarius-<YYYYmmddTHHMMSSZ>\n');
+    expect(r.calls).toEqual([]);
   });
 });
 
@@ -655,6 +837,33 @@ describe('entrypoint.sh and lib.sh', () => {
 
   it('E3 takes the UTC date of a run from its name', () => {
     expect(lib('date_key binarius-20261009T030000Z')).toBe('20261009');
+  });
+
+  it.each([
+    ['0 0 0', ''],
+    ['1 1 1', 'cat, exit 1'],
+    ['141 1 1', 'decrypt, exit 1'],
+    ['141 141 1', 'restore, exit 1'],
+    ['141 0 0', 'cat, exit 141'],
+    ['0 0 -', 'restore, exit 255'],
+  ])('E4 failed_stage of cat decrypt restore at %s: %j', (codes, stage) => {
+    const c = newCase();
+    const stages = ['cat', 'decrypt', 'restore'];
+    codes.split(' ').forEach((code, i) => {
+      if (code !== '-') writeFileSync(path.join(c.dir, `${stages[i]}.rc`), `${code}\n`);
+    });
+    expect(lib(`failed_stage "${c.dir}" ${stages.join(' ')}`)).toBe(stage);
+  });
+
+  it.each([
+    ['binarius', '0'],
+    ['a'.repeat(33), '0'],
+    ['a'.repeat(34), '1'],
+    ['', '1'],
+    ['Binarius', '1'],
+    ['bi-narius', '1'],
+  ])('E5 is_database_name %j: %s', (name, code) => {
+    expect(lib(`is_database_name '${name}'; echo $?`)).toBe(code);
   });
 });
 

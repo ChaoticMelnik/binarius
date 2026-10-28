@@ -35,23 +35,27 @@ to the owner's public key:
 ```text
 <BACKUP_REMOTE_PATH>/hourly/binarius-<YYYYmmddTHHMMSSZ>/binarius.dump.age   pg_dump -Fc | age
 <BACKUP_REMOTE_PATH>/hourly/binarius-<YYYYmmddTHHMMSSZ>/env.age             the server .env | age
-<BACKUP_REMOTE_PATH>/daily/binarius-<YYYYmmddTHHMMSSZ>/…                     the day's first run, copied
+<BACKUP_REMOTE_PATH>/daily/binarius-<YYYYmmddTHHMMSSZ>/…                     the day's copy, restored like an hourly run
 ```
 
-- **Streamed.** `pg_dump | age | rclone rcat`: nothing is written to the server's disk (about
-  1.5 GB free on the pilot) except a byte counter.
+- **Streamed.** `pg_dump | age | rclone rcat`: the server's disk (about 1.5 GB free on the pilot)
+  holds only a byte counter, a fifo and the stages' exit codes, in a temporary directory.
 - **Verified.** The bytes age wrote are counted on their way to rclone, and the stored object's
   size (`rclone lsl`) must equal them; a dump object must also be at least 512 bytes (an empty
   age stream is 200). A run that failed before both objects were stored is removed
   (`rclone purge`), so a truncated dump never becomes the latest run.
 - **The day's copy.** The first run of a UTC day is copied into `daily/` (server-side on B2),
-  whatever minute the container started at; later runs of that day find it and skip the copy.
+  whatever minute the container started at. A day counts as copied when some
+  `daily/binarius-<that date>…/` holds `binarius.dump.age`, and `env.age` too when
+  `BACKUP_ENV_FILE` is set; later runs of that day then skip the copy. A copy that fails is removed
+  (`rclone purge`) and the run fails as `daily`, so the next run of the day copies it again.
 - **Retention.** After a stored run, objects older than 7 days are deleted from `hourly/` and
   older than 30 days from `daily/` — about 168 hourly runs and 30 daily ones. A failed run prunes
   nothing.
 - **Deleted is hidden, on B2.** rclone's delete hides a B2 file version; the bucket's lifecycle
-  rule keeps hidden versions 14 days (Setting it up, step 1). A leaked key of the server can hide
-  the backups, but not erase them at once.
+  rule keeps hidden versions 14 days (Setting it up, step 1). That protects against an ordinary
+  prune, not against a leaked key: the server's key has `deleteFiles`, and rclone's `purge` on B2
+  deletes every version at once. A key with delete rights on the server is an accepted risk.
 
 ## The service
 
@@ -65,18 +69,26 @@ prod pair its log rotates like every other service's ([deploy.md](deploy.md)).
 - **The loop** (the default command): a run at once — so every start of the container, every
   deploy that recreates it included, is a backup — then one at the top of every hour; on Sundays
   in the 03:00 UTC run, the restore drill `restore-check` after the backup. A failed run does not
-  end the loop. A SIGTERM ends the container at once; a run cut off that way leaves no finished
-  object, and the next hour covers it.
+  end the loop. A SIGTERM ends the container at once. A run cut off during the dump's upload
+  leaves no finished dump, and the next hour covers it; one cut off later can leave a dump without
+  `env.age` or part of the day's copy, which the next run of the day copies again.
 - **The healthcheck**: a successful run touches `/run/backup/ok`; the container is `healthy`
   while that file is younger than 130 minutes — two hourly runs and a margin — and `unhealthy`
-  once backups stop. `start_period: 300s` covers the run every start makes, so a deploy's
-  `up --wait` fails when that first run fails.
+  once backups stop. `start_period: 300s` covers the run every start makes. A deploy's
+  `up --wait` fails on `backup` in two cases:
+  - after a recreate, it waits for the first run and fails about 390 s later (`start_period` 300
+    and 3 × 30 s) when that run fails;
+  - once backups have been failing for more than 130 minutes, the container is `unhealthy` and
+    the `up --wait` of **every** deploy fails, recreated or not.
+
+  Either way the apps are up: read `docker compose logs backup`.
 - **The ping**: with `BACKUP_PING_URL` set, a stored run pings it, a failed run or a failed
   drill pings `<url>/fail`. The drill never pings success: it shares the check with the hourly
   runs, and an "up" from it would hide a backup that failed an hour earlier. A failed ping is a
   warning, not a failed run.
 - **Secrets are never printed**: no script echoes a key, the identity or the `.env`, and none
-  runs under `set -x`. The ping URL is not printed either. The one exception is `fetch-env`,
+  runs under `set -x`. The ping URL is not printed either, and it reaches `curl` on stdin, not on
+  the command line the host's `ps` shows. The one exception is `fetch-env`,
   whose purpose is to print the `.env`.
 
 The commands, as `docker compose exec -T backup <command>` on the running container or
@@ -92,8 +104,10 @@ The commands, as `docker compose exec -T backup <command>` on the running contai
 | | | `restore-check failed: <config\|postgres\|no-backups\|stale\|env\|create\|restore\|schema\|migrations\|rows> (<detail>)` | 1 |
 | `restore <run>` | replaces the live database with the run (Restoring) | `restore ok: <run> now serves as <db>; the previous database is <db>_before_restore_<time> (drop it by hand when done)` | 0 |
 | | | `restore refused: <confirm …\|N connections to <db> …\|usage …>` | 1 |
-| | | `restore failed: <config\|postgres\|create\|restore\|rename> (<detail>)` | 1 |
-| `fetch-env <run>` | prints the run's `.env` | the file | 0, 1, 64 |
+| | | `restore failed: <config\|postgres\|find\|not-found\|create\|restore\|rename> (<detail>)` | 1 |
+| `fetch-env <run>` | prints the run's `.env` | the file, on stdout | 0 |
+| | | on stderr: `fetch-env failed: <config\|find\|not-found\|fetch> (<detail>)` | 1 |
+| | | on stderr: the usage | 64 |
 | `age-keygen` | a new age key pair | the key file | 0 |
 
 An unknown command prints the usage and exits 64. A failure's detail names the stage and its exit
@@ -221,8 +235,10 @@ The owner's steps; the agent does not run them.
 - it never applies the run's `.env`: `fetch-env <run>` prints it, and the live `.env` stays the
   source while it is intact (an older run holds the tokens and keys of its time).
 
-The runs are listed in the bucket, or with
-`docker compose exec -T backup sh -c 'rclone lsf --dirs-only "backup:$BACKUP_REMOTE_PATH/hourly"'`.
+`restore` and `fetch-env` take the run from `hourly/`, and once it is older than 7 days from
+`daily/` (30 days, one run a day). The runs with a dump are listed in the bucket, or with
+`docker compose exec -T backup sh -c 'rclone lsf -R --files-only --max-depth 3 "backup:$BACKUP_REMOTE_PATH" | grep binarius.dump.age'`,
+which prints `hourly/<run>/binarius.dump.age` and `daily/<run>/binarius.dump.age` lines.
 
 ### On the pilot
 
@@ -258,13 +274,14 @@ replace:
 
 ```bash
 docker compose up -d --wait postgres
-docker compose --progress quiet run --rm backup fetch-env <run> > restored.env
+(umask 077 && docker compose --progress quiet run --rm -T backup fetch-env <run> > restored.env)
 docker compose --progress quiet run --rm -e BACKUP_RESTORE_CONFIRM=<run> backup restore <run>
 docker compose --progress quiet run --rm backup restore-check
 ```
 
-`restored.env` holds the old server's secrets: take what the new server needs into its `.env`
-and delete the file. `restore-check` after the restore compares the latest run with what was
+`restored.env` holds the old server's secrets: `umask 077` makes it readable by its owner alone,
+and `-T` keeps a terminal's CRLF out of it. Take what the new server needs into its `.env` and
+delete the file. `restore-check` after the restore compares the latest run with what was
 just restored, which is the drill; it passes only when `<run>` is the latest run and younger
 than 130 minutes (an older run: compare the `rows` of a `restore-check` on the server). The new
 server then goes on as in Setting it up, step 4.
@@ -278,17 +295,24 @@ server then goes on as in Setting it up, step 4.
   over the first with the same content; nothing serializes them, and the manual command is only
   for the check and for debugging. The same holds for a manual `restore-check` beside the weekly
   one: they share the scratch databases.
-- **A deploy during a run** ends the container at once; the cut-off upload never becomes a file
-  (an unfinished B2 large file, visible in the console), and the next hour covers the gap; the
-  healthchecks.io grace of 30 minutes keeps it quiet.
+- **A deploy during a run** ends the container at once. A run cut off during the dump's upload
+  leaves no finished dump (an unfinished B2 large file, visible in the console), the next hour
+  covers the gap, and the healthchecks.io grace of 30 minutes keeps it quiet. One cut off later
+  can leave a dump without `env.age` or part of the day's copy, which the next run of the day
+  copies again; `fetch-env` of a run without `env.age` answers `not-found`, and a neighbouring
+  run's `.env` serves instead.
+- **A cut-off day copy** is copied again by the next run of that day. When it was the only run of
+  the day, that day's copy stays incomplete, and its hourly run lives 7 days.
 - **An hourly dump during a deploy's migration.** `pg_dump` holds `ACCESS SHARE` on every table
   for the whole dump: an `ALTER TABLE` waits for its end, and the application's queries on that
   table wait behind the `ALTER`. The window is the dump's duration, the `T s` of `backup ok`;
   above 60 s, deploys go outside `:00`–`:0T`.
 - **A deploy's `up --wait` waits for the first run** whenever `backup` is recreated: a change of
   `tooling/backup`, or the build-cache prune (`--max-used-space 300MB`) having dropped the
-  `apk add` layer. A B2 failure at that moment fails the deploy's `up --wait` with the apps
-  already running: read `docker compose ps` and `docker compose logs backup`, leave the apps alone.
+  `apk add` layer. A B2 failure at that moment fails the deploy's `up --wait` about 390 s later
+  with the apps already running. Once backups have been failing for more than 130 minutes, every
+  deploy's `up --wait` fails the same way, even without a recreate. Either way: read
+  `docker compose ps` and `docker compose logs backup`, leave the apps alone.
 - **A drill right after a deploy that migrated** compares a run from before the migration with
   the migrated live database and fails as `schema` or `migrations`; the next hourly run fixes it.
   The weekly drill runs straight after its own hourly run.
@@ -307,14 +331,16 @@ server then goes on as in Setting it up, step 4.
 - `tooling/backup/backup.test.ts` (the unit project of `pnpm check`) runs every script under `sh`
   against stand-ins for `pg_dump`, `pg_restore`, `psql`, `pg_isready`, `age`, `rclone` (a
   directory tree as the remote) and `curl`: the order of the calls, every failure and its line,
-  the purge of a partial run, the pings, the drill's two scratch databases, `restore`'s refusals
-  and its one transaction, and the pins of the service in `compose.yaml`, `.env.example` and the
+  the purge of a partial run and of a failed day's copy, the pings, the drill's two scratch
+  databases, `restore`'s refusals and its one transaction, `restore` and `fetch-env` of a run kept
+  only in `daily/`, and the pins of the service in `compose.yaml`, `.env.example` and the
   Dockerfile. On CI the scripts run under dash, on macOS under bash as `sh`, in the image under
   busybox ash.
 - The CI compose job runs the service on the real Postgres 18, `pg_dump`, `age` and `rclone`
   (remote `local`): the run at start, `backup-now`, `restore-check` of the first-run data
-  (`rows staff 1`), and `restore` into the live database, with the backend, the worker and `web`
-  started again on it. The weekly schedule of the loop is not tested: its evidence is the
+  (`rows staff 1`), `restore` into the live database, with the backend, the worker and `web`
+  started again on it, and `fetch-env` of the start's run once its `hourly/` copy is removed, so
+  only `daily/` serves it. The weekly schedule of the loop is not tested: its evidence is the
   pilot's log, one `restore-check ok` a week.
 - `tooling/compose-prod.test.ts` P3 holds the service's log rotation in `compose.prod.yaml`.
 

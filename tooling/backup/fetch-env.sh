@@ -17,14 +17,23 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+rc=0
+dir="$(find_run "$run" env.age)" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  printf 'fetch-env failed: find (exit %s)\n' "$rc" >&2
+  exit 1
+fi
+if [ -z "$dir" ]; then
+  printf 'fetch-env failed: not-found (%s has no env.age under hourly/ or daily/)\n' "$run" >&2
+  exit 1
+fi
+
 s="$(mktemp -d)"
 trap 'rm -rf "$s"' EXIT
 write_identity "$s/identity"
-fetch_decrypted "$(remote)/hourly/$run/env.age" "$s" "$s/identity"
-for stage in decrypt cat; do
-  rc="$(stage_rc "$s/$stage.rc")"
-  if [ "$rc" -ne 0 ]; then
-    printf 'fetch-env failed: %s (exit %s)\n' "$stage" "$rc" >&2
-    exit 1
-  fi
-done
+fetch_decrypted "$dir/env.age" "$s" "$s/identity"
+stage="$(failed_stage "$s" cat decrypt)"
+if [ -n "$stage" ]; then
+  printf 'fetch-env failed: fetch (%s)\n' "$stage" >&2
+  exit 1
+fi

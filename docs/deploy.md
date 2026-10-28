@@ -160,6 +160,10 @@ its journal» (backend and worker, `docker compose run` of their own prod comman
 reports «started» the moment the container runs. The oracles are `docker compose ps`,
 `docker inspect`, the health and page probes, and the worker's ready line
 ([worker-deploy.md](worker-deploy.md)).
+`up --wait` also fails on `backup` (profile `backup`, [backups.md](backups.md)) when it is not
+`healthy`: when the first run after a recreate fails, or when backups have been failing for more
+than 130 minutes, even with the container running. The apps are up then; read
+`docker compose logs backup`.
 
 On a host reboot every service comes back by its restart policy, `postgres` and `redis` included.
 `depends_on` is not honoured there: a backend or worker that starts before Postgres fails its
