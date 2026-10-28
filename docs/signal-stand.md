@@ -239,8 +239,8 @@ production; only the indicators read the longer `SIGNAL_FETCH_LIMIT` window (V12
 - The win rate's 95 % interval is Wilson's (`z = 1.959964`). Its reference values are
   `8/30 → [14.2, 44.4]`, `0/10 → [0, 27.8]` and `180/300 → [54.4, 65.4]`
   (`packages/shared/src/wilson.test.ts` W1). Wilson, the verdict and the markdown table live in
-  `packages/shared/src/wilson.ts`, one source with the H1 shadow report
-  ([h1.md → The report](h1.md#the-report)).
+  `packages/shared/src/wilson.ts`, one source with `trade-log report`
+  ([trade-log.md → The report](trade-log.md#the-report)).
 - Break-even at a payout is `100 × 100 / (100 + payout)`, so 80 % gives 55.6 %.
 - **Split.** The range runs from the first to the last cached `1s` row of the run's pairs. It
   splits at `since + 5/7 × (until − since)`. A trade is in-sample when its decision falls before
@@ -419,7 +419,7 @@ STAND_DIR=~/binarius-stand/stand-30d NODE_OPTIONS=--max-old-space-size=4096 \
 
 `H1_R1_PARAMS = { moveSec: 3, sdWindowSec: 300, sdStepSec: 5, threshold: 1 }`: 311.2 trades/pair-h
 at 58.77 % (0.27 pp from the analysis). The whole table (a) is on #669's PR. A shadow row of the
-trade log (`version: h1`) is read by `parseJournalLine` as `{ kind: 'h1', entry }` and decided
+trade log (`version: h1`, written until #830) is read by `parseJournalLine` as `{ kind: 'h1', entry }` and decided
 again by `replayH1Entry` ([h1.md](h1.md#replay-and-reading)); `calibrate` counts such a line as
 `h1_shadow`, apart from lines of an unknown version.
 
@@ -448,7 +448,7 @@ journal entry. A bare entry is accepted too. The entry is validated by
 `SignalJournalEntry`/`…V1`, #666), with the decision checked by
 `signalDecisionSchema`/`signalDecisionV1Schema`. A line failing that is `malformed_line`, and a
 `version` that is neither v1 nor v2 is `unsupported_version`. A shadow row of the H1 shadow
-(`version: h1`, #669) is parsed by `h1ShadowEntrySchema` into `{ kind: 'h1', entry }` (a broken one
+(`version: h1`, #669, written until #830) is parsed by `h1ShadowEntrySchema` into `{ kind: 'h1', entry }` (a broken one
 is `malformed_line`); `calibrate` compares candle decisions with session trades and counts it as
 `h1_shadow`. The H1 driver's stored shapes, `h1-repeat` (#775, the repeat step) and `h1-start`
 (#829, a start on the direction the bot showed), are not replayed: each is `unsupported_version`
@@ -654,6 +654,10 @@ out of pooling.
   Signal v3 task is created.
 - #667: the H1 detector and `stand h1`. #669: the R1 grid and point, and the live 1s series from
   ticks with the shadow's rows ([h1.md](h1.md)); #681 reports the shadow; #670 runs H1 sessions on
-  a marked account.
+  a marked account; the shadow and the mark were removed in #830.
+- Since #828 no v2 session trade is written (every session is H1's; the candle path of the
+  orchestrator trades only the v3 rows active at #830's deploy, gone with #835), so `calibrate`
+  compares the candle journal with session trades only before that; the shadow's `h1_shadow` lines
+  end with #830 (7-day retention).
 - #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the
   `1m` trend as a confirmation, not as the analysis interval.

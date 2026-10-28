@@ -387,7 +387,7 @@ per process and direction until an answer brings its `file_id`, then sent by it.
 direction the bot showed for the pair (#829, `start_signal_action` of a start with `shownSignal`),
 else the H1 signal of the second the start read (every start since #828); so the first picture is
 the arrow the user chose on, and the first trade goes the same way; null on a session without a trade
-yet that was started before #568, by the CLI `session-start`, which checks no signal, or without an
+yet that was started before #568, by the CLI `h1 session start`, which reads no signal, or without an
 H1 signal at the start (#796, [h1.md → The start](h1.md#the-start-796))
 ([trading-session.md](trading-session.md#the-table)); its message stays a text until the first
 trade's edit turns it into the picture. The line «📡 Сигнал: …» is the fifth line of the head (under
@@ -2086,7 +2086,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     four then begin «📡 Ждём сигнал…»). A record has no age cap (decision 5): a pair drawn minutes
     ago and started through the `n` door is traded in the drawn direction. Falsifiable: after a
     quiet hour, `start_signal_action` NULL on more than 15 % of the sessions started from the list
-    or the card ([h1.md → Owner's steps](h1.md#owners-steps-after-the-merge), step 8).
+    or the card ([h1.md → Owner's steps](h1.md#owners-steps-after-the-merge), step 2).
 
 ## Running it locally
 
