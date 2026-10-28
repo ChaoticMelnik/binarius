@@ -249,18 +249,6 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     reason: `${NEGATIVE} (no tick may follow stop())`,
   },
   {
-    file: 'apps/trading-worker/src/trading-session/orchestrator.db.test.ts',
-    form: 'F4',
-    match: 'await new Promise((resolve) => setTimeout(resolve, 1_500));',
-    reason: `${NEGATIVE} (no candle wake may follow stop(), CT3)`,
-  },
-  {
-    file: 'apps/trading-worker/src/trading-session/orchestrator.db.test.ts',
-    form: 'F4',
-    match: 'await new Promise((resolve) => setTimeout(resolve, 600));',
-    reason: `${NEGATIVE} (a hold that is not a candle hold arms no timer, CT4)`,
-  },
-  {
     file: 'apps/trading-worker/src/worker.handoff.db.test.ts',
     form: 'F3',
     match: 'expect(Date.now() - settledAt).toBeLessThan(',

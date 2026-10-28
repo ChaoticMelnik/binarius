@@ -273,7 +273,7 @@ Implementer picks it up only once this comment exists.
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
 | `apps/backend/src/cli` | core 26; trading 23, 28, 33, 50; signal-h1 42, 44, 45, 48; bot-ui 30; payments 39, 40 |
 | `apps/backend/src/deposit` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
-| `apps/backend/src/h1` | signal-h1 42, 44, 48, 55 |
+| `apps/backend/src/h1` | trading 23; signal-h1 42, 44, 48, 55 |
 | `apps/backend/src/mailing` | bot-ui 19 |
 | `apps/backend/src/market-data` | signal-h1 41, 44, 45, 48 |
 | `apps/backend/src/outbox` | trading 6 |
@@ -292,7 +292,7 @@ Implementer picks it up only once this comment exists.
 | `apps/trading-worker/src/cli` | trading 27 |
 | `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53, 54; signal-h1 43 |
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48; auth 12 |
-| `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 33, 36; signal-h1 42, 43, 48 |
+| `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28; signal-h1 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
 | `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47; payments 38 |
 | `apps/web/src/admin` | core 52; bot-ui 30; payments 38 |
