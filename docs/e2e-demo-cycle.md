@@ -6,7 +6,7 @@ five cycles → its result. The backend, the trading worker and the bot run as t
 compositions in one vitest process, over one Postgres, one Redis and the mock broker
 ([mock-broker.md](mock-broker.md)). Only two things are stand-ins: Telegram (a grammY transformer
 on the bot's and the backend's `Api`) and the broker (the mock). The bot reaches the backend over
-HTTP with its real client, and the worker reaches it through its real token, signal and pairs
+HTTP with its real client, and the worker reaches it through its real token and pairs
 sources. The worker reaches the broker over the socket and REST.
 
 It is an integration test (`*.db.test.ts`), so `pnpm check` runs it in CI against Postgres and
@@ -55,10 +55,10 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 
 `createWorker` itself, with an `Env`. `brokerWsUrl` is the mock, so orders go over the socket, as
 on the pilot since 2026-10-08. `demoOnly` is `false`. The circuit breaker cannot trip within the
-run. The harness passes no `testing.tokens`, `signals` or `pairs`, unlike
+run. The harness passes no `testing.tokens` or `pairs`, unlike
 `worker.handoff.db.test.ts`: the worker asks the backend. `testing.tuning` is `TEST_WORKER_TUNING`
 from `apps/trading-worker/src/testing.ts`, shared with the handoff test (a 100 ms orchestrator and
-session tick, no candle slack, production's lease lengths), and `testing.queuePrefix` is the file's
+session tick, production's lease lengths), and `testing.queuePrefix` is the file's
 prefix. The socket oracle `watchSockets` comes from the same module.
 
 ### Bot (`harness/bot.ts`, from `apps/bot/src/index.ts`)

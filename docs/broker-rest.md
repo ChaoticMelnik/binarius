@@ -6,7 +6,7 @@ only a call abandoned past its deadline, to an optional `logger` (see Timeouts).
 and what to log. It moved out of `apps/trading-worker` in #138 so the backend and the worker
 share one client. Its first caller is the backend's pairs catalog (docs/pairs-catalog.md). The
 signal feed (`packages/signal`, docs/signal.md → Feed and journal) calls `getChart` on a client its
-caller builds: the backend's `POST /trading/signal` (#258) and the worker's session orchestrator (#287, through the backend's route). The worker's
+caller builds: the backend's `POST /trading/signal` (#258; the worker's session orchestrator called it through the route from #287 to #835). The worker's
 base URL is `BROKER_API_BASE_URL` (its `env.ts`, compose's `x-broker-environment`, #90); the REST
 reconciler and the settlement catch-up call `listTrades`; the trade command executor
 (docs/trade-executor.md) calls `openTrade`.

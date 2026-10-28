@@ -21,7 +21,7 @@ message: the picture of its signal's direction (#568, the analysis card's «BULL
 «BEARISH SETUP») with the session's mode, pair, stake, expiry and «📡 Сигнал: …» as its caption,
 without buttons (#536). The message follows the session through `GET /trading/sessions/:id` and is
 edited when the session stops, to its end line, and when a trade of the session goes the other
-way, to that direction's picture (#568). The trades themselves are opened by the worker's orchestrator (#287): the bot only
+way, to that direction's picture (#568). The trades themselves are opened by the backend's H1 driver (#707; every session since #828): the bot only
 starts, reads and stops the session. Every settled trade then shows in a message without sound — a
 martingale cycle in one message, each step added to it by an edit (#551), sent by the backend
 ([Trade messages and the summary](#trade-messages-and-the-summary-464)). While the session waits
@@ -1632,11 +1632,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 17. **Two or more sessions stopped by `/stop`** (#122) get one count line, with no status, no
     tracking and no summary card; each session's own message, if tracked, still follows it.
     Reachable from the bot through one window (#455 m1): the account of a running session is
-    revoked (a failed refresh, Rule 12), and no sweep stops its session; the orchestrator does at
-    its next attempt, when the intent's creation is refused as `account_revoked` → stop
-    `account_unavailable` ([trading-session.md](trading-session.md#the-orchestrator), the refusal
-    table), i.e. after the session's current hold-back (the next candle, the retry after a failed
-    attempt, or the open trade's end). If in that window the user signs in on another broker
+    revoked (a failed refresh, Rule 12), and no sweep stops its session; the driver does at
+    its next intent, refused `account_revoked` → stop `account_unavailable` ([h1.md](h1.md),
+    `SESSION_INTENT_REFUSALS`), i.e. at the next H1 signal of the pair. If in that window the user signs in on another broker
     account (the only active one now) and starts a session, `checkTradingSessionStart` →
     `resolveTradingAccount` finds one active account with no active session, and the start
     passes: two active sessions, both from the bot. Falsifiable: «⏹ Остановлено сессий: 2» in the
@@ -1707,8 +1705,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     pair whose signal may be gone by the press; the press refuses with the reason — the amount
     screen's node `demo:l` reads the signal at the press in either mode, the start route's step 4c
     in real — and a session never starts without a signal: the bot waits for it instead (#664).
-34. **A signal gone right after the start** (#509): the start saw a signal, the orchestrator's
-    first attempt a few seconds later sees «сигнала нет»; the session waits up to the no-signal
+34. **A signal gone right after the start** (#509): the start saw a signal, the driver's
+    first seconds decide `no_signal`; the session waits up to the no-signal
     limit and stops with no trade. That is the limit, by the owner's decision.
 35. **Repeated blocks** (#551): a new message whose outcome was unknown (the next step sends the
     cycle anew), and a second sender in a deploy's window (its record refused, its message sent),
@@ -2035,9 +2033,9 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     are outside the sender's gap — stated, not measured. Falsifiable: a 429 on `deleteMessage`, or a
     chat's 429 while the sender sends it one step a second, in the logs.
 100. **The waiting message one candle late when the decision's row is not written** (#722): the
-    orchestrator's `no_signal` row is best effort (`warn`, the hold stays); without it the session
-    does not wait by the log, so no waiting message comes until the next candle's row. Falsifiable:
-    the orchestrator's `trading session decision not recorded` warn beside a session without its waiting
+    driver's `no_signal` row is best effort (`warn`, the hold stays); without it the session
+    does not wait by the log, so no waiting message comes until the next decision's row. Falsifiable:
+    the driver's `h1 driver decision not recorded` warn beside a session without its waiting
     message.
 101. **A waiting message for one tick after the intent** (#722, decision В4): an intent's row
     between the claim and the record leaves the message recorded; the next tick deletes it as stale.
@@ -2046,10 +2044,7 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     within 3 s of its send in the logs, more than rarely.
 102. **No «⏹» for a moment** (#722): between the result's edit (which takes the block's «⏹» off)
     and the next open block or waiting message (≈0,5–5 s), in the first seconds after the start,
-    and after a `rejected` trade until the next decision; `/stop` always works. An intent created
-    without its decision's row (`decision: null`: the backend answered no record,
-    [trade-log.md](trade-log.md)) after a `no_signal` leaves the waiting message under the open
-    block — two «⏹» until the next decision (stated: only an old backend answers no record).
+    and after a `rejected` trade until the next decision; `/stop` always works.
 103. **Three subqueries of the latest decision per listed session** (#722): due and stale in the
     list's filter, `waitingForSignal` in its select list — each a backward scan of
     `signal_decisions_session_idx` of two rows (probed, not measured on the pilot's volume).
@@ -2094,7 +2089,7 @@ The bot's presses are covered by `trading-session.test.ts`, `session-tracker.tes
 `demo.test.ts` and `timing.test.ts` against the real handlers; they need no services. The summary
 card is drawn and rendered by `session-card.test.ts` on the host's resvg build. The routes
 the bot calls are run end to end by [trading-session.md → Running it locally](trading-session.md#running-it-locally).
-That a started session trades and its counters move needs #287's orchestrator in the worker.
+That a started session trades and its counters move needs the backend's H1 driver and the worker.
 The steps in Telegram — «🎮 Демо-торговля», «🧭 Вручную», a pair, «📊 Анализ»,
 «🚀 Сессия из 5 циклов» first, with or without a signal, then an amount of the amount screen
 (#476; or a pair of «Сигналы сейчас» and an amount), the session message, the waiting message under
@@ -2105,7 +2100,7 @@ signal, «➕ Ещё», the stake button, and the row «🚀 Сессия из 5
 
 ## Boundaries
 
-- **#287** — the orchestrator that opens the session's trades ([trading-session.md](trading-session.md)).
+- **#287** — the orchestrator (holds and stops a session; its trades are the driver's since #707, the candle path removed in #835, [trading-session.md](trading-session.md)).
 - **#283** — the start, read and stop routes.
 - **#29** — notifications; the session's trade messages and summary are #464's.
 - **#450** — the martingale strategy by default ([stake.md](stake.md#defaults)): the session's

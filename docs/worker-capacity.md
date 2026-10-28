@@ -12,7 +12,7 @@ over that set names it for. The lease of #93 ([broker-session.md](broker-session
 stays the guarantee that no account has two sockets; the registry decides which process tries.
 
 What this part does not partition: the trading session orchestrator, the settlement catch-up and
-the reconciliation pass run in every process (each safe under several: the step key, idempotent
+the reconciliation pass run in every process (each safe under several: the stop's CAS, idempotent
 settles, the claim lease — [worker-deploy.md](worker-deploy.md) → Why two workers at once are safe)
 and are partitioned in #815; intent jobs are routed to the account's owner since #347
 ([trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner). **Until #815, `TRADING_WORKER_REPLICAS` stays 1**: with more, every

@@ -108,7 +108,7 @@ guard that holds it and where that guard is tested:
 | Intent routing (#347) | a job of an account the other process owns goes to its queue before the take, once; the forwarder's delayed insurance takes the intent if that process dies with it | nothing is sent before the take, and every copy meets the same CAS ([trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner) |
 | A job redelivered across processes | never sends: an intent still `submitting` and younger than `STALE_SUBMITTING_MS` is left alone, an older one goes `unknown` | `handleSubmitting` → `markIntentUnknown` with the age predicate |
 | Broker sockets (`BROKER_WS_URL` set) | the new process opens a socket only for an account whose lease is free; the old one releases its leases after closing its sockets | the lease (#93, Rule 32): `acquireSessionLease`; `stop()` deletes our rows after every client stopped |
-| Orchestrator (demo sessions) | both may attempt the same session; the second is a replay or a conflict, never a second trade | the step key `session:<id>:<step>` (unique `(user_id, client_request_id)`) and one live intent per account (`trade_intents_active_account_idx`) |
+| Orchestrator (demo sessions) | both may attempt the same session; an attempt holds or stops it, the trades are the driver's (#835) | the stop's CAS `status = active`; the driver is one backend process |
 | Reconciliation pass | each intent is attempted by one process at a time | the claim lease of `claimReconciling` (Rule 24) |
 | Settlement catch-up | both may read the same account's trades; the settle writes are idempotent | none for the reads: their cost is accepted risk 1 |
 | Stale-submitting sweeper | both may sweep; one move per intent | `markIntentUnknown`'s CAS with the age predicate |
@@ -162,7 +162,7 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 1 without phase 2. The intent stays `submitting`. The new process resolves it: after
 `STALE_SUBMITTING_MS` (60 s) its sweeper marks it `unknown`, the reconciliation job moves it to
 `reconciling` and the pass finds the one trade at the broker or reports none — never a second send
-(Rule 15; a session's step: H9). The script prints the warning and still exits 0: the new worker runs.
+(Rule 15; a session's step: H9′). The script prints the warning and still exits 0: the new worker runs.
 
 ## Other edges
 
@@ -178,7 +178,7 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
   check, before the ready line, so the script rolls back (exit 1) and the old worker keeps running.
 - **The backend is deployed separately.** The worker may run against the previous backend (or the
   reverse) across one deploy, so the internal routes (`/trading/accounts/:id/access-token`, the
-  signal and pairs routes) stay compatible across one deploy; a breaking change to one of them is a
+  pairs route) stay compatible across one deploy; a breaking change to one of them is a
   two-step deploy.
 - **An interrupt during step 4.** The daemon finishes the stop, `docker rm` never runs, and
   `restart: unless-stopped` does not restart a hand-stopped container: one runs, one is stopped.
@@ -218,12 +218,10 @@ shortened (`WorkerTestSeams`) and the backend's routes stubbed:
   shutdown B holds one for every account in work.
 - **H3**: A's phase 1 overruns while a REST submit is held (`dirty`), A's pool ends as the exit
   would; B's sweeper marks the intent `unknown`, reconciliation links the one trade.
-- **H4**: a demo session of three trades runs across the handoff: three steps
-  `session:<id>:1..3`, three trades at the broker, the session `completed`.
 - **H5**: `start()` logs the ready line once, and the script greps that exact text.
-- **H9** (#131): a demo session's old worker dies dirty with step 1's REST submit in flight; the
-  new one resolves it through the sweeper and reconciliation, and the session completes with one
-  trade per step.
+- **H9′** (#131): a session's step (an intent created as the driver would) is in flight when the
+  old worker dies dirty; the new one resolves it through the sweeper and reconciliation, and the
+  orchestrator completes the session after its settlement; one trade.
 - **W1**: a drain past the budget returns `dirty` and phase 2 does not run (Redis and the pool stay
   open). **W2**: a clean drain returns `clean` and closes them.
 
