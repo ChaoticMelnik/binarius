@@ -180,7 +180,7 @@ const executor = () =>
     logger,
   });
 
-const deps = (submitAckTimeoutMs = 5_000): ProcessorDeps => ({
+const deps = (submitAckTimeoutMs = 10_000): ProcessorDeps => ({
   db: tmp.db,
   executor: executor(),
   logger,

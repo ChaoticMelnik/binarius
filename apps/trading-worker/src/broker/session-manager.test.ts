@@ -826,13 +826,12 @@ describe('the identity gate and the writers', () => {
         brokerTradeIds: ['71', '72'],
       }),
     ]);
-    // failedAt is the clock: its seconds and milliseconds can spell any amount (`:11.279Z`)
+    // failedAt is the clock: its seconds and milliseconds can spell any amount (`:11.279Z`); only
+    // the entry's own field is left out, a nested failedAt still counts
     for (const entry of h.deadLetters) {
       expect(entry.failedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
     }
-    const text = JSON.stringify(h.deadLetters, (key, value: unknown) =>
-      key === 'failedAt' ? undefined : value,
-    );
+    const text = JSON.stringify(h.deadLetters.map((entry) => ({ ...entry, failedAt: undefined })));
     for (const amount of ['5.00', '1.50', '1.27']) expect(text).not.toContain(amount);
     // the log line carries the trade ids too: the hour's later dead letters are not written
     expect(h.logs('broker session write failed')).toEqual([
