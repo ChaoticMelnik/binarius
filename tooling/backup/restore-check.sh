@@ -39,7 +39,7 @@ if [ -n "$missing" ]; then
   fail config "$missing"
 fi
 if ! is_database_name "$PGDATABASE"; then
-  fail config 'PGDATABASE is not [a-z0-9_]'
+  fail config "PGDATABASE is not [a-z0-9_] of at most $MAX_DATABASE_NAME characters"
 fi
 
 rc=0
@@ -57,7 +57,9 @@ fi
 rc=0
 runs="$(rclone lsf --dirs-only "$(remote)/hourly")" || rc=$?
 run="$(printf '%s\n' "$runs" | sed -n 's,^\(binarius-[0-9TZ]*\)/$,\1,p' | sort | tail -n 1)"
-if [ -z "$run" ]; then
+if [ -z "$run" ] && [ "$rc" -eq 0 ]; then
+  fail no-backups 'hourly/ holds no run'
+elif [ -z "$run" ]; then
   fail no-backups "exit $rc"
 fi
 dir="$(remote)/hourly/$run"
@@ -96,12 +98,10 @@ fi
 
 fetch_decrypted "$dir/binarius.dump.age" "$s" "$identity" \
   | { rc=0; pg_restore --exit-on-error --no-owner --no-privileges -d "$scratch" || rc=$?; echo "$rc" > "$s/restore.rc"; }
-for stage in restore decrypt cat; do
-  rc="$(stage_rc "$s/$stage.rc")"
-  if [ "$rc" -ne 0 ]; then
-    fail restore "$stage, exit $rc"
-  fi
-done
+stage="$(failed_stage "$s" cat decrypt restore)"
+if [ -n "$stage" ]; then
+  fail restore "$stage"
+fi
 
 # The restored schema is compared with the live one loaded from its own pg_dump -s into a second
 # database without data, not with the live one itself: Postgres prints an expression from its

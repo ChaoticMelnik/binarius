@@ -540,6 +540,24 @@ jobs:
             echo "::error::$kept replaced databases kept, expected 1"
             exit 1
           fi
+      # docs/backups.md -> Restoring: a run older than 7 days is left only in daily/. The start's
+      # run is the day's copy (the backup-now run above found it and copied nothing), so its
+      # hourly/ copy is removed and fetch-env must still serve its .env from daily/. The .env is
+      # counted, never printed.
+      - name: a run kept only in daily/ still serves fetch-env
+        run: |
+          set -u
+          run="$(docker compose logs --no-log-prefix backup | sed -n 's/^backup ok: \(binarius-[0-9TZ]*\),.* daily copied,.*/\1/p' | head -n 1)"
+          if [ -z "$run" ]; then
+            echo '::error::the backup service logged no run that copied the day'
+            exit 1
+          fi
+          docker compose exec -T backup sh -c "rclone purge \"backup:\$BACKUP_REMOTE_PATH/hourly/$run\""
+          keys="$(docker compose exec -T backup fetch-env "$run" | grep -c '^TOKEN_ENCRYPTION_KEY=.' || true)"
+          if [ "$keys" != 1 ]; then
+            echo "::error::fetch-env of $run, kept only in daily/, printed $keys TOKEN_ENCRYPTION_KEY lines, expected 1"
+            exit 1
+          fi
       # The bot is started here on purpose, with the job's fake token: getMe answers 401, grammY
       # does not retry it, lifecycle.ts logs the failure and calls exit(1). Under the prod command
       # that exit is the container's (one node process under tini, no supervisor), and

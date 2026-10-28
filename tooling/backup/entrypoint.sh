@@ -8,8 +8,9 @@ here="$(dirname "$0")"
 # A run immediately (every container start is a backup, so a deploy's `up --wait` checks the
 # whole path), then one at the top of every hour; on Sundays at 03 UTC the restore drill after
 # it. A failed run does not end the loop: its signals are the ping and the healthcheck. Each run
-# is waited for in the background, so a SIGTERM ends the container at once; an upload cut off
-# that way leaves no finished object.
+# is waited for in the background, so a SIGTERM ends the container at once. A run cut off during
+# the dump's upload leaves no finished dump; one cut off later can leave a dump without env.age or
+# part of the day's copy, which the next run of the day copies again.
 loop() {
   trap 'exit 0' INT TERM
   while :; do

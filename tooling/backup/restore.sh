@@ -45,17 +45,26 @@ if [ -n "$missing" ]; then
   fail config "$missing"
 fi
 if ! is_database_name "$PGDATABASE"; then
-  fail config 'PGDATABASE is not [a-z0-9_]'
+  fail config "PGDATABASE is not [a-z0-9_] of at most $MAX_DATABASE_NAME characters"
 fi
 
 rc=0
 connections="$(psql -X -At -d postgres -c \
-  "select count(*) from pg_stat_activity where datname = '$PGDATABASE'")" || rc=$?
+  "select count(*) from pg_stat_activity where datname = '$PGDATABASE' and backend_type = 'client backend'")" || rc=$?
 if [ "$rc" -ne 0 ]; then
   fail postgres "exit $rc"
 fi
 if [ "$connections" -ne 0 ]; then
   refuse "$connections connections to $PGDATABASE - stop bot, backend, trading-worker and web first"
+fi
+
+rc=0
+dir="$(find_run "$run" binarius.dump.age)" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  fail find "exit $rc"
+fi
+if [ -z "$dir" ]; then
+  fail not-found "$run has no binarius.dump.age under hourly/ or daily/"
 fi
 
 target="${PGDATABASE}_restored"
@@ -73,14 +82,12 @@ if [ "$rc" -ne 0 ]; then
   fail create "exit $rc"
 fi
 
-fetch_decrypted "$(remote)/hourly/$run/binarius.dump.age" "$s" "$identity" \
+fetch_decrypted "$dir/binarius.dump.age" "$s" "$identity" \
   | { rc=0; pg_restore --exit-on-error --no-owner --no-privileges -d "$target" || rc=$?; echo "$rc" > "$s/restore.rc"; }
-for stage in restore decrypt cat; do
-  rc="$(stage_rc "$s/$stage.rc")"
-  if [ "$rc" -ne 0 ]; then
-    fail restore "$stage, exit $rc"
-  fi
-done
+stage="$(failed_stage "$s" cat decrypt restore)"
+if [ -n "$stage" ]; then
+  fail restore "$stage"
+fi
 
 # Both renames or neither: a connection that arrived since the count above makes the first one
 # fail, and the live database is then untouched. The restored copy is kept either way.
