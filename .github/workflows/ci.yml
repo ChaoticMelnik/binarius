@@ -129,6 +129,13 @@ jobs:
       # server runs, the bundles under one node process each. An explicit -f overrides it, which
       # is how the dev file alone is still checked.
       COMPOSE_FILE: compose.yaml:compose.prod.yaml
+      # The backup service (#143, docs/backups.md) runs too, on the `local` remote: fixtures of this
+      # job, not configuration. /tmp/ci-backups lives inside the container, so every command on it
+      # below is an `exec`. The age key pair is made by the step before the start.
+      COMPOSE_PROFILES: backup
+      RCLONE_CONFIG_BACKUP_TYPE: local
+      BACKUP_REMOTE_PATH: /tmp/ci-backups
+      BACKUP_ENV_FILE: /tmp/ci-backup-env
       # compose refuses to start without these, and none of them has a default a deployment
       # could inherit, so CI supplies its own throwaway values — these eight assignments are
       # fixtures for this job, not configuration anyone ships. TOKEN_ENCRYPTION_KEY_ID and
@@ -161,8 +168,10 @@ jobs:
       # the whole mapping (bot and web do exactly that), and a successful `up` is no oracle: migrate
       # usually finishes before either tsx process reaches its schema check. So the resolved
       # configuration is asserted, on the runner's own Compose. The one image tag too: a service
-      # with its own tag keeps an older journal after a partial `build` (#75, PR #731).
-      - name: backend and trading-worker start only after migrate, which never restarts, and every built service shares one image
+      # built from the repository root with its own tag keeps an older journal after a partial
+      # `build` (#75, PR #731); a service built from another context (`backup`, tooling/backup)
+      # must not take that tag.
+      - name: backend and trading-worker start only after migrate, which never restarts, and every service built from the repository root shares one image
         run: |
           config="$(docker compose config --format json)"
           for service in backend trading-worker; do
@@ -177,7 +186,7 @@ jobs:
             echo "::error::migrate must not restart (restart = $restart)"
             exit 1
           fi
-          bad="$(printf '%s' "$config" | jq -r '.name as $p | .services | to_entries[] | select(.value.build != null) | select(.value.image != ($p + "-app")) | "\(.key)=\(.value.image)"')"
+          bad="$(printf '%s' "$config" | jq -r '.name as $p | .services.migrate.build.context as $ctx | .services | to_entries[] | select(.value.build != null) | select((.value.build.context == $ctx) != (.value.image == ($p + "-app"))) | "\(.key)=\(.value.image)"')"
           if [ -n "$bad" ]; then
             echo "::error::services not on the project's one image: $bad"
             exit 1
@@ -288,6 +297,25 @@ jobs:
               exit 1
             fi
           done
+      # The backup service's two keys, made with the image's own age-keygen: the recipient
+      # encrypts, the identity is what restore-check and restore decrypt with. --progress quiet:
+      # with pull_policy: build, `run` builds first and would print BuildKit's log on stdout.
+      # The env fixture exists before any container mounts it (a missing bind source would
+      # become a directory).
+      - name: a throwaway age key pair and the env fixture for the backup service
+        run: |
+          set -u
+          printf 'TOKEN_ENCRYPTION_KEY=%s\n' "$TOKEN_ENCRYPTION_KEY" > /tmp/ci-backup-env
+          out="$(docker compose --progress quiet run --rm --no-deps -T backup age-keygen)"
+          recipient="$(printf '%s\n' "$out" | sed -n 's/^# public key: //p')"
+          identity="$(printf '%s\n' "$out" | grep '^AGE-SECRET-KEY-' || true)"
+          if [ -z "$recipient" ] || [ -z "$identity" ]; then
+            echo '::error::age-keygen in the backup image printed no key pair'
+            exit 1
+          fi
+          echo "::add-mask::$identity"
+          echo "BACKUP_AGE_RECIPIENT=$recipient" >> "$GITHUB_ENV"
+          echo "BACKUP_AGE_IDENTITY=$identity" >> "$GITHUB_ENV"
       # `bot` is started by the last step alone, where its exit is the point: with the fake token
       # above it fails at getMe and exits 1, and `bot` has no healthcheck, so --wait here could
       # not tell a dead bot from a live one. Under the prod pair this builds the image with its
@@ -438,6 +466,67 @@ jobs:
         run: |
           docker compose exec -T backend pnpm --filter @binarius/backend staff create \
             --login ci-staff --telegram-id 1 | grep -q 'Пароль:'
+      # The backup service backs up at every start, and --wait above waited for its healthcheck,
+      # which only that run's marker satisfies; the line is what says it was a backup.
+      - name: the backup service backed up at start
+        run: |
+          set -u
+          logs="$(docker compose logs --no-log-prefix backup)"
+          grep -E '^backup ok: binarius-' <<<"$logs" || {
+            echo '::error::the backup service logged no backup at start'
+            printf '%s\n' "$logs"
+            exit 1
+          }
+      # docs/backups.md -> Checking it by hand, on the real Postgres 18, pg_dump, age and rclone:
+      # a backup of the account the step above created, restored into a scratch database and
+      # compared with the live one (restore-check prints a row count per table).
+      - name: a backup of the first-run data restores into a scratch database
+        run: |
+          set -u
+          out="$(docker compose exec -T backup backup-now)" || true
+          printf '%s\n' "$out"
+          run="$(printf '%s\n' "$out" | sed -n 's/^backup ok: \(binarius-[0-9TZ]*\),.*/\1/p')"
+          if [ -z "$run" ]; then
+            echo '::error::backup-now printed no run'
+            exit 1
+          fi
+          echo "BACKUP_RUN=$run" >> "$GITHUB_ENV"
+          check="$(docker compose exec -T backup restore-check)" || true
+          printf '%s\n' "$check"
+          grep -q '^restore-check ok: ' <<<"$check" || {
+            echo '::error::restore-check did not pass'
+            exit 1
+          }
+          grep -qx 'rows staff 1' <<<"$check" || {
+            echo '::error::the restored database does not hold the one staff account'
+            exit 1
+          }
+      # docs/backups.md -> Restoring, on this job's own stack: the services that hold connections
+      # stop, the same run replaces the live database, the services come back on it, and the
+      # replaced database is kept under its new name. binarius_empty (the step "a process refuses")
+      # does not match either query.
+      - name: the same backup restores into the live database
+        run: |
+          set -u
+          docker compose stop backend trading-worker web
+          out="$(docker compose exec -T -e BACKUP_RESTORE_CONFIRM="$BACKUP_RUN" backup restore "$BACKUP_RUN")" || true
+          printf '%s\n' "$out"
+          grep -q '^restore ok: ' <<<"$out" || {
+            echo '::error::restore did not replace the live database'
+            exit 1
+          }
+          docker compose up -d --wait --wait-timeout 120 backend trading-worker web
+          curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
+          staff="$(docker compose exec -T postgres psql -U binarius -d binarius -Atc "select count(*) from staff where login = 'ci-staff'")"
+          if [ "$staff" != 1 ]; then
+            echo "::error::the restored live database holds $staff ci-staff accounts, expected 1"
+            exit 1
+          fi
+          kept="$(docker compose exec -T postgres psql -U binarius -d postgres -Atc "select count(*) from pg_database where datname like 'binarius_before_restore_%'")"
+          if [ "$kept" != 1 ]; then
+            echo "::error::$kept replaced databases kept, expected 1"
+            exit 1
+          fi
       # The bot is started here on purpose, with the job's fake token: getMe answers 401, grammY
       # does not retry it, lifecycle.ts logs the failure and calls exit(1). Under the prod command
       # that exit is the container's (one node process under tini, no supervisor), and

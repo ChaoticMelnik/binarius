@@ -19,8 +19,9 @@ x-broker-environment: &broker-environment
   # by the backend's start route and the worker's session-start CLI; see docs/stake.md -> Defaults
   SESSION_STAKE_STRATEGY:
 
-# One tag for every service built from this repository (`migrate` names it too), so a partial
-# `build` or `up --build <service>` never leaves `migrate` on an older journal (#75, PR #731).
+# One tag for every service built from the repository root (`build: .`; `migrate` names it
+# too), so a partial `build` or `up --build <service>` never leaves `migrate` on an older journal
+# (#75, PR #731).
 x-app: &app
   build: .
   image: ${COMPOSE_PROJECT_NAME}-app
@@ -437,6 +438,51 @@ services:
           action: rebuild
         - path: ./tsconfig.base.json
           action: rebuild
+
+  # Hourly Postgres backups to an external bucket and the restore drill (#143, docs/backups.md).
+  # Off unless the profile is enabled: the server sets COMPOSE_PROFILES=backup in its .env. Its
+  # own image (pg_dump of the server's major version, age, rclone), tagged apart from the app's;
+  # `pull_policy: build` makes a deploy's `up` rebuild it from cache, since the deploy script
+  # builds only `migrate`. Root inside the container: the bind-mounted server .env is chmod 600.
+  backup:
+    build: tooling/backup
+    image: ${COMPOSE_PROJECT_NAME}-backup
+    pull_policy: build
+    init: true
+    profiles: [backup]
+    restart: ${COMPOSE_RESTART:-unless-stopped}
+    # not migrate: a failed migration must not stop the backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # a run cut off by a deploy leaves no finished object; the next hour covers it
+    stop_grace_period: 30s
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-binarius}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-binarius}
+      PGDATABASE: ${POSTGRES_DB:-binarius}
+      # valueless: forwarded only when set; the scripts refuse an empty or missing required one by
+      # name (docs/backups.md -> Configuration), so compose never does
+      BACKUP_REMOTE_PATH:
+      RCLONE_CONFIG_BACKUP_TYPE:
+      RCLONE_CONFIG_BACKUP_ACCOUNT:
+      RCLONE_CONFIG_BACKUP_KEY:
+      BACKUP_AGE_RECIPIENT:
+      BACKUP_AGE_IDENTITY:
+      BACKUP_ENV_FILE:
+      BACKUP_PING_URL:
+      BACKUP_RESTORE_CHECK_MAX_BYTES:
+    volumes:
+      - ${BACKUP_ENV_FILE:-/dev/null}:/run/backup/env:ro
+    # The marker is touched by every successful run: older than two hourly runs and a margin means
+    # the backups stopped. start_period covers the run every start makes.
+    healthcheck:
+      test: ["CMD-SHELL", "find /run/backup/ok -mmin -130 | grep -q ."]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
 
 volumes:
   pgdata:
