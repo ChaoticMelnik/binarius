@@ -29,11 +29,12 @@ three things and nothing else (`tooling/compose-prod.test.ts` P1-P5, Rule 52):
 |---|---|---|
 | app command | `pnpm --filter @binarius/<app> dev` = `tsx watch src/index.ts` (three node processes per app, TypeScript compiled on the fly) | `node apps/<app>/dist/index.js`: one node process under tini |
 | a process that exits | the `tsx watch` supervisor survives, the container stays `running` (#65) | the container exits with the process's code; `restart` brings it back |
-| logs | unbounded `json-file` | `json-file`, `max-size: 10m`, `max-file: 3` on all seven services |
+| logs | unbounded `json-file` | `json-file`, `max-size: 10m`, `max-file: 3` on every service, `backup` included (profile `backup`, [backups.md](backups.md)) |
 | `postgres`, `redis` restart | none | `${COMPOSE_RESTART:-unless-stopped}`, like the app services |
 
 Everything else is inherited unchanged: environment, ports, `depends_on`, `init: true`,
 `stop_grace_period` and the shutdown budgets (Rule 10), the backend's healthcheck, the image.
+For `backup` the pair changes the log rotation alone.
 `migrate` keeps its command `pnpm db:migrate` (Rule 16): it exits before the apps start, so it
 holds no memory at idle. The CLIs keep theirs too — `docker compose exec backend pnpm --filter
 @binarius/backend staff create …`, `bot-text`, `h1`, `socket-probe` and the rest run under `tsx`
@@ -166,7 +167,7 @@ schema check, exits 1 and is restarted until the database answers.
 
 ## Log rotation
 
-Each container keeps at most three files of 10 MB (≤ 30 MB per service, ≤ 210 MB for the seven).
+Each container keeps at most three files of 10 MB (≤ 30 MB per service, ≤ 240 MB for the eight).
 `docker compose logs` reads only what is left. The setting changes a container's configuration,
 so it applies when the container is recreated.
 

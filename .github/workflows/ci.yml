@@ -466,6 +466,19 @@ jobs:
         run: |
           docker compose exec -T backend pnpm --filter @binarius/backend staff create \
             --login ci-staff --telegram-id 1 | grep -q 'Пароль:'
+      # The same guard for docs/backups.md: its last section, "Checking it by hand", carries the
+      # commands the three steps below run, so the document cannot lose one while the job passes.
+      - name: the backups document still carries the commands this job runs
+        run: |
+          section="$(sed -n '/^## Checking it by hand/,$p' docs/backups.md)"
+          for command in 'docker compose exec -T backup backup-now' \
+                         'docker compose exec -T backup restore-check' \
+                         'BACKUP_RESTORE_CONFIRM=<run> backup restore <run>'; do
+            printf '%s' "$section" | grep -qF -- "$command" || {
+              echo "::error::docs/backups.md -> Checking it by hand lost the command this job runs: $command"
+              exit 1
+            }
+          done
       # The backup service backs up at every start, and --wait above waited for its healthcheck,
       # which only that run's marker satisfies; the line is what says it was a backup.
       - name: the backup service backed up at start
