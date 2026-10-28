@@ -1,45 +1,29 @@
 import {
-  createSessionIntent,
   listRunnableSessions,
   markSessionDecision,
   readSessionBalance,
   readSessionHistory,
-  recordSignalDecision,
-  signalDecisionInput,
   stopExpiredSessions,
   stopHaltedSessions,
   stopPausedSessions,
   stopTradingSession,
   touchBalanceRequested,
-  TradeIntentError,
-  TradingSessionNotActiveError,
   type Db,
   type RunnableSession,
-  type SignalDecisionInput,
   type StoppedSession,
 } from '@binarius/db';
 import {
   assertExhausted,
   errorLogFields,
-  intervalForDuration,
   isH1Settings,
   isPairOpen,
   pairAcceptsDuration,
   safeParseTradingSessionSettings,
   sessionStakeParams,
   sessionNoSignalTimeoutMs,
-  SIGNAL_CHART_INTERVAL_MS,
-  SignalDecisionContext,
-  SignalDecisionOutcome,
-  SignalFeedOutcome,
-  SignalKind,
-  SESSION_INTENT_REFUSALS,
   sessionIntentBlock,
   SessionIntentBlockReason,
   TradingSessionStopReason,
-  type SessionIntentRefusal,
-  type SignalRecord,
-  type TradeAction,
   type TradingSessionSettings,
 } from '@binarius/shared';
 import type { Logger } from '../intents/processor';
@@ -51,26 +35,22 @@ import {
   type StakeDecision,
   type StakeSizer,
 } from '@binarius/stake';
-import type { PairsSource, SignalSource } from './backend';
+import type { PairsSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 
 // The session orchestrator (#287, real sessions #327, docs/trading-session.md -> The orchestrator): every tick
 // stops the sessions the kill switch, the deadline and a halt end, then makes one attempt per
 // runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
-// holds the session back in memory; the step comes from the database's history, never from memory.
+// holds the session back in memory. It creates no intent since #835: the backend's H1 driver opens
+// every session's trades (#707), the attempt stops the session or holds it for the driver.
 // A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once,
-// the interval is the safety net. A hold until the next candle (a no_signal) ends at the
-// boundary + the slack, not rounded up to a tick, and one timer wakes the tick then (#697); the
-// interval is its safety net too.
+// the interval is the safety net.
 
 export interface SessionOrchestratorDeps {
   db: Db;
-  signals: SignalSource;
   pairs: PairsSource;
   logger: Logger;
   config: SessionOrchestratorConfig;
-  // the process runs DEMO_ONLY (#396): createSessionIntent refuses a real session's intent
-  demoOnly: boolean;
   // the sizer's clock and the hold-backs, not the deadline (the database's)
   now?: () => number;
 }
@@ -82,7 +62,7 @@ export interface SessionOrchestrator {
   // a tick now, or one more right after the running one (its scan may predate the caller's write);
   // calls merge, a no-op after stop(); never throws, so a caller may call it after its commit (#696)
   wake(): void;
-  // aborts the attempt's backend call and waits for the running tick
+  // aborts the attempt's pairs read and waits for the running tick
   stop(): Promise<void>;
 }
 
@@ -101,22 +81,10 @@ const STAKE_STOP_REASONS = {
   [StopReason.InsufficientBalance]: TradingSessionStopReason.StakeStop,
 } as const satisfies Record<StopReason, TradingSessionStopReason>;
 
-// A candle hold (#697) is the exact wait for the next candle's ask. An ending reached after a
-// decision carries its trade log row (#666, docs/trade-log.md → The writers and their outcomes),
-// written by apply after the ending's own write; the intent's row is in the intent's transaction
-// instead.
 type Ending =
-  | {
-      kind: 'stop';
-      reason: TradingSessionStopReason;
-      fields?: Record<string, unknown>;
-      record?: SignalDecisionInput;
-    }
-  | { kind: 'created' }
-  | { kind: 'reschedule'; record?: SignalDecisionInput }
-  | { kind: 'hold'; ms: number; candle?: true; record?: SignalDecisionInput }
-  // the session is no longer active: nothing to write
-  | { kind: 'gone' }
+  | { kind: 'stop'; reason: TradingSessionStopReason; fields?: Record<string, unknown> }
+  | { kind: 'reschedule' }
+  | { kind: 'hold'; ms: number }
   // no ending written: the deadline, a throw or the stop signal
   | { kind: 'failed' }
   | { kind: 'stopped' };
@@ -130,11 +98,9 @@ class AttemptAborted extends Error {
 
 export function createSessionOrchestrator({
   db,
-  signals,
   pairs,
   logger,
   config,
-  demoOnly,
   now = Date.now,
 }: SessionOrchestratorDeps): SessionOrchestrator {
   const stopping = new AbortController();
@@ -145,16 +111,6 @@ export function createSessionOrchestrator({
   let running: Promise<void> | undefined;
   // wake() calls no tick has served yet
   let pending = 0;
-  // the sessions whose hold is a candle hold (#697): the candle timer wakes the tick at the
-  // earliest of their heldUntil
-  const candleHeld = new Set<string>();
-  let candleTimer: ReturnType<typeof setTimeout> | undefined;
-  let candleWakeAt: number | undefined;
-  // targets at or before the last firing are not armed again, so a hold the woken tick left in
-  // place does not refire at once; a timer that fired before now() reached its target (its clock
-  // against Date.now) is armed again for the rest of the wait
-  let lastFiredAt = Number.NEGATIVE_INFINITY;
-
   function logStop(
     row: StoppedSession,
     reason: TradingSessionStopReason,
@@ -206,10 +162,16 @@ export function createSessionOrchestrator({
       };
     }
 
-    // an H1 session (#775, settings v5; a read-only v4 row of #670): its driver opens the trades
-    // (#707); the attempt never asks the signal, it stops the session or holds it - the sizer's
-    // stops and, as for any session, a pair closed past the no-signal limit
-    const h1 = isH1Settings(settings);
+    // #835: only an H1 session (settings v5; a read-only v4 row of #670) is traded, by its driver
+    // (#707); an active v1-v3 row has no trader left and stops before any read
+    if (!isH1Settings(settings)) {
+      return {
+        kind: 'stop',
+        reason: TradingSessionStopReason.InvalidSettings,
+        fields: { version: settings.version },
+      };
+    }
+
     const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
       settings.durationSec,
       config.noSignalCandles,
@@ -222,7 +184,7 @@ export function createSessionOrchestrator({
       logger.warn(ids, 'trading session vanished');
       return { kind: 'hold', ms: config.retryMs };
     }
-    // the step this attempt tries: its intent key and every decision row it writes (#666)
+    // the step the driver's next intent takes
     const step = history.intents.length + 1;
     // the scan skips expired sessions; this catches one whose deadline passed since the scan.
     // The H1 driver (#707) skips on the same reasons, so its intents never outrun these stops
@@ -260,8 +222,8 @@ export function createSessionOrchestrator({
     // #696: a settlement on the account in the session's mode (this session's, an earlier one's, a
     // bot's one-off) is newer than the balance; its update_balance, the pass's check or the
     // backend's refresh brings the payout. Until the no-signal limit counted from that settlement
-    // the step waits a tick (a hold: a wake does not ask the signal again inside it), then the
-    // sizer's stop stands
+    // the step waits a tick (a hold: a wake does not attempt again inside it), then the sizer's
+    // stop stands
     const waitsForBalance = (decision: StakeDecision) =>
       decision.kind === StakeKind.Stop &&
       decision.reason === StopReason.InsufficientBalance &&
@@ -289,120 +251,23 @@ export function createSessionOrchestrator({
         fields: { assetId: settings.assetId, listed: pair !== undefined },
       };
     }
-    // The two waits for a signal end at the no-signal limit (#509, owner), config.noSignalCandles
-    // candles of the session's signal interval (#637): a closed pair, a no_signal (the pause after
-    // two losses was the third until #698). A failure to read the pairs or the signal is not a
-    // wait for a signal, so it neither stops the session nor moves the count.
-    const noSignalStop = (
-      waited: 'pair_closed' | 'no_signal',
-      record?: SignalDecisionInput,
-    ): Ending => ({
-      kind: 'stop',
-      reason: TradingSessionStopReason.NoSignalTimeout,
-      fields: { waited, limitMs: noSignalTimeoutMs },
-      ...(record === undefined ? {} : { record }),
-    });
+    // A closed pair waits until the no-signal limit (#509, owner), config.noSignalCandles candles
+    // of the session's duration (#637; 5 s since #828); the no_signal wait is the driver's (#775).
+    // A failure to read the pairs is not a wait for a signal: it neither stops nor moves the count.
     const nowMs = now();
     if (!isPairOpen(pair, nowMs)) {
-      if (history.waitExpired) return noSignalStop('pair_closed');
+      if (history.waitExpired) {
+        return {
+          kind: 'stop',
+          reason: TradingSessionStopReason.NoSignalTimeout,
+          fields: { waited: 'pair_closed', limitMs: noSignalTimeoutMs },
+        };
+      }
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
       return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
     }
     // since #631 no payout refuses a session, not even at the start (#509 kept the floor
-    // there): a pair whose payout fell keeps trading on its signals; an H1 session has no floor
-    // either (#775, В2)
-
-    if (h1) {
-      const decision = sizer.next(
-        sessionStakeInput({
-          intents: history.intents,
-          payout: pair.payout,
-          minTradeAmount: snapshot.minTradeAmount,
-          available,
-          sessionStartedAtMs: session.startedAt.getTime(),
-          nowMs: now(),
-        }),
-      );
-      if (waitsForBalance(decision)) {
-        logger.info({ ...ids, step }, 'trading session waits for the balance');
-        return { kind: 'hold', ms: config.tickMs };
-      }
-      if (decision.kind === StakeKind.Stop) {
-        return {
-          kind: 'stop',
-          reason: STAKE_STOP_REASONS[decision.reason],
-          fields: { stopReason: decision.reason, detail: decision.detail },
-        };
-      }
-      // the no-signal stop of an H1 session is the driver's, on the seconds it decided no_signal
-      // (#775, review round 1): this attempt has no evidence that H1 was asked at all
-      logger.debug(ids, 'trading session waits for the H1 driver');
-      return { kind: 'hold', ms: config.h1CheckMs };
-    }
-
-    const interval = intervalForDuration(settings.durationSec);
-    const answer = await signals.evaluate({ assetId: settings.assetId, interval }, { signal });
-    checkpoint();
-    if (!answer.ok) {
-      logger.warn(
-        { ...ids, reason: answer.reason, status: answer.status },
-        'trading session signal unavailable',
-      );
-      return { kind: 'hold', ms: config.retryMs };
-    }
-    const response = answer.response;
-    if (response.outcome === SignalFeedOutcome.FetchFailed) {
-      logger.warn(
-        { ...ids, code: response.code, retryAfterSec: response.retryAfterSec },
-        'trading session signal fetch failed',
-      );
-      return {
-        kind: 'hold',
-        ms: response.retryAfterSec !== undefined ? response.retryAfterSec * 1000 : config.retryMs,
-      };
-    }
-    // the decision is taken: its row's clock and record (#666); an old backend answers none, and
-    // the source drops one that is invalid or does not match the answer
-    const takenAtMs = now();
-    const record: SignalRecord | undefined = response.record;
-    if (record === undefined) {
-      const reason =
-        answer.recordProblem === undefined ? 'record_missing' : `record_${answer.recordProblem}`;
-      logger.warn({ ...ids, reason }, 'trading session decision not recorded');
-    }
-    const decisionRow = (
-      outcome: SignalDecisionOutcome,
-      detail: string | null = null,
-    ): SignalDecisionInput | undefined =>
-      record === undefined
-        ? undefined
-        : signalDecisionInput(record, {
-            context: SignalDecisionContext.Session,
-            tradingSessionId: session.id,
-            brokerAccountId: session.brokerAccountId,
-            step,
-            payout: pair.payout,
-            takenAtMs,
-            outcome,
-            detail,
-          });
-    const withRow = <E extends Ending>(ending: E, row: SignalDecisionInput | undefined): E =>
-      row === undefined ? ending : { ...ending, record: row };
-    const untilNextCandle = () => {
-      const decidedAt = now();
-      const intervalMs = SIGNAL_CHART_INTERVAL_MS[interval];
-      return Math.ceil(decidedAt / intervalMs) * intervalMs + config.candleSlackMs - decidedAt;
-    };
-    if (response.decision.kind === SignalKind.NoSignal) {
-      const row = decisionRow(SignalDecisionOutcome.NoSignal);
-      if (history.waitExpired) return noSignalStop('no_signal', row);
-      logger.info(
-        { ...ids, reason: response.decision.reason },
-        'trading session waits for the next candle',
-      );
-      return withRow({ kind: 'hold', ms: untilNextCandle(), candle: true }, row);
-    }
-    const action: TradeAction = response.decision.action;
+    // there); an H1 session has no floor either (#775, В2)
 
     const decision = sizer.next(
       sessionStakeInput({
@@ -419,64 +284,16 @@ export function createSessionOrchestrator({
       return { kind: 'hold', ms: config.tickMs };
     }
     if (decision.kind === StakeKind.Stop) {
-      return withRow(
-        {
-          kind: 'stop',
-          reason: STAKE_STOP_REASONS[decision.reason],
-          fields: { stopReason: decision.reason, detail: decision.detail },
-        },
-        decisionRow(SignalDecisionOutcome.StakeStop, decision.reason),
-      );
+      return {
+        kind: 'stop',
+        reason: STAKE_STOP_REASONS[decision.reason],
+        fields: { stopReason: decision.reason, detail: decision.detail },
+      };
     }
-
-    checkpoint();
-    let created;
-    try {
-      created = await createSessionIntent(
-        db,
-        {
-          sessionId: session.id,
-          step,
-          telegramUserId: history.telegramUserId,
-          brokerAccountId: session.brokerAccountId,
-          mode: session.mode,
-          assetId: settings.assetId,
-          amount: decision.amount,
-          action,
-          durationSec: settings.durationSec,
-          decision: decisionRow(SignalDecisionOutcome.Intent) ?? null,
-        },
-        { demoOnly },
-      );
-    } catch (error) {
-      if (error instanceof TradingSessionNotActiveError) {
-        logger.info(ids, 'trading session stopped meanwhile');
-        return { kind: 'gone' };
-      }
-      if (!(error instanceof TradeIntentError)) throw error;
-      const refusal: SessionIntentRefusal = SESSION_INTENT_REFUSALS[error.code];
-      const row = decisionRow(SignalDecisionOutcome.Refused, error.code);
-      if (refusal.kind === 'reschedule') {
-        logger.warn({ ...ids, step, code: error.code }, 'trading session intent refused');
-        return withRow<Ending>(refusal, row);
-      }
-      return withRow<Ending>({ ...refusal, fields: { code: error.code } }, row);
-    }
-    if (!created.created) {
-      logger.info({ ...ids, step, intentId: created.intent.id }, 'trading session step replayed');
-      return withRow<Ending>({ kind: 'reschedule' }, decisionRow(SignalDecisionOutcome.Replayed));
-    }
-    if (created.decisionError !== undefined) {
-      logger.warn(
-        { ...ids, step, reason: 'insert_refused', ...errorLogFields(created.decisionError) },
-        'trading session decision not recorded',
-      );
-    }
-    logger.info(
-      { ...ids, step, intentId: created.intent.id, action },
-      'trading session intent created',
-    );
-    return { kind: 'created' };
+    // the no-signal stop of an H1 session is the driver's, on the seconds it decided no_signal
+    // (#775, review round 1): this attempt has no evidence that H1 was asked at all
+    logger.debug(ids, 'trading session waits for the H1 driver');
+    return { kind: 'hold', ms: config.h1CheckMs };
   }
 
   // The race bounds the tick's wait, not a statement: an abort does not cancel a pg query, so a
@@ -513,80 +330,27 @@ export function createSessionOrchestrator({
     return Promise.race([run, expired]).finally(() => clearTimeout(timeout));
   }
 
-  const hold = (sessionId: string, ms: number, candle = false) => {
-    heldUntil.set(sessionId, now() + (candle ? ms : Math.max(ms, config.tickMs)));
-    if (candle) candleHeld.add(sessionId);
-    else candleHeld.delete(sessionId);
+  const hold = (sessionId: string, ms: number) => {
+    heldUntil.set(sessionId, now() + Math.max(ms, config.tickMs));
   };
-
-  // Armed after every tick, so after the endings' writes: the woken tick reads them
-  function armCandleWake() {
-    if (stopped) return;
-    let target: number | undefined;
-    for (const id of candleHeld) {
-      const until = heldUntil.get(id);
-      if (until === undefined || until <= lastFiredAt) continue;
-      if (target === undefined || until < target) target = until;
-    }
-    if (candleTimer !== undefined && target === candleWakeAt) return;
-    clearTimeout(candleTimer);
-    candleTimer = undefined;
-    candleWakeAt = target;
-    if (target === undefined) return;
-    candleTimer = setTimeout(
-      () => {
-        candleTimer = undefined;
-        candleWakeAt = undefined;
-        lastFiredAt = now();
-        wake();
-      },
-      Math.max(0, target - now()),
-    );
-  }
-
-  // The decision's row follows its ending's own write, whether that write's CAS matched or not
-  // (docs/trade-log.md → The order of writes); a failure loses the row only, never the ending
-  async function recordDecision(session: RunnableSession, row: SignalDecisionInput | undefined) {
-    if (row === undefined) return;
-    try {
-      await recordSignalDecision(db, row);
-    } catch (error) {
-      logger.warn(
-        {
-          sessionId: session.id,
-          brokerAccountId: session.brokerAccountId,
-          step: row.step,
-          ...errorLogFields(error),
-        },
-        'trading session decision not recorded',
-      );
-    }
-  }
 
   async function apply(session: RunnableSession, ending: Ending): Promise<void> {
     switch (ending.kind) {
       case 'stop': {
         const row = await stopTradingSession(db, { id: session.id, reason: ending.reason });
         if (row !== undefined) logStop(session, ending.reason, ending.fields);
-        await recordDecision(session, ending.record);
         return;
       }
       case 'hold':
-        hold(session.id, ending.ms, ending.candle === true);
-        await markSessionDecision(db, { id: session.id });
-        await recordDecision(session, ending.record);
-        return;
-      case 'created':
+        hold(session.id, ending.ms);
         await markSessionDecision(db, { id: session.id });
         return;
       case 'reschedule':
         await markSessionDecision(db, { id: session.id });
-        await recordDecision(session, ending.record);
         return;
       case 'failed':
         hold(session.id, config.retryMs);
         return;
-      case 'gone':
       case 'stopped':
         return;
     }
@@ -610,28 +374,19 @@ export function createSessionOrchestrator({
     for (const [id, until] of heldUntil) {
       if (until > tickAt) continue;
       heldUntil.delete(id);
-      candleHeld.delete(id);
     }
     const runnable = await listRunnableSessions(db, {
       limit: config.batchSize,
       maxDurationMs: config.maxDurationMs,
       exclude: [...heldUntil.keys()],
     });
-    const summary = {
-      runnable: runnable.length,
-      attempted: 0,
-      created: 0,
-      held: 0,
-      stopped: 0,
-      woken,
-    };
+    const summary = { runnable: runnable.length, attempted: 0, held: 0, stopped: 0, woken };
     for (const session of runnable) {
       if (stopped) break;
       summary.attempted += 1;
       const ending = await attemptWithDeadline(session);
       if (ending.kind === 'stopped') break;
       await apply(session, ending);
-      if (ending.kind === 'created') summary.created += 1;
       if (ending.kind === 'hold' || ending.kind === 'failed') summary.held += 1;
       if (ending.kind === 'stop') summary.stopped += 1;
     }
@@ -647,7 +402,6 @@ export function createSessionOrchestrator({
       })
       .finally(() => {
         running = undefined;
-        armCandleWake();
         if (pending > 0) void tick();
       });
     return running;
@@ -669,7 +423,6 @@ export function createSessionOrchestrator({
     async stop() {
       stopped = true;
       clearInterval(timer);
-      clearTimeout(candleTimer);
       stopping.abort();
       await running;
     },

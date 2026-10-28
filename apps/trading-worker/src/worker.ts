@@ -74,12 +74,7 @@ import {
 import { createSettlementCatchup } from './intents/settlement-catchup';
 import { startSweeper } from './intents/sweeper';
 import { createTradeCommandExecutor } from './intents/trade-command-executor';
-import {
-  createBackendPairsSource,
-  createBackendSignalSource,
-  type PairsSource,
-  type SignalSource,
-} from './trading-session/backend';
+import { createBackendPairsSource, type PairsSource } from './trading-session/backend';
 import { TRADING_SESSION_CONFIG, type SessionOrchestratorConfig } from './trading-session/config';
 import { createSessionOrchestrator } from './trading-session/orchestrator';
 
@@ -151,9 +146,8 @@ export interface WorkerTestSeams {
   tuning?: Partial<WorkerTuning>;
   // a BullMQ key prefix, so a suite's queues do not meet another file's on a shared Redis
   queuePrefix?: string;
-  // in place of the backend's routes (the token, the signal, the pairs)
+  // in place of the backend's routes (the token, the pairs)
   tokens?: AccessTokenSource;
-  signals?: SignalSource;
   pairs?: PairsSource;
 }
 
@@ -192,17 +186,15 @@ export function createWorker({
       logger,
     });
 
-  // the trading sessions (docs/trading-session.md): their signal and pairs come from the backend.
+  // the trading sessions (docs/trading-session.md): their pairs catalog comes from the backend.
   // Built ahead of the writers below: every write here that ends an intent or halts its account
   // wakes it after its commit (#696)
   const backend = { baseUrl: env.backendUrl, token: env.internalApiToken };
   const tradingSessions = createSessionOrchestrator({
     db,
-    signals: testing.signals ?? createBackendSignalSource(backend),
     pairs: testing.pairs ?? createBackendPairsSource(backend),
     logger,
     config: tuning.orchestrator,
-    demoOnly: env.demoOnly,
   });
 
   // The broker sessions only with BROKER_WS_URL set (docs/broker-session.md); unset, every order

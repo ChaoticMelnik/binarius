@@ -17,7 +17,6 @@ import {
   type SessionStakeStrategy,
   type SessionTradeStep,
   type SignalInterval,
-  type SignalRecord,
   type TradeAction,
   type TradeIntentFailureReason,
   type TradeLogTickRow,
@@ -62,43 +61,6 @@ export interface SignalDecisionInput {
   result?: Record<string, unknown> | null;
   // required, so every writer names it: a shadow row's f + 7 s (#669), null for a session's rows
   ticksUntilMs: number | null;
-}
-
-// the writer's facts beside the record's entry
-export interface SignalDecisionFacts {
-  context: SignalDecisionContext;
-  tradingSessionId: string | null;
-  brokerAccountId: string;
-  step: number | null;
-  payout: number | null;
-  takenAtMs: number;
-  outcome: SignalDecisionOutcome;
-  detail: string | null;
-}
-
-// One builder for both writers (the orchestrator, the start route): the row holds the entry as
-// the backend answered it, so journalEntryOf rebuilds exactly what replaySignalJournalEntry needs.
-export function signalDecisionInput(
-  { entry, lastTick }: SignalRecord,
-  facts: SignalDecisionFacts,
-): SignalDecisionInput {
-  const { decision } = entry;
-  return {
-    ...facts,
-    assetId: entry.assetId,
-    interval: entry.interval,
-    version: entry.version,
-    decidedAtMs: entry.nowMs,
-    kind: decision.kind,
-    action: decision.kind === SignalKind.Signal ? decision.action : null,
-    digits: entry.digits,
-    params: entry.params,
-    decision,
-    source: entry.source,
-    series: entry.series,
-    lastTick,
-    ticksUntilMs: null,
-  };
 }
 
 export async function recordSignalDecision(
@@ -497,7 +459,7 @@ export function journalEntryOf(row: TradeLogDecisionRow): Record<string, unknown
 // --- The trade report's read (#502, docs/trade-log.md → The report) -----------------------------
 
 // where an intent's direction came from: a session's decision row, a one-off trade (no session),
-// or a session intent without a decision row (before 0068, or record_missing)
+// or a session intent without a decision row (before 0068, or `record_missing` until #835)
 export const TradeReportOrigin = {
   Signal: 'signal',
   Manual: 'manual',

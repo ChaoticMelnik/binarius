@@ -7,13 +7,11 @@ import {
   TRADING_SIGNAL_PATH,
   TradingSignalErrorCode,
   type H1SignalWire,
-  type LastTick,
   type TradingSignalResponse,
 } from '@binarius/shared';
 import type { CachedSignalFeed, SignalEvaluation } from '@binarius/signal';
 import { internalBearerAuth } from '../auth/internal';
 import type { H1Scanner } from '../h1/scanner';
-import type { TickStore } from '../market-data/ticks';
 
 export interface SignalRoutesDeps {
   feed: Pick<CachedSignalFeed, 'evaluate'>;
@@ -27,20 +25,16 @@ export interface SignalRoutesDeps {
       analysis: { assetId: number; durationSec: number } | null,
     ): Promise<boolean>;
   };
-  // the newest tick per pair (#666); undefined without the data socket (no BROKER_WS_URL)
-  ticks: Pick<TickStore, 'last'> | undefined;
   // the pair's H1 signal (#828); undefined without the data socket: `h1` is then always null
   h1: Pick<H1Scanner, 'current'> | undefined;
   now?: () => number;
 }
 
 // Named fields only: the evaluation also carries the journal series and the request facts, which
-// stay in the feed's log lines, unless the caller asked for the decision's record (a session, #666):
-// then the whole entry and the pair's last tick.
+// stay in the feed's log lines.
 export function toTradingSignalResponse(
   evaluation: SignalEvaluation,
   h1: H1SignalWire | null,
-  record?: { lastTick: LastTick | null },
 ): TradingSignalResponse {
   if (evaluation.outcome === SignalFeedOutcome.Decided) {
     return {
@@ -48,9 +42,6 @@ export function toTradingSignalResponse(
       params: evaluation.entry.params,
       decision: evaluation.entry.decision,
       ...(evaluation.indicators === undefined ? {} : { indicators: evaluation.indicators }),
-      ...(record === undefined
-        ? {}
-        : { record: { entry: evaluation.entry, lastTick: record.lastTick } }),
       h1,
     };
   }
@@ -71,11 +62,10 @@ export function toTradingSignalResponse(
 // bot's analysis card, #484) the answer is recorded as the user's last analysis by `h1`, on both
 // outcomes: an H1 signal with its pair and duration, none as none - the card the bot draws is the
 // H1 one. The record is best-effort: its failure is logged and the decision is answered all the
-// same. With `record: true` (a session's worker, #666) a decision is answered with its record: the
-// entry and the pair's newest data-socket tick at the answer.
+// same.
 export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
   app,
-  { feed, catalog, internalApiToken, lastAnalysis, ticks, h1: scanner, now = Date.now },
+  { feed, catalog, internalApiToken, lastAnalysis, h1: scanner, now = Date.now },
 ) => {
   app.addHook('onRequest', internalBearerAuth(internalApiToken));
 
@@ -109,14 +99,6 @@ export const signalRoutes: FastifyPluginAsync<SignalRoutesDeps> = async (
         request.log.warn(errorLogFields(error), 'last analysis not recorded');
       }
     }
-    return reply.send(
-      toTradingSignalResponse(
-        evaluation,
-        h1,
-        parsed.data.record === true
-          ? { lastTick: ticks?.last(parsed.data.assetId) ?? null }
-          : undefined,
-      ),
-    );
+    return reply.send(toTradingSignalResponse(evaluation, h1));
   });
 };

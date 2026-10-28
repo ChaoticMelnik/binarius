@@ -1,5 +1,5 @@
 import * as z from 'zod';
-import { BrokerRestErrorCode, MAX_PAIR_DIGITS } from './broker';
+import { BrokerRestErrorCode } from './broker';
 import { PairsCatalogErrorCode } from './catalog';
 import { createTradeIntentRequestSchema, telegramUserIdSchema, tradeActionSchema } from './trading';
 
@@ -315,7 +315,7 @@ export const storedSignalJournalEntrySchema = z.union([
 ]);
 export type StoredSignalJournalEntryWire = z.infer<typeof storedSignalJournalEntrySchema>;
 
-// The newest data-socket tick of a pair the backend knew when it answered: price and timestamp are
+// The newest data-socket tick of a pair the backend knew: price and timestamp are
 // the broker's, receivedAtMs the backend's clock at its arrival.
 export const lastTickSchema = z.strictObject({
   price: z.number().positive(),
@@ -323,19 +323,6 @@ export const lastTickSchema = z.strictObject({
   receivedAtMs: z.number(),
 });
 export type LastTick = z.infer<typeof lastTickSchema>;
-
-// what a session records of a decision (#666, docs/trade-log.md): the journal entry the decision
-// was computed from and the last tick; null without the data socket or before the pair's first tick.
-// The entry is narrowed to its signal_decisions columns (bigint > 0, the digits CHECK), so a record
-// that parses is one the row accepts; the stored-line schemas the stand reads stay as they are.
-export const signalRecordSchema = z.strictObject({
-  entry: signalJournalEntrySchema.extend({
-    nowMs: z.int().positive(),
-    digits: z.int().min(0).max(MAX_PAIR_DIGITS),
-  }),
-  lastTick: lastTickSchema.nullable(),
-});
-export type SignalRecord = z.infer<typeof signalRecordSchema>;
 
 // --- Display indicators (#482) ---------------------------------------------------------------
 
@@ -416,8 +403,6 @@ export const tradingSignalRequestSchema = z.object({
       durationSec: createTradeIntentRequestSchema.shape.durationSec,
     })
     .optional(),
-  // only a trading session's worker sends it (#666): the answer then carries the decision's record
-  record: z.literal(true).optional(),
 });
 export type TradingSignalRequest = z.infer<typeof tradingSignalRequestSchema>;
 export type TradingSignalAnalysis = NonNullable<TradingSignalRequest['analysis']>;
@@ -445,8 +430,6 @@ export const tradingSignalResponseSchema = z.discriminatedUnion('outcome', [
     decision: signalDecisionSchema,
     // absent when the unbroken tail of the response did not pass the candle checks (docs/signal.md)
     indicators: signalIndicatorsSchema.optional(),
-    // present only when the request asked for it (record: true)
-    record: signalRecordSchema.optional(),
     h1: h1SignalWireSchema.nullable(),
   }),
   z.strictObject({

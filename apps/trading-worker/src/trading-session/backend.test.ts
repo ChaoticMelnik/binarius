@@ -1,21 +1,10 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  TRADING_PAIRS_PATH,
-  TRADING_SIGNAL_PATH,
-  safeParsePairsCatalogResponse,
-  safeParseTradingSignalResponse,
-  type SignalRecord,
-} from '@binarius/shared';
+import { TRADING_PAIRS_PATH, safeParsePairsCatalogResponse } from '@binarius/shared';
 import { UNIT_WAIT_CEILING_MS } from '@binarius/shared/testing';
-import {
-  createBackendPairsSource,
-  createBackendSignalSource,
-  MAX_BACKEND_BODY_BYTES,
-  type RecordProblem,
-} from './backend';
-import { eurUsd, fetchFailedAnswer, signalAnswer, signalRecordOf } from './testing';
+import { createBackendPairsSource, MAX_BACKEND_BODY_BYTES } from './backend';
+import { eurUsd } from './testing';
 
 const BEARER = 'internal-token-for-tests-0123456789';
 const MARKER = 'body-marker-that-must-not-leak';
@@ -94,8 +83,6 @@ function endless(res: ServerResponse, status: number, head: string) {
   pump();
 }
 
-const signals = (timeoutMs?: number) =>
-  createBackendSignalSource({ baseUrl, token: BEARER, timeoutMs });
 const pairs = (timeoutMs?: number) =>
   createBackendPairsSource({ baseUrl, token: BEARER, timeoutMs });
 
@@ -104,142 +91,6 @@ const catalog = (fresh = true) => ({
   fetchedAt: 1_760_000_000_000,
   ageMs: 1_000,
   fresh,
-});
-
-describe('createBackendSignalSource (#287)', () => {
-  it('B1 posts the asset and the interval with the bearer and answers the response', async () => {
-    reply = (res) => json(res, 200, signalAnswer('up'));
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: true,
-      response: signalAnswer('up'),
-    });
-    expect(seen).toEqual([
-      {
-        method: 'POST',
-        url: TRADING_SIGNAL_PATH,
-        authorization: `Bearer ${BEARER}`,
-        // S1': the session asks for the decision's record (#666)
-        body: { assetId: 101, interval: '1m', record: true },
-      },
-    ]);
-  });
-
-  it('B2 passes fetch_failed through as an answer', async () => {
-    reply = (res) => json(res, 200, fetchFailedAnswer(7));
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: true,
-      response: fetchFailedAnswer(7),
-    });
-  });
-
-  it.each([400, 401, 500, 503])('B3 answers backend_status for HTTP %i', async (status) => {
-    reply = (res) => json(res, status, signalAnswer('up'));
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: false,
-      reason: 'backend_status',
-      status,
-    });
-  });
-
-  it.each([
-    ['a body the schema refuses', (res: ServerResponse) => json(res, 200, { outcome: 'decided' })],
-    ['a body that is not JSON', text(200, 'not json')],
-  ])('B4 answers contract_violation for %s', async (_label, answer) => {
-    reply = answer;
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: false,
-      reason: 'contract_violation',
-      status: 200,
-    });
-  });
-
-  it('B5 answers backend_unreachable when nothing listens, on the timeout and on an abort', async () => {
-    const closed = createBackendSignalSource({ baseUrl: 'http://127.0.0.1:1', token: BEARER });
-    expect(await closed.evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: false,
-      reason: 'backend_unreachable',
-    });
-    reply = () => {};
-    expect(await signals(50).evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: false,
-      reason: 'backend_unreachable',
-    });
-    // a timeout far past the test's own: only the caller's abort can end the request in time
-    const controller = new AbortController();
-    const startedAt = Date.now();
-    const pending = signals(60_000).evaluate(
-      { assetId: 101, interval: '1m' },
-      { signal: controller.signal },
-    );
-    controller.abort();
-    expect(await pending).toEqual({ ok: false, reason: 'backend_unreachable' });
-    expect(Date.now() - startedAt).toBeLessThan(UNIT_WAIT_CEILING_MS);
-  });
-
-  it('B6 keeps the body, the bearer and the URL out of a failure', async () => {
-    const failures = [];
-    reply = text(500, MARKER);
-    failures.push(await signals().evaluate({ assetId: 101, interval: '1m' }));
-    reply = (res) => json(res, 200, { outcome: MARKER });
-    failures.push(await signals().evaluate({ assetId: 101, interval: '1m' }));
-    reply = text(503, MARKER);
-    failures.push(await pairs().read());
-    reply = (res) => overCeiling(res, 200, JSON.stringify({ outcome: MARKER }));
-    failures.push(await signals(60_000).evaluate({ assetId: 101, interval: '1m' }));
-    reply = (res) => overCeiling(res, 503, `{"error":"catalog_unavailable","m":"${MARKER}"}`);
-    failures.push(await pairs(60_000).read());
-    for (const failure of failures) {
-      const serialized = JSON.stringify(failure);
-      expect(failure.ok).toBe(false);
-      expect(serialized).not.toContain(MARKER);
-      expect(serialized).not.toContain(BEARER);
-      expect(serialized).not.toContain('127.0.0.1');
-    }
-  });
-
-  // the record is read apart from the answer (#666): a bad one is dropped and the answer trades
-  type RecordPatch = (record: SignalRecord) => unknown;
-  const patchEntry =
-    (patch: Record<string, unknown>): RecordPatch =>
-    (record) => ({ ...record, entry: { ...record.entry, ...patch } });
-  const decided = (action: Parameters<typeof signalAnswer>[0]) => {
-    const answer = signalAnswer(action);
-    if (answer.outcome !== 'decided') throw new Error('signalAnswer is decided');
-    return answer;
-  };
-  const flipped = decided('down').decision;
-  it.each<[string, RecordPatch, RecordProblem | undefined]>([
-    ['a consistent record', (record) => record, undefined],
-    [
-      'a last tick at price 0',
-      (record) => ({ ...record, lastTick: { ...record.lastTick, price: 0 } }),
-      'invalid',
-    ],
-    ['nowMs 1.5', patchEntry({ nowMs: 1.5 }), 'invalid'],
-    ['digits 11', patchEntry({ digits: 11 }), 'invalid'],
-    ['the action flipped', patchEntry({ decision: flipped }), 'mismatch'],
-    ['another asset', patchEntry({ assetId: 102 }), 'mismatch'],
-    ['another interval', patchEntry({ interval: '15s' }), 'mismatch'],
-  ])('B7 %s', async (_label, patch, problem) => {
-    const answer = decided('up');
-    reply = (res) => json(res, 200, { ...answer, record: patch(signalRecordOf(answer.decision)) });
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual(
-      problem === undefined
-        ? { ok: true, response: answer }
-        : { ok: true, response: signalAnswer('up', { record: false }), recordProblem: problem },
-    );
-  });
-
-  it("B7 a broken answer's own decision is still a contract violation", async () => {
-    const answer = decided('up');
-    reply = (res) =>
-      json(res, 200, { ...answer, decision: { ...answer.decision, action: 'left' } });
-    expect(await signals().evaluate({ assetId: 101, interval: '1m' })).toEqual({
-      ok: false,
-      reason: 'contract_violation',
-      status: 200,
-    });
-  });
 });
 
 describe('createBackendPairsSource (#287)', () => {
@@ -286,12 +137,29 @@ describe('createBackendPairsSource (#287)', () => {
     expect(await pending).toEqual({ ok: false, reason: 'backend_unreachable' });
     expect(Date.now() - startedAt).toBeLessThan(UNIT_WAIT_CEILING_MS);
   });
+
+  it('B6′ keeps the body, the bearer and the URL out of a failure', async () => {
+    const failures = [];
+    reply = text(503, MARKER);
+    failures.push(await pairs().read());
+    reply = (res) => overCeiling(res, 503, `{"error":"catalog_unavailable","m":"${MARKER}"}`);
+    failures.push(await pairs(60_000).read());
+    reply = (res) => overCeiling(res, 200, JSON.stringify({ pairs: MARKER }));
+    failures.push(await pairs(60_000).read());
+    for (const failure of failures) {
+      const serialized = JSON.stringify(failure);
+      expect(failure.ok).toBe(false);
+      expect(serialized).not.toContain(MARKER);
+      expect(serialized).not.toContain(BEARER);
+      expect(serialized).not.toContain('127.0.0.1');
+    }
+  });
 });
 
 describe('body size (#234)', () => {
-  it('S1 refuses a signal 200 over MAX_BACKEND_BODY_BYTES as a contract violation', async () => {
-    reply = (res) => overCeiling(res, 200, JSON.stringify(signalAnswer('up')));
-    expect(await signals(60_000).evaluate({ assetId: 101, interval: '1m' })).toEqual({
+  it('S1′ refuses a pairs 200 over MAX_BACKEND_BODY_BYTES as a contract violation', async () => {
+    reply = (res) => overCeiling(res, 200, JSON.stringify(catalog()));
+    expect(await pairs(60_000).read()).toEqual({
       ok: false,
       reason: 'contract_violation',
       status: 200,
@@ -334,22 +202,6 @@ describe('body size (#234)', () => {
       }),
     ),
   };
-
-  // the record's series holds at most the ring's window, MARKET_DATA_RING_CANDLES = 300 rows (the
-  // decision's own window is shorter, SIGNAL_CHART_LIMIT); false once the feed records more
-  const ASSUMED_LONGEST_SERIES = 300;
-
-  it('S4 leaves the longest signal answer far below MAX_BACKEND_BODY_BYTES', () => {
-    // numbers and enums only: the decided answer with its record (#666) is the longest
-    const decided = signalAnswer('up');
-    if (decided.outcome !== 'decided') throw new Error('not a decided answer');
-    const sample = {
-      ...decided,
-      record: signalRecordOf(decided.decision, { rows: ASSUMED_LONGEST_SERIES }),
-    };
-    expect(safeParseTradingSignalResponse(sample).success).toBe(true);
-    expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThan(MAX_BACKEND_BODY_BYTES / 4);
-  });
 
   it('S5 the longest pairs sample passes the parser', () => {
     expect(safeParsePairsCatalogResponse(longestPairs).success).toBe(true);

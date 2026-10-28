@@ -214,7 +214,6 @@ export async function startE2eBackend(deps: {
       lastAnalysis: {
         set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
       },
-      ticks: undefined,
       h1: h1Scanner,
     },
     signals: { scanner: h1Scanner, internalApiToken: INTERNAL_API_TOKEN },

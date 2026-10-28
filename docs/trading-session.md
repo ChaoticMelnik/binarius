@@ -859,27 +859,19 @@ line is in it with its level.
 
 | msg | level | When |
 |---|---|---|
-| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `code` (`account_unavailable`, `kill_switch` from the attempt), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed` or `no_signal`, #509 — `paused` until #698; the session's limit in ms, #637) |
-| `trading session stopped for manual review` | error | the halt sweep, or `account_halted` from the attempt (`code`) |
+| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `version` (`invalid_settings` of a row that is not H1's, #835), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed`, #509 — `no_signal` until #835, `paused` until #698; the session's limit in ms, #637) |
+| `trading session stopped for manual review` | error | the halt sweep |
 | `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles`, the `done` of `sessionProgress` — the closed cycles of a v3/v5 row, the settled trades of a v1/v2/v4 row |
 | `trading session vanished` | warn | a race: the row was gone between the scan and the history |
 | `trading session has a live intent` | info | a race: the history shows a live intent the scan did not |
 | `trading session pairs unavailable` | warn | `catalog_unavailable`, a backend failure (`reason`, `status`), or `reason: 'stale'` |
 | `trading session waits for the pair to open` | info | `scheduledUntil` is ahead (`assetId`) |
-| `trading session signal unavailable` | warn | the signal call failed (`reason`, `status`) |
-| `trading session signal fetch failed` | warn | the backend answered `fetch_failed` (`code`, `retryAfterSec`) |
-| `trading session waits for the next candle` | info | `no_signal` (`reason`) |
-| `trading session waits for the H1 driver` | debug | an H1 session (settings v5, #775) passed the attempt's checks and is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
+| `trading session waits for the H1 driver` | debug | every session (settings v5; a read-only v4 row) that passed the attempt's checks is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
 | `trading session waits for the balance` | info | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement; the session is held for one tick (`step`, #696) |
-| `trading session intent refused` | warn | `active_intent_exists` or `client_request_id_conflict` (`step`, `code`) |
-| `trading session stopped meanwhile` | info | `TradingSessionNotActiveError`: another writer stopped it during the attempt |
-| `trading session step replayed` | info | `createSessionIntent` answered `created: false` (`step`, `intentId`) |
-| `trading session intent created` | info | `step`, `intentId`, `action` |
-| `trading session decision not recorded` | warn | the decision's trade log row (#666, [trade-log.md](trade-log.md)) was not written: `reason: 'record_missing'` (the backend answered no record), `'record_invalid'` or `'record_mismatch'` (the source dropped the record), each once per attempt; `'insert_refused'` (the row refused inside the intent's transaction, rolled back to its savepoint; the intent is created unlinked; `step`, `errorLogFields`); or, without a reason, the autocommit insert threw (`step`, `errorLogFields`); the ending stands |
 | `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
 | `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
 | `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
-| `trading session tick` | debug | `{ runnable, attempted, created, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, the candle timer's included (#697), 0 on a tick of the interval (#696) |
+| `trading session tick` | debug | `{ runnable, attempted, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, 0 on a tick of the interval (#696) |
 
 ## The CLI
 

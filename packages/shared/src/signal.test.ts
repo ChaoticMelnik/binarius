@@ -18,7 +18,6 @@ import {
   signalDecisionV1Schema,
   signalParamsSchema,
   signalParamsV1Schema,
-  signalRecordSchema,
   storedSignalJournalEntrySchema,
   type DataRefusalReason,
   type RuleRefusalReason,
@@ -218,7 +217,7 @@ describe('POST /trading/signal contract', () => {
   });
 });
 
-describe('the decision record (#666)', () => {
+describe('the decision record (#666, removed in #835)', () => {
   const entry = {
     assetId: 101,
     interval: '15s',
@@ -239,55 +238,19 @@ describe('the decision record (#666)', () => {
   const lastTick = { price: 1.15, timestamp: 1_760_000_006_900, receivedAtMs: 1_760_000_006_950 };
   const decided = { outcome: 'decided', params, decision: DECISIONS.signal, h1: null };
 
-  it('S-rec1 the request takes record: true and nothing else', () => {
-    expect(
-      safeParseTradingSignalRequest({ assetId: 101, interval: '15s', record: true }).data,
-    ).toEqual({ assetId: 101, interval: '15s', record: true });
-    expect(
-      safeParseTradingSignalRequest({ assetId: 101, interval: '15s', record: false }).success,
-    ).toBe(false);
-  });
-
-  it.each([
-    { entry, lastTick },
-    { entry, lastTick: null },
-    {
-      entry: {
-        ...entry,
-        source: { kind: 'rest', startTime: 1, limit: 60, rows: 60, durationMs: 120 },
-      },
-      lastTick,
-    },
-  ])('S-rec2 the decided answer carries the record %#', (record) => {
-    expect(safeParseTradingSignalResponse({ ...decided, record }).data).toEqual({
-      ...decided,
-      record,
+  // #835: the worker's candle path and the record of #666 are gone; an older worker's `record`
+  // in the deploy window is an unknown key the request schema drops
+  it.each([true, false])('S-rec1′ the request drops an unknown record: %s', (record) => {
+    expect(safeParseTradingSignalRequest({ assetId: 101, interval: '15s', record }).data).toEqual({
+      assetId: 101,
+      interval: '15s',
     });
   });
 
-  it.each([
-    { entry, lastTick: { ...lastTick, price: 0 } },
-    { entry, lastTick: { ...lastTick, extra: 1 } },
-    { entry: { ...entry, source: undefined }, lastTick },
-    { entry: { ...entry, interval: '2m' }, lastTick },
-    { entry },
-  ])('S-rec2 refuses the record %#', (record) => {
-    expect(safeParseTradingSignalResponse({ ...decided, record }).success).toBe(false);
-  });
-
-  // the record is narrowed to its row's columns; the stored lines the stand reads are not
-  it.each([
-    ['nowMs 1.5', { nowMs: 1.5 }, false, true],
-    ['nowMs 0', { nowMs: 0 }, false, true],
-    ['nowMs 2^53', { nowMs: 2 ** 53 }, false, true],
-    ['digits 11', { digits: 11 }, false, true],
-    ['digits -1', { digits: -1 }, false, false],
-    ['digits 0', { digits: 0 }, true, true],
-    ['digits 10', { digits: 10 }, true, true],
-  ])('S-rec4 the record with %s parses: %s', (_label, patch, parses, stored) => {
-    const record = { entry: { ...entry, ...patch }, lastTick };
-    expect(signalRecordSchema.safeParse(record).success).toBe(parses);
-    expect(storedSignalJournalEntrySchema.safeParse(record.entry).success).toBe(stored);
+  it('S-rec2′ the decided answer refuses a record', () => {
+    expect(
+      safeParseTradingSignalResponse({ ...decided, record: { entry, lastTick } }).success,
+    ).toBe(false);
   });
 
   it('S-rec3 the stored union reads a v1 line and a v2 line written before #405', () => {

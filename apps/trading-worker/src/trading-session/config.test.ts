@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CANDLE_CLOSE_SLACK_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
-  SIGNAL_SHORTEST_INTERVAL_MS,
-  TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
 import { MAX_TIMER_MS } from '@binarius/broker-socket';
 import {
@@ -24,17 +21,13 @@ import {
 describe('the trading session constants', () => {
   it('hold the chain', () => {
     expect(TRADING_SESSION_CHAIN_HOLDS).toBe(true);
-    expect(TRADING_SESSION_PAIRS_TIMEOUT_MS + TRADING_SIGNAL_BUDGET_MS).toBeLessThan(
-      TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
-    );
+    // #835: the worker asks no signal, the pairs GET is the attempt's one backend call
+    expect(TRADING_SESSION_PAIRS_TIMEOUT_MS).toBeLessThan(TRADING_SESSION_ATTEMPT_TIMEOUT_MS);
     expect(TRADING_SESSION_TICK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
     // K-H1 (#670): an H1 session's hold, between a tick and a hold-back
     expect(TRADING_SESSION_CONFIG.h1CheckMs).toBe(TRADING_SESSION_H1_CHECK_MS);
     expect(TRADING_SESSION_TICK_MS).toBeLessThanOrEqual(TRADING_SESSION_H1_CHECK_MS);
     expect(TRADING_SESSION_H1_CHECK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
-    // #697: the session asks at the scanner's moment
-    expect(TRADING_SESSION_CONFIG.candleSlackMs).toBe(CANDLE_CLOSE_SLACK_MS);
-    expect(TRADING_SESSION_CONFIG.candleSlackMs).toBeLessThan(SIGNAL_SHORTEST_INTERVAL_MS);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(SESSION_MAX_DURATION_MS);
     // the deadline is the shared one the start route and the CLI check against
     expect(TRADING_SESSION_CONFIG.maxDurationMs).toBe(SESSION_MAX_DURATION_MS);
@@ -51,12 +44,11 @@ describe('the trading session constants', () => {
   });
 
   it.each<[string, Partial<SessionOrchestratorConfig>]>([
-    ['an attempt that cannot hold both calls', { attemptTimeoutMs: 8_000 }],
-    ['a hold-back no longer than a tick', { retryMs: TRADING_SESSION_TICK_MS }],
     [
-      'a candle slack of a whole shortest candle',
-      { candleSlackMs: SIGNAL_CHART_INTERVAL_MS['5s'] },
+      'an attempt no longer than the pairs GET',
+      { attemptTimeoutMs: TRADING_SESSION_PAIRS_TIMEOUT_MS },
     ],
+    ['a hold-back no longer than a tick', { retryMs: TRADING_SESSION_TICK_MS }],
     [
       'a hold-back as long as the deadline, past 20 candles of 5 s (#637)',
       { retryMs: SESSION_MAX_DURATION_MS },
@@ -96,12 +88,9 @@ describe('the trading session constants', () => {
     );
   });
 
-  it('refuses a pairs timeout that leaves no room for the signal call', () => {
+  it('refuses a pairs timeout as long as the attempt', () => {
     expect(
-      sessionOrchestratorConfigHolds(
-        TRADING_SESSION_CONFIG,
-        TRADING_SESSION_ATTEMPT_TIMEOUT_MS - TRADING_SIGNAL_BUDGET_MS,
-      ),
+      sessionOrchestratorConfigHolds(TRADING_SESSION_CONFIG, TRADING_SESSION_ATTEMPT_TIMEOUT_MS),
     ).toBe(false);
   });
 });

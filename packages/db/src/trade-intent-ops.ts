@@ -65,7 +65,7 @@ export function uniqueViolation(error: unknown): string | undefined {
 }
 
 // The session named by createSessionIntent is not an active session of this account and mode
-// (stopped between the orchestrator's scan and the insert, or named with other terms; the
+// (stopped between the driver's read and the insert, or named with other terms; the
 // session/account/mode FK would otherwise refuse the insert with a raw 23503). Not a TradeIntentErrorCode: the route never passes a
 // session, so its callers never see it.
 export class TradingSessionNotActiveError extends Error {
@@ -75,8 +75,9 @@ export class TradingSessionNotActiveError extends Error {
   }
 }
 
-// the session an intent belongs to (trade_intents.trading_session_id); only the orchestrator
-// passes one, with the decision the intent is created from (#666; null: none was recorded)
+// the session an intent belongs to (trade_intents.trading_session_id); only createSessionIntent
+// (the H1 driver's) passes one, with the decision the intent is created from (#666; null: none was
+// recorded)
 export interface IntentSession {
   id: string;
   decision: SignalDecisionInput | null;
@@ -88,7 +89,7 @@ export interface IntentSession {
 export interface CreateTradeIntentOptions {
   // Only POST /trading/intents passes it (#297, #326, stated): the stake's bounds against the
   // account's stored snapshot, by the intent's mode (demo_available or real_available). The
-  // orchestrator's session intents rely on the sizer (Rule 23); a future non-session creator of
+  // driver's session intents rely on the sizer (Rule 23); a future non-session creator of
   // intents must pass it too.
   checkStake?: true;
   // the process runs DEMO_ONLY (#396): a real intent is refused. Both creators pass it
@@ -231,7 +232,7 @@ async function createInTransaction(
     throw new TradeIntentError(accountErrorFor(fresh?.status));
   }
 
-  // a session stopped after the orchestrator's scan gets no intent; the lock holds a concurrent
+  // a session stopped after the driver's read gets no intent; the lock holds a concurrent
   // stop until this transaction commits
   if (session !== undefined) {
     const active = await tx

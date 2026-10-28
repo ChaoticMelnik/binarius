@@ -9,7 +9,6 @@ import { MockTradeOutcome, startMockBroker, type MockBroker } from '@binarius/mo
 import {
   AccountHaltReason,
   buildH1SessionSettings,
-  CANDLE_CLOSE_SLACK_MS,
   decimalStringSchema,
   H1_R1_PARAMS,
   isClosedTrade,
@@ -18,7 +17,6 @@ import {
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   sessionNoSignalTimeoutMs,
-  SIGNAL_CHART_INTERVAL_MS,
   TradeAction,
   TradeIntentFailureReason,
   TradeIntentStatus,
@@ -44,9 +42,7 @@ import {
   openTrading,
   readSessionHistory,
   readTradingSessionView,
-  setTradingMode,
   settleClosedTrades,
-  signalDecisions,
   startReconciling,
   stopTradingSession,
   takeIntent,
@@ -75,16 +71,13 @@ import { createRestReconciler } from '../intents/rest-reconciler';
 import { createSettlementCatchup } from '../intents/settlement-catchup';
 import { sweepStaleSubmitting } from '../intents/sweeper';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
-import {
-  BackendUnavailable,
-  type PairsOutcome,
-  type PairsSource,
-  type SignalOutcome,
-  type SignalSource,
-} from './backend';
+import type { PairsOutcome, PairsSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 import { createSessionOrchestrator } from './orchestrator';
-import { eurUsd, fetchFailedAnswer, noSignalAnswer, RECORD_NOW_MS, signalAnswer } from './testing';
+import { eurUsd } from './testing';
+
+// Since #835 every session the orchestrator runs is an H1 session (settings v5): it stops or holds
+// it, the trades come from the backend's H1 driver (#707) - here from createSessionIntent directly.
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -125,13 +118,13 @@ const logger = pino(
 );
 const linesOf = (sessionId: string) => lines.filter((line) => line.sessionId === sessionId);
 const msgsOf = (sessionId: string) => linesOf(sessionId).map((line) => line.msg);
+const DRIVER = 'trading session waits for the H1 driver';
 
 const CONFIG: SessionOrchestratorConfig = {
   tickMs: 5_000,
   batchSize: 50,
   attemptTimeoutMs: 2_000,
   retryMs: 60_000,
-  candleSlackMs: 5_000,
   h1CheckMs: 5_000,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
@@ -142,53 +135,78 @@ let clock = Date.now();
 const now = () => clock;
 const advance = (ms: number) => (clock += ms);
 
-const fresh = (pairs = [eurUsd()]): PairsOutcome => ({
+// the mock's AAPL takes 5 s trades
+const h1Pair = (patch: Parameters<typeof eurUsd>[0] = {}) =>
+  eurUsd({ id: 202, symbol: 'AAPL', minTimeframe: 5, payout: 94, ...patch });
+
+const h1Settings = (
+  cycles = 10,
+  strategy: SessionStakeStrategy = SessionStakeStrategy.Martingale,
+  assetId = 202,
+) => {
+  const built = buildH1SessionSettings({
+    assetId,
+    cycles,
+    stake: { baseStake: decimalStringSchema.parse('1.00'), stakeScale: 2 },
+    strategy,
+  });
+  if (!built.success) throw new Error('H1 fixture settings do not parse');
+  return built.data;
+};
+
+const fresh = (pairs = [h1Pair()]): PairsOutcome => ({
   ok: true,
   catalog: { pairs, fetchedAt: clock, ageMs: 0, fresh: true },
 });
 
-type SignalAnswer =
-  SignalOutcome | ((signal?: AbortSignal) => SignalOutcome | Promise<SignalOutcome>);
+type PairsAnswer = PairsOutcome | ((signal?: AbortSignal) => PairsOutcome | Promise<PairsOutcome>);
 
-function signalsOf(answer: SignalAnswer = { ok: true, response: signalAnswer(TradeAction.Up) }) {
-  const source: SignalSource & { calls: { assetId: number; interval: string }[] } = {
-    calls: [],
-    evaluate: async (request, options) => {
-      source.calls.push(request);
+// a catalog source that counts its reads
+function pairsOf(answer: PairsAnswer = fresh()) {
+  const source: PairsSource & { calls: number } = {
+    calls: 0,
+    read: async (options) => {
+      source.calls += 1;
       return typeof answer === 'function' ? answer(options?.signal) : answer;
     },
   };
   return source;
 }
 
-const pairsOf = (outcome: PairsOutcome = fresh()): PairsSource => ({
-  read: () => Promise.resolve(outcome),
-});
+// a catalog read held until release(); an abort answers at once, as the backend client does
+function gatedPairs() {
+  let release = () => {};
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const pairs = pairsOf(
+    (signal) =>
+      new Promise<PairsOutcome>((resolve) => {
+        void released.then(() => resolve(fresh()));
+        signal?.addEventListener('abort', () =>
+          resolve({ ok: false, reason: 'backend_unreachable' }),
+        );
+      }),
+  );
+  return { pairs, release };
+}
 
 function orchestratorOf({
-  signals = signalsOf(),
   pairs = pairsOf(),
   db = tmp.db,
   config = {},
-  demoOnly = false,
   clockOf = now,
   log = logger,
 }: {
-  signals?: SignalSource;
   pairs?: PairsSource;
   db?: Db;
   config?: Partial<SessionOrchestratorConfig>;
-  demoOnly?: boolean;
   clockOf?: () => number;
   log?: pino.Logger;
 } = {}) {
   return createSessionOrchestrator({
     db,
-    signals,
     pairs,
     logger: log,
     config: { ...CONFIG, ...config },
-    demoOnly,
     now: clockOf,
   });
 }
@@ -237,7 +255,7 @@ async function seedSession({
   demo = '10000.00',
   real = '0.00',
   mode = TradeMode.Demo,
-  settings = sessionSettings(),
+  settings = h1Settings(),
   startedAt,
   snapshot = true,
   tradingMode = mode,
@@ -271,6 +289,7 @@ async function seedSession({
   });
   return { ...user, brokerUserId: id, brokerAccountId, accessToken, session };
 }
+type Seed = Awaited<ReturnType<typeof seedSession>>;
 
 // #327: a real session runs the same way as a demo one; the user is in the session's mode
 const MODES = [TradeMode.Demo, TradeMode.Real] as const;
@@ -282,16 +301,18 @@ const intentsOf = (sessionId: string) =>
     .where(eq(tradeIntents.tradingSessionId, sessionId))
     .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
 
-// the session's trade log rows (#666), in recording order
-const decisionsOf = (sessionId: string) =>
-  tmp.db
-    .select()
-    .from(signalDecisions)
-    .where(eq(signalDecisions.tradingSessionId, sessionId))
-    .orderBy(asc(signalDecisions.recordedAt), asc(signalDecisions.id));
-
 const sessionRow = async (id: string) =>
   (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, id)))[0]!;
+
+const stopOf = async (id: string) => {
+  const row = await sessionRow(id);
+  return { status: row.status, stopReason: row.stopReason };
+};
+const ACTIVE = { status: TradingSessionStatus.Active, stopReason: null };
+const stoppedWith = (stopReason: TradingSessionStopReason) => ({
+  status: TradingSessionStatus.Stopped,
+  stopReason,
+});
 
 const reservedOf = async (userId: string) =>
   (await tmp.db.select({ v: users.tokenReserved }).from(users).where(eq(users.id, userId)))[0]!.v;
@@ -338,243 +359,97 @@ async function settle(
   });
 }
 
-// one trade of the session from the tick to its settlement
-async function tradeOnce(
-  orchestrator: ReturnType<typeof orchestratorOf>,
-  seed: { brokerAccountId: string; accessToken: string; session: { id: string } },
-  outcome: MockTradeOutcome = MockTradeOutcome.Win,
+// the session's intent of `step` as the H1 driver creates it (createSessionIntent, #707)
+async function driverIntent(
+  seed: Seed,
+  step: number,
+  { amount = '1.00', submitDeadlineAt }: { amount?: string; submitDeadlineAt?: Date } = {},
 ) {
-  await orchestrator.tick();
-  const intents = await intentsOf(seed.session.id);
-  const intent = intents.at(-1)!;
-  expect(intent.status).toBe(TradeIntentStatus.Queued);
+  const { intent } = await createSessionIntent(tmp.db, {
+    sessionId: seed.session.id,
+    step,
+    telegramUserId: seed.telegramUserId,
+    brokerAccountId: seed.brokerAccountId,
+    mode: seed.session.mode,
+    assetId: 202,
+    amount: decimalStringSchema.parse(amount),
+    action: TradeAction.Up,
+    durationSec: 5,
+    decision: null,
+    ...(submitDeadlineAt === undefined ? {} : { submitDeadlineAt }),
+  });
+  return intent;
+}
+
+// one trade of the driver from its intent to its settlement
+async function driverTrade(
+  seed: Seed,
+  step: number,
+  outcome: MockTradeOutcome = MockTradeOutcome.Win,
+  amount?: string,
+) {
+  const intent = await driverIntent(seed, step, amount === undefined ? {} : { amount });
   expect(await processIntent(intent.id)).toBe('accepted');
   await settle(seed, intent.id, outcome);
   return intent;
 }
 
-describe('the attempt and the sequence (#287)', () => {
-  it.each(MODES)('E1 trades five times one after another, then completes (%s)', async (mode) => {
-    const seed = await seedSession({ mode, real: '50.00' });
-    const startBalances = broker.users.get(seed.brokerUserId);
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({ signals });
-
-    await orchestrator.tick();
-    let intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(1);
-    expect(intents[0]).toMatchObject({
-      status: TradeIntentStatus.Queued,
-      amount: '1.00000000',
-      action: TradeAction.Up,
-      mode,
-      clientRequestId: `session:${seed.session.id}:1`,
-    });
-    // a live intent holds the session: no second one, accepted or not
-    await orchestrator.tick();
-    expect(await processIntent(intents[0]!.id)).toBe('accepted');
-    await orchestrator.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    await settle(seed, intents[0]!.id);
-
-    for (let step = 2; step <= 5; step += 1) {
-      const intent = await tradeOnce(orchestrator, seed);
-      expect(intent.clientRequestId).toBe(`session:${seed.session.id}:${step}`);
-    }
-    intents = await intentsOf(seed.session.id);
-    expect(intents.map((i) => i.status)).toEqual(Array(5).fill(TradeIntentStatus.Settled));
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
-
-    await orchestrator.tick();
-    const row = await sessionRow(seed.session.id);
-    expect(row).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
-    expect(row.endedAt).not.toBeNull();
-    expect((await intentsOf(seed.session.id)).map((intent) => intent.mode)).toEqual(
-      Array(5).fill(mode),
-    );
-    // the broker's side: five trades of the session's mode, its balance moved by five wins
-    expect(broker.trades.list(seed.brokerUserId).map((trade) => trade.is_demo)).toEqual(
-      Array(5).fill(mode === TradeMode.Demo),
-    );
-    const endBalances = broker.users.get(seed.brokerUserId);
-    const other = mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real;
-    expect(endBalances[mode]).not.toEqual(startBalances[mode]);
-    expect(endBalances[other]).toEqual(startBalances[other]);
-    expect(
-      (await readTradingSessionView(tmp.db, seed.session.id, seed.telegramUserId))?.trades,
-    ).toMatchObject({ settled: 5, won: 5 });
-    expect(signals.calls).toEqual(Array(5).fill({ assetId: 101, interval: '1m' }));
-    expect(lines.filter((line) => line.code === 'active_intent_exists')).toEqual([]);
-    await orchestrator.stop();
+const demoBalance = (brokerAccountId: string, available: string) =>
+  applyBalanceEvent(tmp.db, {
+    brokerAccountId,
+    mode: TradeMode.Demo,
+    balance: balance(available),
   });
 
-  // #313: the demo's short trades on 202 (the mock pair with min_timeframe 5), analysed on their
-  // own sub-minute candle
-  const aapl = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
-  it.each([
-    [5, '5s'],
-    [15, '15s'],
-  ])(
-    'E1b a %i s session asks %s candles and trades step after step',
-    async (durationSec, interval) => {
+describe('the attempt and the sequence (#287)', () => {
+  it.each(MODES)(
+    "E1′ holds between the driver's five trades, then completes (%s)",
+    async (mode) => {
       const seed = await seedSession({
-        settings: sessionSettings({ assetId: 202, durationSec, trades: 2 }),
+        mode,
+        real: '50.00',
+        settings: h1Settings(5, SessionStakeStrategy.Fixed),
       });
-      const signals = signalsOf();
-      const orchestrator = orchestratorOf({ signals, pairs: pairsOf(fresh([aapl])) });
-      const first = await tradeOnce(orchestrator, seed);
-      expect(first).toMatchObject({ assetId: 202, durationSec });
-      const second = await tradeOnce(orchestrator, seed);
-      expect(second.clientRequestId).toBe(`session:${seed.session.id}:2`);
+      const startBalances = broker.users.get(seed.brokerUserId);
+      const pairs = pairsOf();
+      const orchestrator = orchestratorOf({ pairs });
+      const driverLines = () => msgsOf(seed.session.id).filter((msg) => msg === DRIVER).length;
+
+      for (let step = 1; step <= 5; step += 1) {
+        await orchestrator.tick();
+        expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+        expect(driverLines()).toBe(step);
+        const intent = await driverIntent(seed, step);
+        // a live intent keeps the session out of the scan: no attempt until it ends
+        advance(CONFIG.h1CheckMs);
+        await orchestrator.tick();
+        expect(driverLines()).toBe(step);
+        expect(await processIntent(intent.id)).toBe('accepted');
+        await settle(seed, intent.id);
+        advance(CONFIG.h1CheckMs);
+      }
       await orchestrator.tick();
-      expect((await sessionRow(seed.session.id)).stopReason).toBe(
-        TradingSessionStopReason.Completed,
+      const row = await sessionRow(seed.session.id);
+      expect(row).toMatchObject(stoppedWith(TradingSessionStopReason.Completed));
+      expect(row.endedAt).not.toBeNull();
+      expect((await intentsOf(seed.session.id)).map((intent) => intent.mode)).toEqual(
+        Array(5).fill(mode),
       );
-      expect(signals.calls).toEqual(Array(2).fill({ assetId: 202, interval }));
+      // the broker's side: five trades of the session's mode, its balance moved by five wins
+      expect(broker.trades.list(seed.brokerUserId).map((trade) => trade.is_demo)).toEqual(
+        Array(5).fill(mode === TradeMode.Demo),
+      );
+      const endBalances = broker.users.get(seed.brokerUserId);
+      const other = mode === TradeMode.Real ? TradeMode.Demo : TradeMode.Real;
+      expect(endBalances[mode]).not.toEqual(startBalances[mode]);
+      expect(endBalances[other]).toEqual(startBalances[other]);
+      expect(
+        (await readTradingSessionView(tmp.db, seed.session.id, seed.telegramUserId))?.trades,
+      ).toMatchObject({ settled: 5, won: 5 });
+      expect(pairs.calls).toBe(5);
       await orchestrator.stop();
     },
   );
-
-  it('E4b no_signal on a 5 s session waits for the next 5 s boundary plus the slack', async () => {
-    const seed = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
-    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
-    const orchestrator = orchestratorOf({
-      signals,
-      pairs: pairsOf(fresh([aapl])),
-      config: { candleSlackMs: CANDLE_CLOSE_SLACK_MS },
-    });
-    try {
-      const step = 5_000;
-      clock = Math.floor(Date.now() / step) * step + 1_000;
-      await orchestrator.tick();
-      expect(signals.calls).toEqual([{ assetId: 202, interval: '5s' }]);
-      // the next boundary is 4 s away, plus the 0.5 s slack: not rounded up to a 5 s tick (#697)
-      advance(4_400);
-      await orchestrator.tick();
-      expect(signals.calls).toHaveLength(1);
-      advance(100);
-      await orchestrator.tick();
-      expect(signals.calls).toHaveLength(2);
-      expect(await intentsOf(seed.session.id)).toEqual([]);
-    } finally {
-      await orchestrator.stop();
-    }
-  });
-
-  it('E2 a rejected trade is retried once; a second rejection in a row stops the session', async () => {
-    // two trades planned: a rejected intent is neither a settled trade nor the end of the session
-    const once = await seedSession({ settings: sessionSettings({ trades: 2 }) });
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    broker.rest.failNext('openTrade', { status: 400 });
-    expect(await processIntent((await intentsOf(once.session.id))[0]!.id)).toBe('rejected');
-    const second = await tradeOnce(orchestrator, once);
-    expect(second.clientRequestId).toBe(`session:${once.session.id}:2`);
-    await orchestrator.tick();
-    expect((await sessionRow(once.session.id)).status).toBe(TradingSessionStatus.Active);
-    expect((await intentsOf(once.session.id)).map((i) => i.clientRequestId)).toEqual([
-      `session:${once.session.id}:1`,
-      `session:${once.session.id}:2`,
-      `session:${once.session.id}:3`,
-    ]);
-
-    const twice = await seedSession();
-    await orchestrator.tick();
-    for (let step = 1; step <= 2; step += 1) {
-      const intents = await intentsOf(twice.session.id);
-      broker.rest.failNext('openTrade', { status: 400 });
-      expect(await processIntent(intents.at(-1)!.id)).toBe('rejected');
-      await orchestrator.tick();
-    }
-    expect(await sessionRow(twice.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.RejectedTwice,
-    });
-    expect(await intentsOf(twice.session.id)).toHaveLength(2);
-    await orchestrator.stop();
-  });
-
-  it("E3 the sizer's stop ends the session with its code and no intent", async () => {
-    const seed = await seedSession({
-      settings: sessionSettings({ stake: { baseStake: '0.5' as DecimalString, stakeScale: 1 } }),
-    });
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.StakeStop,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 40, stopReason: 'below_min_trade_amount' }),
-    );
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    await orchestrator.stop();
-  });
-
-  it('E4 no_signal waits for the next candle and moves last_decision_at', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
-    const orchestrator = orchestratorOf({ signals });
-    const minute = 60_000;
-    clock = Math.floor(Date.now() / minute) * minute + 10_000;
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    expect((await sessionRow(seed.session.id)).lastDecisionAt).not.toBeNull();
-    advance(30_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    // the next boundary is 50 s away, plus the 5 s slack
-    advance(26_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
-
-  it('E5 fetch_failed holds for retryAfterSec, clamped to one tick; the backend down for retryMs', async () => {
-    const seed = await seedSession();
-    let signals = signalsOf({ ok: true, response: fetchFailedAnswer(7) });
-    let orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    advance(6_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    advance(2_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
-    await orchestrator.stop();
-
-    signals = signalsOf({ ok: true, response: fetchFailedAnswer(0) });
-    orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    advance(1_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    advance(5_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
-    await orchestrator.stop();
-
-    signals = signalsOf({ ok: false, reason: 'backend_unreachable' });
-    orchestrator = orchestratorOf({ signals });
-    const before = (await sessionRow(seed.session.id)).lastDecisionAt!;
-    await orchestrator.tick();
-    advance(59_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    advance(2_000);
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
-    expect((await sessionRow(seed.session.id)).lastDecisionAt!.getTime()).toBeGreaterThan(
-      before.getTime(),
-    );
-    expect(msgsOf(seed.session.id)).toContain('trading session signal unavailable');
-    await orchestrator.stop();
-  });
 
   it.each(MODES)(
     'E6 a halted account stops the session before any backend call (%s)',
@@ -584,14 +459,13 @@ describe('the attempt and the sequence (#287)', () => {
         .update(brokerAccounts)
         .set({ tradingHalted: true, haltedReason: 'trade_mismatch' })
         .where(eq(brokerAccounts.id, seed.brokerAccountId));
-      const signals = signalsOf();
-      const orchestrator = orchestratorOf({ signals });
+      const pairs = pairsOf();
+      const orchestrator = orchestratorOf({ pairs });
       await orchestrator.tick();
-      expect(await sessionRow(seed.session.id)).toMatchObject({
-        status: TradingSessionStatus.Stopped,
-        stopReason: TradingSessionStopReason.ManualReview,
-      });
-      expect(signals.calls).toHaveLength(0);
+      expect(await stopOf(seed.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.ManualReview),
+      );
+      expect(pairs.calls).toBe(0);
       expect(linesOf(seed.session.id)).toContainEqual(
         expect.objectContaining({ level: 50, msg: 'trading session stopped for manual review' }),
       );
@@ -607,24 +481,10 @@ describe('the attempt and the sequence (#287)', () => {
         real: '50.00',
         startedAt: new Date(Date.now() - 61 * 60_000),
       });
-      await createSessionIntent(tmp.db, {
-        sessionId: seed.session.id,
-        step: 1,
-        telegramUserId: seed.telegramUserId,
-        brokerAccountId: seed.brokerAccountId,
-        mode,
-        assetId: 101,
-        amount: '1' as DecimalString,
-        action: TradeAction.Up,
-        durationSec: 60,
-        decision: null,
-      });
+      await driverIntent(seed, 1);
       const orchestrator = orchestratorOf();
       await orchestrator.tick();
-      expect(await sessionRow(seed.session.id)).toMatchObject({
-        status: TradingSessionStatus.Stopped,
-        stopReason: TradingSessionStopReason.Timeout,
-      });
+      expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Timeout));
       expect(linesOf(seed.session.id)).toContainEqual(
         expect.objectContaining({ level: 40, msg: 'trading session stopped', reason: 'timeout' }),
       );
@@ -632,16 +492,14 @@ describe('the attempt and the sequence (#287)', () => {
     },
   );
 
-  it('E7b sessions past the deadline beyond the sweep cap get no trade (review M1)', async () => {
+  it('E7b sessions past the deadline beyond the sweep cap are never attempted (review M1)', async () => {
     const startedAt = new Date(Date.now() - 61 * 60_000);
     const first = await seedSession({ startedAt });
     const second = await seedSession({ startedAt });
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({ signals, config: { batchSize: 1 } });
+    const pairs = pairsOf();
+    const orchestrator = orchestratorOf({ pairs, config: { batchSize: 1 } });
     await orchestrator.tick();
-    expect(await intentsOf(first.session.id)).toEqual([]);
-    expect(await intentsOf(second.session.id)).toEqual([]);
-    expect(signals.calls).toHaveLength(0);
+    expect(pairs.calls).toBe(0);
     // the capped sweep stopped one; the scan never listed the other, the next sweep stops it
     const statuses = [
       (await sessionRow(first.session.id)).status,
@@ -650,86 +508,60 @@ describe('the attempt and the sequence (#287)', () => {
     expect(statuses).toEqual([TradingSessionStatus.Active, TradingSessionStatus.Stopped]);
     await orchestrator.tick();
     for (const seed of [first, second]) {
-      expect(await sessionRow(seed.session.id)).toMatchObject({
-        status: TradingSessionStatus.Stopped,
-        stopReason: TradingSessionStopReason.Timeout,
-      });
+      expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Timeout));
     }
     await orchestrator.stop();
   });
 
-  it('E7c a deadline that passes after the scan stops the session before any backend call', async () => {
+  it('E7c′ a deadline that passes after the scan stops the session before its catalog read', async () => {
     const earlier = await seedSession();
     const later = await seedSession();
     // on the database clock: the deadline 1.5 s ahead, passing while the first session's attempt
-    // waits on the signal, well inside its attempt timeout
+    // waits on the catalog, well inside its attempt timeout
     await tmp.db
       .update(tradingSessions)
       .set({
         startedAt: sql`now() - make_interval(secs => ${(SESSION_MAX_DURATION_MS - 1_500) / 1000})`,
       })
       .where(eq(tradingSessions.id, later.session.id));
-    const signals = signalsOf(async () => {
+    const pairs = pairsOf(async () => {
       await until(
         'the later deadline on the database clock',
         async () =>
           (await readSessionHistory(tmp.db, later.session.id, {
-            noSignalTimeoutMs: sessionNoSignalTimeoutMs(60),
+            noSignalTimeoutMs: sessionNoSignalTimeoutMs(5),
             maxDurationMs: SESSION_MAX_DURATION_MS,
           }))!.expired,
       );
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
+      return fresh();
     });
-    const orchestrator = orchestratorOf({ signals, config: { attemptTimeoutMs: 5_000 } });
+    const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 5_000 } });
     await orchestrator.tick();
     // both were listed by the scan, so the stop below is the attempt's, not the sweep's
     expect(lines.filter((line) => line.msg === 'trading session tick').at(-1)).toMatchObject({
       runnable: 2,
       attempted: 2,
-      created: 1,
+      held: 1,
       stopped: 1,
     });
-    expect(signals.calls).toHaveLength(1);
-    expect(await intentsOf(earlier.session.id)).toHaveLength(1);
-    expect(await sessionRow(later.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Timeout,
-    });
+    expect(pairs.calls).toBe(1);
+    expect(await stopOf(earlier.session.id)).toEqual(ACTIVE);
+    expect(await stopOf(later.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Timeout));
     expect(linesOf(later.session.id)).toContainEqual(
       expect.objectContaining({ msg: 'trading session stopped', reason: 'timeout' }),
     );
-    expect(await intentsOf(later.session.id)).toEqual([]);
     await orchestrator.stop();
   });
 
-  it('E8 a new orchestrator continues from the database: step 3 after two settled', async () => {
-    const seed = await seedSession();
-    const first = orchestratorOf();
-    await tradeOnce(first, seed);
-    await tradeOnce(first, seed);
-    await first.stop();
-    const second = orchestratorOf();
-    await second.tick();
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(3);
-    expect(intents[2]!.clientRequestId).toBe(`session:${seed.session.id}:3`);
-    expect(
-      lines.filter(
-        (l) => l.sessionId === seed.session.id && l.msg === 'trading session step replayed',
-      ),
-    ).toEqual([]);
-    await second.stop();
-  });
-
-  it('E10 stop() during an attempt ends it before the backend answers and writes nothing', async () => {
+  it('E10′ stop() during an attempt ends it before the catalog answers and writes nothing', async () => {
     const seed = await seedSession();
     let answered = false;
-    const signals = signalsOf(
+    const pairs = pairsOf(
       (signal) =>
-        new Promise<SignalOutcome>((resolve) => {
+        new Promise<PairsOutcome>((resolve) => {
           const timer = setTimeout(() => {
             answered = true;
-            resolve({ ok: true, response: signalAnswer(TradeAction.Up) });
+            resolve(fresh());
           }, 2_000);
           signal?.addEventListener('abort', () => {
             clearTimeout(timer);
@@ -737,849 +569,151 @@ describe('the attempt and the sequence (#287)', () => {
           });
         }),
     );
-    const orchestrator = orchestratorOf({ signals, config: { attemptTimeoutMs: 5_000 } });
+    const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 5_000 } });
     orchestrator.start();
-    await until('the signal call', () => signals.calls.length === 1);
+    await until('the catalog read', () => pairs.calls === 1);
     await orchestrator.stop();
     expect(answered).toBe(false);
     expect(await sessionRow(seed.session.id)).toMatchObject({
       status: TradingSessionStatus.Active,
       lastDecisionAt: null,
     });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
     expect(linesOf(seed.session.id).filter((line) => (line.level as number) >= 50)).toEqual([]);
   });
 
-  it('E11 a worker clock behind started_at still sizes the first stake', async () => {
+  it('E11′ a worker clock behind started_at still sizes the first stake: the session is held', async () => {
     const seed = await seedSession();
     clock = seed.session.startedAt.getTime() - 5_000;
     const orchestrator = orchestratorOf();
     await orchestrator.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
     expect(linesOf(seed.session.id).filter((line) => (line.level as number) >= 50)).toEqual([]);
     await orchestrator.stop();
   });
 });
 
 describe('the endings of an attempt (#287)', () => {
-  const stopsWith = async (sessionId: string, reason: TradingSessionStopReason) =>
-    expect(await sessionRow(sessionId)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: reason,
-    });
-
-  it('E9a a real session is sized against the real balance', async () => {
-    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
+  it('E9a′ a real session is sized against the real balance', async () => {
+    const funded = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
+    const short = await seedSession({ mode: TradeMode.Real, real: '0.50', demo: '10000.00' });
     const orchestrator = orchestratorOf();
     await orchestrator.tick();
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(1);
-    expect(intents[0]).toMatchObject({ mode: TradeMode.Real, amount: '1.00000000' });
-    await orchestrator.stop();
-  });
-
-  it('F1 DEMO_ONLY stops a real session as account_unavailable and creates nothing (#396)', async () => {
-    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
-    const orchestrator = orchestratorOf({ demoOnly: true });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.AccountUnavailable,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(linesOf(seed.session.id)).toContainEqual(
+    expect(await stopOf(funded.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(funded.session.id)).toContain(DRIVER);
+    expect(await stopOf(short.session.id)).toEqual(stoppedWith(TradingSessionStopReason.StakeStop));
+    expect(linesOf(short.session.id)).toContainEqual(
       expect.objectContaining({
         msg: 'trading session stopped',
-        reason: 'account_unavailable',
-        code: 'demo_only',
+        stopReason: 'insufficient_balance',
       }),
     );
-    await orchestrator.stop();
-  });
-
-  it('E9i a real session of a user in demo mode stops as account_unavailable (#121)', async () => {
-    const seed = await seedSession({
-      mode: TradeMode.Real,
-      real: '50.00',
-      demo: '0.00',
-      tradingMode: TradeMode.Demo,
-    });
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.AccountUnavailable,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({
-        msg: 'trading session stopped',
-        reason: 'account_unavailable',
-        code: 'real_mode_off',
-      }),
-    );
-    await orchestrator.stop();
-  });
-
-  // #327: the switch stops the session itself; the attempt's reserve then meets real_mode_off,
-  // whose stop finds the row stopped already and logs nothing
-  it('E9j a switch to demo during the attempt of a real session stops it as user_stopped', async () => {
-    const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
-    const signals = signalsOf(async () => {
-      await setTradingMode(tmp.db, BigInt(seed.telegramUserId), TradeMode.Demo);
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
-    });
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.UserStopped,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(msgsOf(seed.session.id)).not.toContain('trading session stopped');
-    await orchestrator.stop();
-  });
-
-  it('F2 DEMO_ONLY leaves a demo session trading (#396)', async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({ demoOnly: true });
-    await orchestrator.tick();
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(1);
-    expect(intents[0]).toMatchObject({ mode: TradeMode.Demo, status: TradeIntentStatus.Queued });
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
-    await orchestrator.stop();
-  });
-
-  it('E9b a halt committed during the attempt stops it as manual_review', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf(async () => {
-      await tmp.db
-        .update(brokerAccounts)
-        .set({ tradingHalted: true, haltedReason: 'trade_mismatch' })
-        .where(eq(brokerAccounts.id, seed.brokerAccountId));
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
-    });
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    await stopsWith(seed.session.id, TradingSessionStopReason.ManualReview);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 50, code: 'account_halted' }),
-    );
-    expect(await intentsOf(seed.session.id)).toEqual([]);
     await orchestrator.stop();
   });
 
   it.each<[string, SeedOptions, TradingSessionStopReason]>([
-    ['settings that fail v1', { settings: {} }, TradingSessionStopReason.InvalidSettings],
+    ['settings that fail the schema', { settings: {} }, TradingSessionStopReason.InvalidSettings],
     ['no balance snapshot', { snapshot: false }, TradingSessionStopReason.BalanceUnavailable],
-    ['a user without tokens', { tokens: 0n }, TradingSessionStopReason.AccountUnavailable],
     [
       'a pair missing from the catalog',
-      { settings: sessionSettings({ assetId: 999 }) },
+      { settings: h1Settings(10, SessionStakeStrategy.Martingale, 999) },
       TradingSessionStopReason.PairUnavailable,
     ],
   ])('E9c %s stops the session', async (_label, options, reason) => {
     const seed = await seedSession(options);
     const orchestrator = orchestratorOf();
     await orchestrator.tick();
-    await stopsWith(seed.session.id, reason);
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(reason));
     expect(await intentsOf(seed.session.id)).toEqual([]);
     await orchestrator.stop();
   });
 
-  it('E9d a pair that refuses the duration stops the session as pair_unavailable', async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({ pairs: pairsOf(fresh([eurUsd({ minTimeframe: 120 })])) });
-    await orchestrator.tick();
-    await stopsWith(seed.session.id, TradingSessionStopReason.PairUnavailable);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
+  // #835: the candle path is gone; an active v1-v3 row has no trader and stops before any read
+  const v3 = () => {
+    const built = buildSessionSettingsV3({
+      assetId: 101,
+      durationSec: 60,
+      cycles: 2,
+      stake: { baseStake: '1' as DecimalString, stakeScale: 2 },
+      strategy: SessionStakeStrategy.Martingale,
+    });
+    if (!built.success) throw new Error('the v3 fixture settings fail the schema');
+    return built.data;
+  };
+  it.each<[number, () => unknown]>([
+    [1, () => sessionSettings()],
+    [
+      2,
+      () => {
+        const { assetId, durationSec, stake } = v3();
+        return { version: 2, assetId, durationSec, trades: 2, stake };
+      },
+    ],
+    [3, v3],
+  ])(
+    'V1 an active settings v%i row stops invalid_settings before any read',
+    async (version, settings) => {
+      const old = await seedSession({ settings: settings() });
+      const pairs = pairsOf();
+      const orchestrator = orchestratorOf({ pairs });
+      await orchestrator.tick();
+      expect(await stopOf(old.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.InvalidSettings),
+      );
+      expect(linesOf(old.session.id)).toContainEqual(
+        expect.objectContaining({
+          msg: 'trading session stopped',
+          reason: 'invalid_settings',
+          version,
+        }),
+      );
+      expect(await intentsOf(old.session.id)).toEqual([]);
+      expect(pairs.calls).toBe(0);
+      // the contrast: an H1 row in the same orchestrator reads the catalog and is held
+      const h1 = await seedSession();
+      advance(CONFIG.h1CheckMs);
+      await orchestrator.tick();
+      expect(await stopOf(h1.session.id)).toEqual(ACTIVE);
+      expect(msgsOf(h1.session.id)).toContain(DRIVER);
+      expect(pairs.calls).toBe(1);
+      await orchestrator.stop();
+    },
+  );
 
-  it('E9e a closed pair holds the session until it opens', async () => {
+  it('E9e′ a closed pair holds the session until it opens', async () => {
     const seed = await seedSession();
-    const signals = signalsOf();
-    const pairs = pairsOf(fresh([eurUsd({ scheduledUntil: clock + 30_000 })]));
-    const orchestrator = orchestratorOf({ signals, pairs });
+    const pairs = pairsOf(fresh([h1Pair({ scheduledUntil: clock + 30_000 })]));
+    const orchestrator = orchestratorOf({ pairs });
     await orchestrator.tick();
+    expect(msgsOf(seed.session.id)).toContain('trading session waits for the pair to open');
     advance(25_000);
     await orchestrator.tick();
-    expect(signals.calls).toHaveLength(0);
+    expect(pairs.calls).toBe(1);
     advance(5_000);
     await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
+    expect(pairs.calls).toBe(2);
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     await orchestrator.stop();
   });
 
   it('E9f a stale or unavailable catalog holds the session, it does not stop it', async () => {
     const seed = await seedSession();
-    const signals = signalsOf();
     const stale: PairsOutcome = {
       ok: true,
-      catalog: { pairs: [eurUsd()], fetchedAt: clock, ageMs: 600_000, fresh: false },
+      catalog: { pairs: [h1Pair()], fetchedAt: clock, ageMs: 600_000, fresh: false },
     };
-    let orchestrator = orchestratorOf({ signals, pairs: pairsOf(stale) });
+    let orchestrator = orchestratorOf({ pairs: pairsOf(stale) });
     await orchestrator.tick();
     await orchestrator.stop();
-    orchestrator = orchestratorOf({
-      signals,
-      pairs: pairsOf({ ok: false, reason: 'catalog_unavailable' }),
-    });
+    orchestrator = orchestratorOf({ pairs: pairsOf({ ok: false, reason: 'catalog_unavailable' }) });
     await orchestrator.tick();
     await orchestrator.stop();
-    expect(signals.calls).toHaveLength(0);
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     expect(
       msgsOf(seed.session.id).filter((m) => m === 'trading session pairs unavailable'),
     ).toHaveLength(2);
-  });
-
-  // the same step created by someone else while the backend calls were in flight
-  it.each<[string, TradeAction, string]>([
-    ['with the same terms is a replay', TradeAction.Up, 'trading session step replayed'],
-    ['with other terms is a conflict', TradeAction.Down, 'trading session intent refused'],
-  ])('E9g the step %s and reschedules', async (_label, action, msg) => {
-    const seed = await seedSession();
-    const signals = signalsOf(async () => {
-      await createSessionIntent(tmp.db, {
-        sessionId: seed.session.id,
-        step: 1,
-        telegramUserId: seed.telegramUserId,
-        brokerAccountId: seed.brokerAccountId,
-        mode: TradeMode.Demo,
-        assetId: 101,
-        amount: '1' as DecimalString,
-        action,
-        durationSec: 60,
-        decision: null,
-      });
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
-    });
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    const row = await sessionRow(seed.session.id);
-    expect(row.status).toBe(TradingSessionStatus.Active);
-    expect(row.lastDecisionAt).not.toBeNull();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect(msgsOf(seed.session.id)).toContain(msg);
-    await orchestrator.stop();
-  });
-});
-
-// docs/trading-session.md -> The pause after two losses (#379, removed by #698): a signal trades
-// whatever the session's trades before it (#719 dropped the pause's column)
-describe('no pause after two losses (#698)', () => {
-  const signalTo = (action: TradeAction): SignalOutcome => ({
-    ok: true,
-    response: signalAnswer(action),
-  });
-
-  it('N1 a win, two losses down, then a signal down trades at once', async () => {
-    const seed = await seedSession({ settings: sessionSettings({ trades: 10 }) });
-    const orchestrator = orchestratorOf({ signals: signalsOf(signalTo(TradeAction.Down)) });
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-
-    await orchestrator.tick();
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(4);
-    expect(intents[3]!.action).toBe(TradeAction.Down);
-    expect((await decisionsOf(seed.session.id)).map((row) => row.outcome)).toEqual([
-      'intent',
-      'intent',
-      'intent',
-      'intent',
-    ]);
-    expect(msgsOf(seed.session.id)).not.toContain('trading session waits for the signal to change');
-    await orchestrator.stop();
-  });
-
-  it('N2 a new orchestrator (a worker restart) after two losses down trades the next signal down', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf(signalTo(TradeAction.Down));
-    const first = orchestratorOf({ signals });
-    await tradeOnce(first, seed, MockTradeOutcome.Loss);
-    await tradeOnce(first, seed, MockTradeOutcome.Loss);
-    await first.stop();
-    const second = orchestratorOf({ signals });
-    await second.tick();
-    expect((await intentsOf(seed.session.id)).map((i) => i.action)).toEqual([
-      TradeAction.Down,
-      TradeAction.Down,
-      TradeAction.Down,
-    ]);
-    await second.stop();
-  });
-
-  it('P2 two losses down, then a signal up trades at once', async () => {
-    const seed = await seedSession();
-    let answer = signalTo(TradeAction.Down);
-    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    answer = signalTo(TradeAction.Up);
-    await orchestrator.tick();
-    const intents = await intentsOf(seed.session.id);
-    expect(intents.map((i) => i.action)).toEqual([
-      TradeAction.Down,
-      TradeAction.Down,
-      TradeAction.Up,
-    ]);
-    await orchestrator.stop();
-  });
-
-  // #509 (owner), #631: no payout floor holds a session; a payout that fell keeps trading
-  it('P6 a pair whose payout fell below the floor after the start trades on its signal', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({
-      signals,
-      pairs: pairsOf(fresh([eurUsd({ payout: 79 })])),
-    });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
-    await orchestrator.stop();
-  });
-});
-
-// #509 (owner): 20 candles of the session's signal interval waiting for a signal stop it (#637), on
-// the database clock, from the later of started_at and the session's last intent change; the
-// tests compute the limit from sessionNoSignalTimeoutMs and move those rows relative to it (the
-// default seed's 60 s session waits on 1m candles)
-describe('the no-signal limit (#509)', () => {
-  const LIMIT = sessionNoSignalTimeoutMs(60);
-  const ago = (ms: number) => sql`now() - (${ms}::int * interval '1 millisecond')`;
-  const startedAgo = (id: string, ms: number) =>
-    tmp.db
-      .update(tradingSessions)
-      .set({ startedAt: ago(ms) })
-      .where(eq(tradingSessions.id, id));
-  const changedAgo = (sessionId: string, ms: number) =>
-    tmp.db.execute(
-      sql`update trade_intents set updated_at = ${ago(ms)} where trading_session_id = ${sessionId}`,
-    );
-  const noSignal: SignalOutcome = { ok: true, response: noSignalAnswer() };
-  const stopLines = (sessionId: string) =>
-    linesOf(sessionId).filter((line) => line.msg === 'trading session stopped');
-  const tokensOf = async (userId: string) => {
-    const [row] = await tmp.db
-      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
-      .from(users)
-      .where(eq(users.id, userId));
-    const { rows } = await tmp.db.execute<{ n: number }>(
-      sql`select count(*)::int as n from token_ledger where user_id = ${userId}`,
-    );
-    return { ...row, ledger: rows[0]!.n };
-  };
-  const expectStopped = async (sessionId: string, waited: string, limitMs: number = LIMIT) => {
-    expect(await sessionRow(sessionId)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.NoSignalTimeout,
-    });
-    expect(stopLines(sessionId)).toEqual([
-      expect.objectContaining({ level: 40, reason: 'no_signal_timeout', waited, limitMs }),
-    ]);
-  };
-  const expectActive = async (sessionId: string) =>
-    expect((await sessionRow(sessionId)).status).toBe(TradingSessionStatus.Active);
-
-  it('W1 no_signal past the limit since the start stops it: no intent, one no_signal row', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT + 5_000);
-    const before = await tokensOf(seed.userId);
-    const signals = signalsOf(noSignal);
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    await expectStopped(seed.session.id, 'no_signal');
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await tokensOf(seed.userId)).toEqual(before);
-    // O9 (#666): the decision the stop came after, recorded with the wait's outcome
-    expect(await decisionsOf(seed.session.id)).toEqual([
-      expect.objectContaining({
-        outcome: 'no_signal',
-        kind: 'no_signal',
-        detail: null,
-        step: 1,
-        decidedAtMs: RECORD_NOW_MS,
-      }),
-    ]);
-    await orchestrator.stop();
-  });
-
-  it('W2 no_signal 10 s inside the limit holds it', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT - 10_000);
-    const orchestrator = orchestratorOf({ signals: signalsOf(noSignal) });
-    await orchestrator.tick();
-    await expectActive(seed.session.id);
-    expect(stopLines(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
-
-  it("W3 counts from the session's last intent change, not the start", async () => {
-    const seed = await seedSession();
-    let answer: SignalOutcome = { ok: true, response: signalAnswer(TradeAction.Up) };
-    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
-    await tradeOnce(orchestrator, seed);
-    await startedAgo(seed.session.id, LIMIT + 300_000);
-    await changedAgo(seed.session.id, 30_000);
-    answer = noSignal;
-    await orchestrator.tick();
-    await expectActive(seed.session.id);
-
-    await changedAgo(seed.session.id, LIMIT + 5_000);
-    // past the no_signal hold: up to a 1m candle plus the slack
-    advance(SIGNAL_CHART_INTERVAL_MS['1m'] + CONFIG.candleSlackMs + 1_000);
-    await orchestrator.tick();
-    await expectStopped(seed.session.id, 'no_signal');
-    await orchestrator.stop();
-  });
-
-  it('W5 a pair closed by its schedule past the limit stops it, no signal asked', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT + 5_000);
-    const signals = signalsOf();
-    const orchestrator = orchestratorOf({
-      signals,
-      pairs: pairsOf(fresh([eurUsd({ scheduledUntil: clock + 30_000 })])),
-    });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(0);
-    await expectStopped(seed.session.id, 'pair_closed');
-    // O11 (#666): no decision was asked, none recorded
-    expect(await decisionsOf(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
-
-  it('O12 a session stopped by the user while the signal is read past the limit keeps its reason; the decision is recorded', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT + 5_000);
-    const signals = signalsOf(async () => {
-      await stopTradingSession(tmp.db, {
-        id: seed.session.id,
-        reason: TradingSessionStopReason.UserStopped,
-      });
-      return noSignal;
-    });
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.UserStopped,
-    });
-    expect(stopLines(seed.session.id)).toEqual([]);
-    expect(await decisionsOf(seed.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'no_signal', step: 1 }),
-    ]);
-    await orchestrator.stop();
-  });
-
-  it.each<[string, SignalOutcome]>([
-    ['unavailable', { ok: false, reason: BackendUnavailable.BackendUnreachable }],
-    ['fetch_failed', { ok: true, response: fetchFailedAnswer() }],
-  ])('W6 a signal %s past the limit holds it; the next no_signal stops it', async (_, failed) => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT + 5_000);
-    let answer = failed;
-    const orchestrator = orchestratorOf({ signals: signalsOf(() => answer) });
-    await orchestrator.tick();
-    await expectActive(seed.session.id);
-    answer = noSignal;
-    advance(CONFIG.retryMs);
-    await orchestrator.tick();
-    await expectStopped(seed.session.id, 'no_signal');
-    await orchestrator.stop();
-  });
-
-  it('W7 a signal past the limit trades', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT + 30_000);
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    await expectActive(seed.session.id);
-    await orchestrator.stop();
-  });
-
-  it('W8 a new orchestrator (a worker restart) stops from the rows alone', async () => {
-    const seed = await seedSession();
-    await startedAgo(seed.session.id, LIMIT - 10_000);
-    const first = orchestratorOf({ signals: signalsOf(noSignal) });
-    await first.tick();
-    await first.stop();
-    await expectActive(seed.session.id);
-    await startedAgo(seed.session.id, LIMIT + 5_000);
-    const second = orchestratorOf({ signals: signalsOf(noSignal) });
-    await second.tick();
-    await expectStopped(seed.session.id, 'no_signal');
-    await second.stop();
-  });
-
-  // #637: the limit is the session's, 20 candles of intervalForDuration(durationSec); sessions of
-  // one age that differ only in durationSec
-  const shortPair = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
-  const seedOn = (durationSec: number) =>
-    seedSession({ settings: sessionSettings({ assetId: 202, durationSec }) });
-
-  it('W9 at 150 s without a signal a 5 s session stops, 15 s and 60 s ones wait on', async () => {
-    const five = await seedOn(5);
-    const fifteen = await seedOn(15);
-    const sixty = await seedOn(60);
-    for (const seed of [five, fifteen, sixty]) await startedAgo(seed.session.id, 150_000);
-    const orchestrator = orchestratorOf({
-      signals: signalsOf(noSignal),
-      pairs: pairsOf(fresh([shortPair])),
-    });
-    await orchestrator.tick();
-    await expectStopped(five.session.id, 'no_signal', 100_000);
-    await expectActive(fifteen.session.id);
-    await expectActive(sixty.session.id);
-    await orchestrator.stop();
-  });
-
-  it('W10 at 305 s without a signal a 15 s session stops, a 60 s one waits on', async () => {
-    const fifteen = await seedOn(15);
-    const sixty = await seedOn(60);
-    for (const seed of [fifteen, sixty]) await startedAgo(seed.session.id, 305_000);
-    const orchestrator = orchestratorOf({
-      signals: signalsOf(noSignal),
-      pairs: pairsOf(fresh([shortPair])),
-    });
-    await orchestrator.tick();
-    await expectStopped(fifteen.session.id, 'no_signal', 300_000);
-    await expectActive(sixty.session.id);
-    await orchestrator.stop();
-  });
-});
-
-// The database refuses this session's decision rows while `run` runs, whatever their values: the
-// writers' guards cannot be bypassed from a test that goes through the orchestrator.
-async function refusingDecisionsOf<T>(sessionId: string, run: () => Promise<T>): Promise<T> {
-  if (!/^[0-9a-f-]{36}$/.test(sessionId)) throw new Error('not a session id');
-  await tmp.db.execute(
-    sql.raw(`create function refuse_decisions() returns trigger language plpgsql as $$
-      begin
-        if new.trading_session_id = '${sessionId}' then
-          raise exception 'refused by the test' using errcode = 'check_violation';
-        end if;
-        return new;
-      end $$`),
-  );
-  await tmp.db.execute(
-    sql.raw(
-      'create trigger refuse_decisions before insert on signal_decisions for each row execute function refuse_decisions()',
-    ),
-  );
-  try {
-    return await run();
-  } finally {
-    await tmp.db.execute(sql.raw('drop trigger refuse_decisions on signal_decisions'));
-    await tmp.db.execute(sql.raw('drop function refuse_decisions()'));
-  }
-}
-
-// #666: every ending reached after a decision writes its trade log row (docs/trade-log.md → The
-// writers and their outcomes, E1–E14); O9–O12 sit with the no-signal limit
-describe('the decision rows of an attempt (#666)', () => {
-  it('O1 a created intent names its decision row, written in its transaction with the record', async () => {
-    const seed = await seedSession();
-    clock = Date.now();
-    const orchestrator = orchestratorOf();
-    await orchestrator.tick();
-    const [intent] = await intentsOf(seed.session.id);
-    const rows = await decisionsOf(seed.session.id);
-    expect(rows).toHaveLength(1);
-    expect(intent!.signalDecisionId).toBe(rows[0]!.id);
-    const answer = signalAnswer(TradeAction.Up);
-    const record = answer.outcome === 'decided' ? answer.record : undefined;
-    expect(rows[0]).toMatchObject({
-      context: 'session',
-      brokerAccountId: seed.brokerAccountId,
-      step: 1,
-      assetId: 101,
-      interval: '1m',
-      version: 'v2',
-      decidedAtMs: RECORD_NOW_MS,
-      takenAtMs: clock,
-      kind: 'signal',
-      action: 'up',
-      payout: 85,
-      digits: 5,
-      outcome: 'intent',
-      detail: null,
-      series: record?.entry.series,
-      source: record?.entry.source,
-      lastTick: record?.lastTick,
-    });
-    await orchestrator.stop();
-  });
-
-  it('O2 a no_signal hold records no_signal', async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({
-      signals: signalsOf({ ok: true, response: noSignalAnswer() }),
-    });
-    await orchestrator.tick();
-    expect(await decisionsOf(seed.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'no_signal', kind: 'no_signal', action: null, step: 1 }),
-    ]);
-    await orchestrator.stop();
-  });
-
-  it("O4 the sizer's stop records stake_stop with its code: the minimum, and a martingale limit", async () => {
-    const below = await seedSession({
-      settings: sessionSettings({ stake: { baseStake: '0.5' as DecimalString, stakeScale: 1 } }),
-    });
-    const first = orchestratorOf();
-    await first.tick();
-    await first.stop();
-    expect(await decisionsOf(below.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'stake_stop', detail: 'below_min_trade_amount' }),
-    ]);
-
-    const built = buildSessionSettingsV3({
-      assetId: 101,
-      durationSec: 60,
-      cycles: 5,
-      stake: { baseStake: '1' as DecimalString, stakeScale: 2 },
-      strategy: SessionStakeStrategy.Martingale,
-    });
-    if (!built.success) throw new Error('the test settings fail the schema');
-    const late = await seedSession({ settings: built.data });
-    const lateClock = late.session.startedAt.getTime() + SESSION_MAX_DURATION_MS + 1_000;
-    const second = orchestratorOf({ clockOf: () => lateClock });
-    await second.tick();
-    expect((await sessionRow(late.session.id)).stopReason).toBe(
-      TradingSessionStopReason.SessionDurationExceeded,
-    );
-    expect(await decisionsOf(late.session.id)).toEqual([
-      expect.objectContaining({
-        outcome: 'stake_stop',
-        detail: 'session_duration_exceeded',
-        takenAtMs: lateClock,
-      }),
-    ]);
-    await second.stop();
-  });
-
-  it('O5 a refusal records refused with its code, exactly one row; a session gone meanwhile none', async () => {
-    const paused = await seedSession();
-    const closing = orchestratorOf({
-      signals: signalsOf(async () => {
-        await closeTradingSwitch(tmp.db);
-        return { ok: true, response: signalAnswer(TradeAction.Up) };
-      }),
-    });
-    await closing.tick();
-    await closing.stop();
-    await openTrading(tmp.db);
-    expect((await sessionRow(paused.session.id)).stopReason).toBe(
-      TradingSessionStopReason.KillSwitch,
-    );
-    expect(await decisionsOf(paused.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'refused', detail: 'trading_paused', step: 1 }),
-    ]);
-
-    const busy = await seedSession();
-    const occupying = orchestratorOf({
-      signals: signalsOf(async () => {
-        await createTradeIntent(tmp.db, {
-          telegramUserId: busy.telegramUserId,
-          mode: TradeMode.Demo,
-          assetId: 101,
-          amount: '1.00' as DecimalString,
-          action: TradeAction.Up,
-          durationSec: 60,
-          clientRequestId: `bot-${busy.session.id}`,
-        });
-        return { ok: true, response: signalAnswer(TradeAction.Up) };
-      }),
-    });
-    await occupying.tick();
-    await occupying.stop();
-    expect((await sessionRow(busy.session.id)).status).toBe(TradingSessionStatus.Active);
-    expect(await decisionsOf(busy.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'refused', detail: 'active_intent_exists', step: 1 }),
-    ]);
-
-    const gone = await seedSession();
-    const stopping = orchestratorOf({
-      signals: signalsOf(async () => {
-        await stopTradingSession(tmp.db, {
-          id: gone.session.id,
-          reason: TradingSessionStopReason.UserStopped,
-        });
-        return { ok: true, response: signalAnswer(TradeAction.Up) };
-      }),
-    });
-    await stopping.tick();
-    await stopping.stop();
-    expect(await decisionsOf(gone.session.id)).toEqual([]);
-  });
-
-  it("O6 a replayed step records replayed beside the first process's intent", async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({
-      signals: signalsOf(async () => {
-        await createSessionIntent(tmp.db, {
-          sessionId: seed.session.id,
-          step: 1,
-          telegramUserId: seed.telegramUserId,
-          brokerAccountId: seed.brokerAccountId,
-          mode: TradeMode.Demo,
-          assetId: 101,
-          amount: '1.00' as DecimalString,
-          action: TradeAction.Up,
-          durationSec: 60,
-          decision: null,
-        });
-        return { ok: true, response: signalAnswer(TradeAction.Up) };
-      }),
-    });
-    await orchestrator.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect(await decisionsOf(seed.session.id)).toEqual([
-      expect.objectContaining({ outcome: 'replayed', detail: null, step: 1 }),
-    ]);
-    await orchestrator.stop();
-  });
-
-  const recordLess = signalAnswer(TradeAction.Up, { record: false });
-  it.each<[string, SignalOutcome, string | undefined]>([
-    ['an old backend without the record', { ok: true, response: recordLess }, 'record_missing'],
-    [
-      'a record the source found invalid',
-      { ok: true, response: recordLess, recordProblem: 'invalid' },
-      'record_invalid',
-    ],
-    [
-      "a record that is not the answer's",
-      { ok: true, response: recordLess, recordProblem: 'mismatch' },
-      'record_mismatch',
-    ],
-    [
-      'the backend unavailable',
-      { ok: false, reason: BackendUnavailable.BackendUnreachable },
-      undefined,
-    ],
-    ['a fetch failure', { ok: true, response: fetchFailedAnswer() }, undefined],
-  ])('O7 %s: no row', async (_label, answer, reason) => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({ signals: signalsOf(answer) });
-    await orchestrator.tick();
-    expect(await decisionsOf(seed.session.id)).toEqual([]);
-    const warns = linesOf(seed.session.id).filter(
-      (line) => line.msg === 'trading session decision not recorded',
-    );
-    expect(warns).toEqual(
-      reason === undefined ? [] : [expect.objectContaining({ level: 40, reason })],
-    );
-    if (reason !== undefined) {
-      const [intent] = await intentsOf(seed.session.id);
-      expect(intent!.signalDecisionId).toBeNull();
-    }
-    await orchestrator.stop();
-  });
-
-  it('O8 a record the database refuses is a warn by name and code; the ending stands', async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({
-      signals: signalsOf({ ok: true, response: noSignalAnswer() }),
-    });
-    await refusingDecisionsOf(seed.session.id, () => orchestrator.tick());
-    expect((await sessionRow(seed.session.id)).lastDecisionAt).not.toBeNull();
-    expect(await decisionsOf(seed.session.id)).toEqual([]);
-    expect(
-      linesOf(seed.session.id).filter(
-        (line) => line.msg === 'trading session decision not recorded',
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        level: 40,
-        step: 1,
-        cause: { name: 'error', code: '23514' },
-      }),
-    ]);
-    await orchestrator.stop();
-  });
-
-  it("O13 a decision the database refuses in the intent's transaction leaves the intent created, unlinked", async () => {
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf();
-    await refusingDecisionsOf(seed.session.id, () => orchestrator.tick());
-    const [intent] = await intentsOf(seed.session.id);
-    expect(intent).toMatchObject({ signalDecisionId: null, status: 'queued' });
-    expect(await decisionsOf(seed.session.id)).toEqual([]);
-    expect(
-      linesOf(seed.session.id).filter(
-        (line) => line.msg === 'trading session decision not recorded',
-      ),
-    ).toEqual([
-      expect.objectContaining({
-        level: 40,
-        step: 1,
-        reason: 'insert_refused',
-        cause: { name: 'error', code: '23514' },
-      }),
-    ]);
-    expect(msgsOf(seed.session.id)).toContain('trading session intent created');
-    await orchestrator.stop();
-  });
-
-  it('O14 a catalog payout the column cannot hold is recorded as NULL; the intent is linked', async () => {
-    const seed = await seedSession();
-    clock = Date.now();
-    const orchestrator = orchestratorOf({ pairs: pairsOf(fresh([eurUsd({ payout: -1 })])) });
-    await orchestrator.tick();
-    const [intent] = await intentsOf(seed.session.id);
-    const rows = await decisionsOf(seed.session.id);
-    expect(rows).toHaveLength(1);
-    expect(intent!.signalDecisionId).toBe(rows[0]!.id);
-    expect(rows[0]).toMatchObject({
-      context: 'session',
-      step: 1,
-      kind: 'signal',
-      action: 'up',
-      payout: null,
-      digits: 5,
-      outcome: 'intent',
-      takenAtMs: clock,
-    });
-    expect(msgsOf(seed.session.id)).not.toContain('trading session decision not recorded');
-    await orchestrator.stop();
-  });
-});
-
-describe('a stop that races the attempt (#287)', () => {
-  it('E9h a session stopped while the backend calls were in flight gets no intent', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf(async () => {
-      await stopTradingSession(tmp.db, {
-        id: seed.session.id,
-        reason: TradingSessionStopReason.UserStopped,
-      });
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
-    });
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.UserStopped,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(msgsOf(seed.session.id)).toContain('trading session stopped meanwhile');
-    await orchestrator.stop();
+    expect(msgsOf(seed.session.id)).not.toContain(DRIVER);
   });
 });
 
@@ -1589,15 +723,13 @@ describe('the kill switch (#144, #287)', () => {
     async (mode) => {
       const seed = await seedSession({ mode, real: '50.00' });
       await closeTradingSwitch(tmp.db);
-      const signals = signalsOf();
-      const orchestrator = orchestratorOf({ signals });
+      const pairs = pairsOf();
+      const orchestrator = orchestratorOf({ pairs });
       await orchestrator.tick();
-      expect(await sessionRow(seed.session.id)).toMatchObject({
-        status: TradingSessionStatus.Stopped,
-        stopReason: TradingSessionStopReason.KillSwitch,
-      });
-      expect(signals.calls).toHaveLength(0);
-      expect(await intentsOf(seed.session.id)).toEqual([]);
+      expect(await stopOf(seed.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.KillSwitch),
+      );
+      expect(pairs.calls).toBe(0);
       expect(linesOf(seed.session.id)).toContainEqual(
         expect.objectContaining({
           level: 40,
@@ -1608,39 +740,19 @@ describe('the kill switch (#144, #287)', () => {
       await orchestrator.stop();
     },
   );
-
-  it('K2 a switch closed during the attempt stops the session as kill_switch, nothing reserved', async () => {
-    const signals = signalsOf(async () => {
-      await closeTradingSwitch(tmp.db);
-      return { ok: true, response: signalAnswer(TradeAction.Up) };
-    });
-    const seed = await seedSession();
-    const orchestrator = orchestratorOf({ signals });
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.KillSwitch,
-    });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    expect(await reservedOf(seed.userId)).toBe(0n);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 40, reason: 'kill_switch', code: 'trading_paused' }),
-    );
-    await orchestrator.stop();
-  });
 });
 
 describe('failures that write no ending (#287)', () => {
   it('a throw in an attempt holds the session back for retryMs without moving last_decision_at', async () => {
     const seed = await seedSession();
-    const signals = signalsOf(() => {
+    const pairs = pairsOf(() => {
       throw new Error('stub failure');
     });
-    const orchestrator = orchestratorOf({ signals });
+    const orchestrator = orchestratorOf({ pairs });
     await orchestrator.tick();
     advance(59_000);
     await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
+    expect(pairs.calls).toBe(1);
     expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
     expect(linesOf(seed.session.id)).toContainEqual(
       expect.objectContaining({
@@ -1651,15 +763,15 @@ describe('failures that write no ending (#287)', () => {
     );
     advance(2_000);
     await orchestrator.tick();
-    expect(signals.calls).toHaveLength(2);
+    expect(pairs.calls).toBe(2);
     await orchestrator.stop();
   });
 
   it('an attempt past its deadline is cut and held back', async () => {
     const seed = await seedSession();
     // ignores its signal: only the race ends the wait
-    const signals = signalsOf(() => new Promise<SignalOutcome>(() => {}));
-    const orchestrator = orchestratorOf({ signals, config: { attemptTimeoutMs: 100 } });
+    const pairs = pairsOf(() => new Promise<PairsOutcome>(() => {}));
+    const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 100 } });
     await orchestrator.tick();
     expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
     expect(msgsOf(seed.session.id)).toContain('trading session attempt timed out');
@@ -1802,59 +914,59 @@ async function crashAfterOpen(accessToken: string, intentId: string) {
 }
 
 describe('restart recovery (#131)', () => {
+  // after its step's intent is resolved, the new worker's attempt holds the session for the driver
+  const goesOn = async (seed: Seed, b: ReturnType<typeof orchestratorOf>) => {
+    await b.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
+  };
+
   it.each(['submitting', 'unknown', 'reconciling', 'claimed'] as const)(
-    'R1 crash at %s with the order at the broker: it settles, one trade, the session goes on',
+    'R1′ crash at %s with the order at the broker: it settles, one trade, the session goes on',
     async (point) => {
       const seed = await seedSession();
-      const a = orchestratorOf();
-      await a.tick();
-      const [step1] = await intentsOf(seed.session.id);
-      const trade = await crashAfterOpen(seed.accessToken, step1!.id);
+      const step1 = await driverIntent(seed, 1);
+      const trade = await crashAfterOpen(seed.accessToken, step1.id);
       if (point !== 'submitting') {
         await tmp.db.transaction((tx) =>
           markIntentUnknown(tx, {
-            id: step1!.id,
+            id: step1.id,
             reason: TradeIntentFailureReason.StaleSubmitting,
             olderThanMs: 0,
           }),
         );
       }
       if (point === 'reconciling' || point === 'claimed') {
-        const row = await intentRow(step1!.id);
+        const row = await intentRow(step1.id);
         expect(
-          await startReconciling(tmp.db, { id: step1!.id, expectedVersion: row.version }),
+          await startReconciling(tmp.db, { id: step1.id, expectedVersion: row.version }),
         ).toBeDefined();
       }
       if (point === 'claimed') {
-        expect(await claimReconciling(tmp.db, { id: step1!.id, retryMs: 60_000 })).toBeDefined();
+        expect(await claimReconciling(tmp.db, { id: step1.id, retryMs: 60_000 })).toBeDefined();
       }
-      await a.stop();
       broker.trades.settle(Number(trade.id), { outcome: MockTradeOutcome.Win });
 
       const b = orchestratorOf();
       await b.tick();
-      expect(await intentsOf(seed.session.id)).toHaveLength(1);
-      if (point === 'submitting') expect(await processNow(step1!.id)).toBe('stale_unknown');
+      // the live intent keeps the session out of the scan
+      expect(msgsOf(seed.session.id)).not.toContain(DRIVER);
+      if (point === 'submitting') expect(await processNow(step1.id)).toBe('stale_unknown');
       if (point === 'submitting' || point === 'unknown') {
-        expect(
-          await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1!.id }),
-        ).toBe('reconciling');
+        expect(await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1.id })).toBe(
+          'reconciling',
+        );
       }
       await runOnce(passOf());
       if (point === 'claimed') {
         // the dead worker's claim is a lease: the new pass waits it out
-        expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Reconciling);
-        await ageClaim(step1!.id, 120);
+        expect((await intentRow(step1.id)).status).toBe(TradeIntentStatus.Reconciling);
+        await ageClaim(step1.id, 120);
         await runOnce(passOf());
       }
-      expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Settled);
-      await b.tick();
-      const intents = await intentsOf(seed.session.id);
-      expect(intents.map((i) => i.status)).toEqual([
-        TradeIntentStatus.Settled,
-        TradeIntentStatus.Queued,
-      ]);
-      expect(intents[1]!.clientRequestId).toBe(`session:${seed.session.id}:2`);
+      expect((await intentRow(step1.id)).status).toBe(TradeIntentStatus.Settled);
+      await goesOn(seed, b);
+      expect(await intentsOf(seed.session.id)).toHaveLength(1);
       expect(await brokerTradeCount(seed.accessToken)).toBe(1);
       await b.stop();
     },
@@ -1862,39 +974,33 @@ describe('restart recovery (#131)', () => {
 
   it('R1b the job redelivered to the new worker never resends the order', async () => {
     const seed = await seedSession();
-    const a = orchestratorOf();
-    await a.tick();
-    const [step1] = await intentsOf(seed.session.id);
-    await crashAfterOpen(seed.accessToken, step1!.id);
-    await a.stop();
-    expect(await processNow(step1!.id)).toBe('stale_unknown');
+    const step1 = await driverIntent(seed, 1);
+    await crashAfterOpen(seed.accessToken, step1.id);
+    expect(await processNow(step1.id)).toBe('stale_unknown');
     expect(await brokerTradeCount(seed.accessToken)).toBe(1);
   });
 
-  async function crashInSubmitting(seed: Awaited<ReturnType<typeof seedSession>>) {
-    const a = orchestratorOf();
-    await a.tick();
-    const [step1] = await intentsOf(seed.session.id);
-    const row = await intentRow(step1!.id);
+  async function crashInSubmitting(seed: Seed) {
+    const step1 = await driverIntent(seed, 1);
+    const row = await intentRow(step1.id);
     expect(
-      await takeIntent(tmp.db, { id: step1!.id, expectedVersion: row.version, maxAgeMs: 60_000 }),
+      await takeIntent(tmp.db, { id: step1.id, expectedVersion: row.version, maxAgeMs: 60_000 }),
     ).toBeDefined();
-    await a.stop();
-    await ageSubmitted(step1!.id, 200);
+    await ageSubmitted(step1.id, 200);
     expect(
       await sweepStaleSubmitting(tmp.db, { olderThanMs: 60_000, limit: 50 }),
     ).toBeGreaterThanOrEqual(1);
-    expect(await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1!.id })).toBe(
+    expect(await processReconciliationJob({ db: tmp.db, logger }, { intentId: step1.id })).toBe(
       'reconciling',
     );
-    return step1!;
+    return step1;
   }
 
   const accountOf = async (id: string) =>
     (await tmp.db.select().from(brokerAccounts).where(eq(brokerAccounts.id, id)))[0]!;
 
-  // #274: in demo two proven attempts release the reserve; real parks as before (R2r)
-  it('R2 crash in submitting with nothing at the broker (demo): two passes a lease apart release the reserve, no halt, the session goes on', async () => {
+  // #274: in demo two proven attempts release the reserve; real parks as before (R2r′)
+  it('R2′ crash in submitting with nothing at the broker (demo): two passes a lease apart release the reserve, no halt, the session goes on', async () => {
     const seed = await seedSession();
     const step1 = await crashInSubmitting(seed);
     const r = restReconcilerOf();
@@ -1912,15 +1018,12 @@ describe('restart recovery (#131)', () => {
     expect(await brokerTradeCount(seed.accessToken)).toBe(0);
 
     const b = orchestratorOf();
-    await b.tick();
-    expect((await sessionRow(seed.session.id)).status).toBe(TradingSessionStatus.Active);
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(2);
-    expect(intents[1]!.clientRequestId).toBe(`session:${seed.session.id}:2`);
+    await goesOn(seed, b);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
     await b.stop();
   });
 
-  it('R2r crash in submitting with nothing at the broker (real): manual_review, halt, the session stops', async () => {
+  it('R2r′ crash in submitting with nothing at the broker (real): manual_review, halt, the session stops', async () => {
     const seed = await seedSession({ mode: TradeMode.Real, real: '50.00', demo: '0.00' });
     const step1 = await crashInSubmitting(seed);
     await runOnce(passOf());
@@ -1933,219 +1036,98 @@ describe('restart recovery (#131)', () => {
 
     const b = orchestratorOf();
     await b.tick();
-    const session = await sessionRow(seed.session.id);
-    expect(session.status).toBe(TradingSessionStatus.Stopped);
-    expect(session.stopReason).toBe(TradingSessionStopReason.ManualReview);
+    expect(await stopOf(seed.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.ManualReview),
+    );
     expect(await intentsOf(seed.session.id)).toHaveLength(1);
     expect(await reservedOf(seed.userId)).toBe(1n);
     expect(await brokerTradeCount(seed.accessToken, false)).toBe(0);
     await b.stop();
   });
 
-  it('R3 a lost job delivered late expires; two in a row stop the session rejected_twice', async () => {
+  it('R3′ a lost job delivered late expires; two in a row stop the session rejected_twice', async () => {
     const seed = await seedSession();
-    const b = orchestratorOf();
     for (let step = 1; step <= 2; step += 1) {
-      await b.tick();
-      const intents = await intentsOf(seed.session.id);
-      expect(intents).toHaveLength(step);
-      await ageCreated(intents[step - 1]!.id, 120);
-      expect(await processIntent(intents[step - 1]!.id)).toBe('expired');
+      const intent = await driverIntent(seed, step);
+      await ageCreated(intent.id, 120);
+      expect(await processIntent(intent.id)).toBe('expired');
       expect(await reservedOf(seed.userId)).toBe(0n);
     }
+    const b = orchestratorOf();
     await b.tick();
-    const session = await sessionRow(seed.session.id);
-    expect(session.status).toBe(TradingSessionStatus.Stopped);
-    expect(session.stopReason).toBe(TradingSessionStopReason.RejectedTwice);
+    expect(await stopOf(seed.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.RejectedTwice),
+    );
     expect(await brokerTradeCount(seed.accessToken)).toBe(0);
     await b.stop();
   });
 
-  it('R4 crash with an accepted intent: the catch-up settles it, the session goes on', async () => {
+  it('R4′ crash with an accepted intent: the catch-up settles it, the session goes on', async () => {
     const seed = await seedSession();
-    const a = orchestratorOf();
-    await a.tick();
-    const [step1] = await intentsOf(seed.session.id);
-    expect(await processIntent(step1!.id)).toBe('accepted');
-    await a.stop();
+    const step1 = await driverIntent(seed, 1);
+    expect(await processIntent(step1.id)).toBe('accepted');
 
     const b = orchestratorOf();
     await b.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    expect(msgsOf(seed.session.id)).not.toContain(DRIVER);
     const [trade] = await tmp.db
       .select()
       .from(brokerTrades)
-      .where(eq(brokerTrades.intentId, step1!.id));
+      .where(eq(brokerTrades.intentId, step1.id));
     broker.trades.settle(Number(trade!.brokerTradeId), { outcome: MockTradeOutcome.Loss });
-    await overdueTrade(step1!.id);
+    await overdueTrade(step1.id);
     await runOnce(catchupOf());
-    expect((await intentRow(step1!.id)).status).toBe(TradeIntentStatus.Settled);
-    await b.tick();
-    expect((await intentsOf(seed.session.id)).map((i) => i.status)).toEqual([
-      TradeIntentStatus.Settled,
-      TradeIntentStatus.Queued,
-    ]);
+    expect((await intentRow(step1.id)).status).toBe(TradeIntentStatus.Settled);
+    await goesOn(seed, b);
+    expect(await intentsOf(seed.session.id)).toHaveLength(1);
     expect(await brokerTradeCount(seed.accessToken)).toBe(1);
     await b.stop();
   });
 
-  it('R5 a hold-back is lost with the worker: the new one asks again, one intent', async () => {
-    const seed = await seedSession();
-    const a = orchestratorOf({
-      signals: signalsOf({ ok: false, reason: BackendUnavailable.BackendUnreachable }),
-    });
-    await a.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(0);
-    await a.stop();
-
-    const signals = signalsOf();
-    const b = orchestratorOf({ signals });
-    await b.tick();
-    await b.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect(signals.calls.filter((call) => call.assetId === 101)).toHaveLength(1);
-    await b.stop();
-  });
-
-  // one intent per step for concurrent orchestrators only; the other components are
-  // docs/worker-deploy.md → "Why two workers at once are safe". Which guard refuses the second
-  // orchestrator - the step key's unique index or the one live intent per account - depends on
-  // the interleaving, so this case does not pin either
-  it('R6 two orchestrators in one tick: one intent for the step', async () => {
-    const seed = await seedSession();
-    const a = orchestratorOf();
-    const b = orchestratorOf();
-    await Promise.all([a.tick(), b.tick()]);
-    const intents = await intentsOf(seed.session.id);
-    expect(intents).toHaveLength(1);
-    expect(intents[0]!.clientRequestId).toBe(`session:${seed.session.id}:1`);
-    await Promise.all([a.stop(), b.stop()]);
-  });
-
-  it('R7 a restart adds no limit: a session started 40 min ago with nothing done trades step 1', async () => {
+  it('R7′ a restart adds no limit: a session started 40 min ago with nothing done is held', async () => {
     const seed = await seedSession({ startedAt: new Date(Date.now() - 40 * 60_000) });
     const b = orchestratorOf();
-    await b.tick();
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
+    await goesOn(seed, b);
     await b.stop();
   });
 });
 
-// #450: the strategy and the limits come from the session's row (settings v3 since #552), the default
-// limits of a base stake of 1 at stakeScale 2 (docs/stake.md -> Defaults). The signal alternates,
-// which kept a series of losses clear of the pause of #379 until #698.
+// #450: the strategy and the limits come from the session's row, the default limits of a base
+// stake of 1 at stakeScale 2 (docs/stake.md -> Defaults). The driver's stakes are the ones the
+// sizer gives at the pair's payout; the attempt sizes the next one only for its stops.
 describe('martingale (#450)', () => {
-  const settingsOf = (strategy: SessionStakeStrategy, cycles = 5) => {
-    const built = buildSessionSettingsV3({
-      assetId: 101,
-      durationSec: 60,
-      cycles,
-      stake: { baseStake: '1' as DecimalString, stakeScale: 2 },
-      strategy,
-    });
-    if (!built.success) throw new Error('the test settings fail the schema');
-    return built.data;
-  };
-  const martingale = (cycles = 5) => settingsOf(SessionStakeStrategy.Martingale, cycles);
-  // a row written before #552: the same stake, its length in trades
-  const settingsV2Of = (strategy: SessionStakeStrategy, trades: number) => {
-    const { assetId, durationSec, stake } = settingsOf(strategy);
-    return { version: 2, assetId, durationSec, trades, stake };
-  };
-  // the mock broker has no tie: a won trade's stored profit is set to the live broker's tie, 0
-  const tieOnce = async (
-    orchestrator: ReturnType<typeof orchestratorOf>,
-    seed: Awaited<ReturnType<typeof seedSession>>,
-  ) => {
-    const intent = await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    await tmp.db
-      .update(brokerTrades)
-      .set({ profit: '0.00000000' as DecimalString })
-      .where(eq(brokerTrades.intentId, intent.id));
-  };
-  const statusOf = async (seed: Awaited<ReturnType<typeof seedSession>>) =>
-    (await sessionRow(seed.session.id))?.status;
-  const alternating = () => {
-    let calls = 0;
-    return signalsOf(() => ({
-      ok: true,
-      response: signalAnswer(
-        (calls++ % 2 === 0 ? TradeAction.Up : TradeAction.Down) as TradeAction,
-      ),
-    }));
-  };
-  const at = (payout: number) =>
-    orchestratorOf({ signals: alternating(), pairs: pairsOf(fresh([eurUsd({ payout })])) });
-  const amountsOf = async (sessionId: string) =>
-    (await intentsOf(sessionId)).map((intent) => intent.amount);
-  const losses = async (
-    orchestrator: ReturnType<typeof orchestratorOf>,
-    seed: Awaited<ReturnType<typeof seedSession>>,
-    count: number,
-  ) => {
-    for (let i = 0; i < count; i += 1) await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
+  const at = (payout: number) => orchestratorOf({ pairs: pairsOf(fresh([h1Pair({ payout })])) });
+  const losses = async (seed: Seed, amounts: string[]) => {
+    for (const [index, amount] of amounts.entries()) {
+      await driverTrade(seed, index + 1, MockTradeOutcome.Loss, amount);
+    }
   };
   const expectStopped = async (
-    seed: Awaited<ReturnType<typeof seedSession>>,
+    seed: Seed,
     stopReason: TradingSessionStopReason,
     sizerCode: string,
   ) => {
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(stopReason));
     expect(linesOf(seed.session.id)).toContainEqual(
       expect.objectContaining({ msg: 'trading session stopped', stopReason: sizerCode }),
     );
     expect(await reservedOf(seed.userId)).toBe(0n);
   };
 
-  it('G1 a loss raises the next stake by the formula, a win brings back the base stake', async () => {
-    const seed = await seedSession({ settings: martingale() });
+  it('G3′ four losses in a row at 80 % stop it as max_steps_exceeded before a fifth stake', async () => {
+    const seed = await seedSession({ settings: h1Settings(5) });
+    await losses(seed, ['1.00', '2.25', '5.07', '11.40']);
     const orchestrator = at(80);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
     await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '1.00000000']);
-    await orchestrator.stop();
-  });
-
-  it('G2 a tie leaves the series as it is: the next stake is the same step', async () => {
-    const seed = await seedSession({ settings: martingale() });
-    const orchestrator = at(80);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    const second = await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    // the mock broker has no tie: its stored profit is set to the live broker's tie, 0 (#450 probe)
-    await tmp.db
-      .update(brokerTrades)
-      .set({ profit: '0.00000000' as DecimalString })
-      .where(eq(brokerTrades.intentId, second.id));
-    await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '2.25000000']);
-    await orchestrator.stop();
-  });
-
-  it('G3 four losses in a row at 80 % stop it as max_steps_exceeded before a fifth stake', async () => {
-    const seed = await seedSession({ settings: martingale() });
-    const orchestrator = at(80);
-    await losses(orchestrator, seed, 4);
-    await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual([
-      '1.00000000',
-      '2.25000000',
-      '5.07000000',
-      '11.40000000',
-    ]);
     await expectStopped(seed, TradingSessionStopReason.MaxStepsExceeded, 'max_steps_exceeded');
     await orchestrator.stop();
   });
 
-  it('G4 at 79 % the fourth stake would pass 20×B: max_session_loss_exceeded after three losses', async () => {
-    const seed = await seedSession({ settings: martingale() });
+  it('G4′ at 79 % the fourth stake would pass 20×B: max_session_loss_exceeded after three losses', async () => {
+    const seed = await seedSession({ settings: h1Settings(5) });
+    await losses(seed, ['1.00', '2.27', '5.14']);
     const orchestrator = at(79);
-    await losses(orchestrator, seed, 3);
     await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.27000000', '5.14000000']);
     await expectStopped(
       seed,
       TradingSessionStopReason.MaxSessionLossExceeded,
@@ -2154,23 +1136,21 @@ describe('martingale (#450)', () => {
     await orchestrator.stop();
   });
 
-  it('G5 at 77 % the fourth stake would pass 12×B: max_stake_exceeded after three losses', async () => {
-    const seed = await seedSession({ settings: martingale() });
+  it('G5′ at 77 % the fourth stake would pass 12×B: max_stake_exceeded after three losses', async () => {
+    const seed = await seedSession({ settings: h1Settings(5) });
+    await losses(seed, ['1.00', '2.30', '5.29']);
     const orchestrator = at(77);
-    await losses(orchestrator, seed, 3);
     await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.30000000', '5.29000000']);
     await expectStopped(seed, TradingSessionStopReason.MaxStakeExceeded, 'max_stake_exceeded');
     await orchestrator.stop();
   });
 
-  it("G6 the worker's clock past the session's hour stops it as session_duration_exceeded", async () => {
-    const seed = await seedSession({ settings: martingale() });
+  it("G6′ the worker's clock past the session's hour stops it as session_duration_exceeded", async () => {
+    const seed = await seedSession({ settings: h1Settings(5) });
     // the database's deadline has not passed, so the scan still lists the session
     const late = seed.session.startedAt.getTime() + SESSION_MAX_DURATION_MS + 1_000;
     const orchestrator = orchestratorOf({ clockOf: () => late });
     await orchestrator.tick();
-    expect(await intentsOf(seed.session.id)).toEqual([]);
     await expectStopped(
       seed,
       TradingSessionStopReason.SessionDurationExceeded,
@@ -2178,144 +1158,9 @@ describe('martingale (#450)', () => {
     );
     await orchestrator.stop();
   });
-
-  it.each<[string, () => unknown]>([
-    ['settings v3 fixed', () => settingsOf(SessionStakeStrategy.Fixed)],
-    [
-      'settings v1',
-      () => sessionSettings({ stake: { baseStake: '1' as DecimalString, stakeScale: 2 } }),
-    ],
-  ])('G7 %s keep the base stake after a loss', async (_, settings) => {
-    const seed = await seedSession({ settings: settings() });
-    const orchestrator = at(80);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await orchestrator.tick();
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '1.00000000']);
-    await orchestrator.stop();
-  });
-
-  it('G8 a real session raises its stake against the real balance', async () => {
-    const seed = await seedSession({
-      mode: TradeMode.Real,
-      real: '4.00',
-      demo: '10000.00',
-      settings: martingale(),
-    });
-    const orchestrator = at(80);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Loss);
-    // the seed's snapshot is older than both settlements: without a real balance written after
-    // them the attempt would wait for one (#696) instead of stopping
-    await applyBalanceEvent(tmp.db, {
-      brokerAccountId: seed.brokerAccountId,
-      mode: TradeMode.Real,
-      balance: balance('4.00'),
-    });
-    await orchestrator.tick();
-    // the third stake, 5.07, is above the real snapshot's 4.00 though the demo one holds 10000
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
-    expect((await intentsOf(seed.session.id)).map((intent) => intent.mode)).toEqual([
-      TradeMode.Real,
-      TradeMode.Real,
-    ]);
-    await expectStopped(seed, TradingSessionStopReason.StakeStop, 'insufficient_balance');
-    await orchestrator.stop();
-  });
-
-  // #552: a session of N cycles ends on its N-th win, never in the middle of a series
-  it('G9′ losses never complete a martingale session: two cycles end on the second win', async () => {
-    const seed = await seedSession({ settings: martingale(2) });
-    const orchestrator = at(80);
-    await losses(orchestrator, seed, 2);
-    await orchestrator.tick();
-    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '5.07000000']);
-    // the third intent is live: this tick holds it, the win settles it and closes one cycle
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    await orchestrator.tick();
-    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
-    expect(await amountsOf(seed.session.id)).toEqual([
-      '1.00000000',
-      '2.25000000',
-      '5.07000000',
-      '1.00000000',
-    ]);
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ msg: 'trading session completed', settled: 4, cycles: 2 }),
-    );
-    await orchestrator.stop();
-  });
-
-  it('G10 a settings v2 martingale row still completes on its N-th trade', async () => {
-    const seed = await seedSession({ settings: settingsV2Of(SessionStakeStrategy.Martingale, 2) });
-    const orchestrator = at(80);
-    await losses(orchestrator, seed, 2);
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000']);
-    await orchestrator.stop();
-  });
-
-  it('G11 under fixed every trade is a cycle: two losses complete two cycles', async () => {
-    const seed = await seedSession({ settings: settingsOf(SessionStakeStrategy.Fixed, 2) });
-    const orchestrator = at(80);
-    await losses(orchestrator, seed, 2);
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '1.00000000']);
-    await orchestrator.stop();
-  });
-
-  it('G12 a tie does not close the cycle: one cycle ends on the win after it', async () => {
-    const seed = await seedSession({ settings: martingale(1) });
-    const orchestrator = at(80);
-    await losses(orchestrator, seed, 1);
-    await tieOnce(orchestrator, seed);
-    await orchestrator.tick();
-    expect(await statusOf(seed)).toBe(TradingSessionStatus.Active);
-    expect(await amountsOf(seed.session.id)).toEqual(['1.00000000', '2.25000000', '2.25000000']);
-    await tradeOnce(orchestrator, seed, MockTradeOutcome.Win);
-    await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
-    expect(await amountsOf(seed.session.id)).toHaveLength(3);
-    await orchestrator.stop();
-  });
 });
 
-// #670, #775: an H1 session (settings v5) is held between checks; its trades come from the driver
-// (#707), here from createSessionIntent directly
 describe('an H1 session (#670, #775)', () => {
-  // the mock's AAPL takes 5 s trades
-  const h1Pair = (patch: Parameters<typeof eurUsd>[0] = {}) =>
-    eurUsd({ id: 202, symbol: 'AAPL', minTimeframe: 5, payout: 94, ...patch });
-  const h1Settings = (
-    cycles = 10,
-    strategy: SessionStakeStrategy = SessionStakeStrategy.Martingale,
-  ) => {
-    const built = buildH1SessionSettings({
-      assetId: 202,
-      cycles,
-      stake: { baseStake: decimalStringSchema.parse('1.00'), stakeScale: 2 },
-      strategy,
-    });
-    if (!built.success) throw new Error('H1 fixture settings do not parse');
-    return built.data;
-  };
   // a v4 row of #670, read-only since #775: a fixed stake, trades and a loss ceiling
   const v4Settings = (maxLoss: string) => {
     const parsed = safeParseTradingSessionSettings({
@@ -2331,61 +1176,36 @@ describe('an H1 session (#670, #775)', () => {
     return parsed.data;
   };
   const pastNoSignalLimit = () => new Date(Date.now() - sessionNoSignalTimeoutMs(5) * 3);
-  // a signal source that must not be asked
-  const noSignals = () => {
-    const source = signalsOf(() => {
-      throw new Error('the H1 branch asked the signal');
-    });
-    return source;
-  };
   // a case that fails before its own stop() must not leave its ticks running into the next one
   const made: ReturnType<typeof orchestratorOf>[] = [];
   afterEach(async () => {
     await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
   });
-  const h1Orchestrator = (pairs: PairsSource = pairsOf(fresh([h1Pair()]))) => {
-    const signals = noSignals();
-    const orchestrator = orchestratorOf({ signals, pairs });
+  const h1Orchestrator = (pairs: PairsSource = pairsOf()) => {
+    const orchestrator = orchestratorOf({ pairs });
     made.push(orchestrator);
-    return { signals, orchestrator };
+    return orchestrator;
   };
-  const driverTrade = async (
-    seed: Awaited<ReturnType<typeof seedSession>>,
-    step: number,
-    outcome: MockTradeOutcome,
-  ) => {
-    const { intent } = await createSessionIntent(tmp.db, {
-      sessionId: seed.session.id,
-      step,
-      telegramUserId: seed.telegramUserId,
-      brokerAccountId: seed.brokerAccountId,
-      mode: TradeMode.Demo,
-      assetId: 202,
-      amount: decimalStringSchema.parse('1.00'),
-      action: TradeAction.Up,
-      durationSec: 5,
-      decision: null,
-    });
-    expect(await processIntent(intent.id)).toBe('accepted');
-    await settle(seed, intent.id, outcome);
-    return intent;
+  const tokensOf = async (userId: string) => {
+    const [row] = await tmp.db
+      .select({ balance: users.tokenBalance, reserved: users.tokenReserved })
+      .from(users)
+      .where(eq(users.id, userId));
+    const { rows } = await tmp.db.execute<{ n: number }>(
+      sql`select count(*)::int as n from token_ledger where user_id = ${userId}`,
+    );
+    return { ...row, ledger: rows[0]!.n };
   };
-  const stopOf = async (id: string) => {
-    const row = await sessionRow(id);
-    return { status: row.status, stopReason: row.stopReason };
-  };
-  const ACTIVE = { status: TradingSessionStatus.Active, stopReason: null };
 
-  it('H1-O1 holds without asking the signal and moves last_decision_at', async () => {
-    const seed = await seedSession({ settings: h1Settings() });
-    const { signals, orchestrator } = h1Orchestrator();
+  it('H1-O1 holds and moves last_decision_at', async () => {
+    const seed = await seedSession();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(signals.calls).toEqual([]);
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     expect(await intentsOf(seed.session.id)).toEqual([]);
     expect((await sessionRow(seed.session.id)).lastDecisionAt).not.toBeNull();
     expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ level: 20, msg: 'trading session waits for the H1 driver' }),
+      expect.objectContaining({ level: 20, msg: DRIVER }),
     );
     await orchestrator.stop();
   });
@@ -2393,7 +1213,7 @@ describe('an H1 session (#670, #775)', () => {
   it('H1-O2 completes by cycles: under martingale only a win closes one', async () => {
     const seed = await seedSession({ settings: h1Settings(2) });
     await driverTrade(seed, 1, MockTradeOutcome.Win);
-    const { orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     await driverTrade(seed, 2, MockTradeOutcome.Loss);
@@ -2403,15 +1223,44 @@ describe('an H1 session (#670, #775)', () => {
     await driverTrade(seed, 3, MockTradeOutcome.Win);
     advance(CONFIG.h1CheckMs);
     await orchestrator.tick();
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Completed,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({ msg: 'trading session completed', settled: 3, cycles: 2 }),
+    );
+    await orchestrator.stop();
+  });
+
+  it('H1-O2b under fixed every trade is a cycle: two losses complete two cycles', async () => {
+    const seed = await seedSession({ settings: h1Settings(2, SessionStakeStrategy.Fixed) });
+    await driverTrade(seed, 1, MockTradeOutcome.Loss);
+    await driverTrade(seed, 2, MockTradeOutcome.Loss);
+    const orchestrator = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
+    await orchestrator.stop();
+  });
+
+  // the mock broker has no tie: a won trade's stored profit is set to the live broker's tie, 0
+  it('H1-O2c a tie does not close the cycle: one cycle ends on the win after it', async () => {
+    const seed = await seedSession({ settings: h1Settings(1) });
+    await driverTrade(seed, 1, MockTradeOutcome.Loss);
+    const tie = await driverTrade(seed, 2, MockTradeOutcome.Win);
+    await tmp.db
+      .update(brokerTrades)
+      .set({ profit: '0.00000000' as DecimalString })
+      .where(eq(brokerTrades.intentId, tie.id));
+    const orchestrator = h1Orchestrator();
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
+    await driverTrade(seed, 3, MockTradeOutcome.Win);
+    advance(CONFIG.h1CheckMs);
+    await orchestrator.tick();
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
     await orchestrator.stop();
   });
 
   it("H1-O3′ the sizer's martingale limit stops it: max_session_loss_exceeded", async () => {
-    const within = await seedSession({ settings: h1Settings() });
+    const within = await seedSession();
     await driverTrade(within, 1, MockTradeOutcome.Loss);
     // a ceiling of 2: the raise after a loss of 1 takes the loss past it
     const tight = h1Settings();
@@ -2428,13 +1277,12 @@ describe('an H1 session (#670, #775)', () => {
       },
     });
     await driverTrade(past, 1, MockTradeOutcome.Loss);
-    const { orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
     expect(await stopOf(within.session.id)).toEqual(ACTIVE);
-    expect(await stopOf(past.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.MaxSessionLossExceeded,
-    });
+    expect(await stopOf(past.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.MaxSessionLossExceeded),
+    );
     expect(linesOf(past.session.id)).toContainEqual(
       expect.objectContaining({ stopReason: 'max_session_loss_exceeded' }),
     );
@@ -2443,15 +1291,11 @@ describe('an H1 session (#670, #775)', () => {
 
   it('H1-O4 the hour ends it with timeout', async () => {
     const seed = await seedSession({
-      settings: h1Settings(),
       startedAt: new Date(Date.now() - SESSION_MAX_DURATION_MS - 60_000),
     });
-    const { orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.Timeout,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Timeout));
     await orchestrator.stop();
   });
 
@@ -2459,59 +1303,56 @@ describe('an H1 session (#670, #775)', () => {
     ['a pair outside the catalog', [eurUsd({ minTimeframe: 5 })]],
     ['a pair that refuses 5 s', [h1Pair({ minTimeframe: 15 })]],
   ])('H1-O5 %s stops it with pair_unavailable', async (_label, listed) => {
-    const seed = await seedSession({ settings: h1Settings() });
-    const { orchestrator } = h1Orchestrator(pairsOf(fresh(listed)));
+    const seed = await seedSession();
+    const orchestrator = h1Orchestrator(pairsOf(fresh(listed)));
     await orchestrator.tick();
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.PairUnavailable,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.PairUnavailable),
+    );
     await orchestrator.stop();
   });
 
   it("H1-O5″ no intent within the no-signal limit on an open pair holds it: the stop is the driver's", async () => {
-    const seed = await seedSession({ settings: h1Settings(), startedAt: pastNoSignalLimit() });
-    const { signals, orchestrator } = h1Orchestrator();
+    const seed = await seedSession({ startedAt: pastNoSignalLimit() });
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(signals.calls).toEqual([]);
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     expect(linesOf(seed.session.id)).not.toContainEqual(
       expect.objectContaining({ reason: 'no_signal_timeout' }),
     );
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ msg: 'trading session waits for the H1 driver' }),
-    );
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
     // the hold of h1CheckMs: a tick inside it does not attempt the session again
     advance(CONFIG.h1CheckMs - 1);
     await orchestrator.tick();
-    expect(
-      linesOf(seed.session.id).filter(
-        (line) => line.msg === 'trading session waits for the H1 driver',
-      ),
-    ).toHaveLength(1);
+    expect(msgsOf(seed.session.id).filter((msg) => msg === DRIVER)).toHaveLength(1);
     await orchestrator.stop();
   });
 
-  it('H1-O6′ a pair closed past the no-signal limit stops it with no_signal_timeout', async () => {
-    const seed = await seedSession({ settings: h1Settings(), startedAt: pastNoSignalLimit() });
-    const { signals, orchestrator } = h1Orchestrator(
+  it('H1-O6′ a pair closed past the no-signal limit stops it with no_signal_timeout; no token moves', async () => {
+    const seed = await seedSession({ startedAt: pastNoSignalLimit() });
+    const tokensBefore = await tokensOf(seed.userId);
+    const orchestrator = h1Orchestrator(
       pairsOf(fresh([h1Pair({ scheduledUntil: clock + 30_000 })])),
     );
     await orchestrator.tick();
-    expect(signals.calls).toEqual([]);
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.NoSignalTimeout,
-    });
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({ reason: 'no_signal_timeout', waited: 'pair_closed' }),
+    expect(await stopOf(seed.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.NoSignalTimeout),
     );
+    expect(linesOf(seed.session.id)).toContainEqual(
+      expect.objectContaining({
+        reason: 'no_signal_timeout',
+        waited: 'pair_closed',
+        limitMs: sessionNoSignalTimeoutMs(5),
+      }),
+    );
+    // W5 (#509): a stop without an intent writes nothing to token_ledger or users
+    expect(await tokensOf(seed.userId)).toEqual(tokensBefore);
     await orchestrator.stop();
   });
 
   it('H1-O7 an open pair with a payout below 94 still holds: the payout is not read', async () => {
-    const seed = await seedSession({ settings: h1Settings() });
-    const { orchestrator } = h1Orchestrator(pairsOf(fresh([h1Pair({ payout: 50 })])));
+    const seed = await seedSession();
+    const orchestrator = h1Orchestrator(pairsOf(fresh([h1Pair({ payout: 50 })])));
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     await orchestrator.stop();
@@ -2520,90 +1361,76 @@ describe('an H1 session (#670, #775)', () => {
   it('H1-O10 a v4 row runs with its fixed stake; its maxLoss is no longer a stop (#775)', async () => {
     const seed = await seedSession({ settings: v4Settings('1') });
     await driverTrade(seed, 1, MockTradeOutcome.Loss);
-    const { signals, orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(signals.calls).toEqual([]);
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
-    expect(msgsOf(seed.session.id)).toContain('trading session waits for the H1 driver');
+    expect(msgsOf(seed.session.id)).toContain(DRIVER);
     await orchestrator.stop();
   });
 
-  it('H1-O8 the sizer and the snapshot still stop it: below the minimum, no snapshot', async () => {
-    const poor = await seedSession({ settings: h1Settings(), demo: '0.50' });
-    const blind = await seedSession({ settings: h1Settings(), snapshot: false });
-    const { orchestrator } = h1Orchestrator();
+  it('H1-O8 the sizer and the snapshot still stop it: the balance, the minimum, no snapshot', async () => {
+    const poor = await seedSession({ demo: '0.50' });
+    // E3 until #835: a base stake below the broker's minimum of 1.00
+    const halfStake = buildH1SessionSettings({
+      assetId: 202,
+      cycles: 10,
+      stake: { baseStake: decimalStringSchema.parse('0.50'), stakeScale: 2 },
+      strategy: SessionStakeStrategy.Fixed,
+    });
+    if (!halfStake.success) throw new Error('H1 fixture settings do not parse');
+    const small = await seedSession({ settings: halfStake.data });
+    const blind = await seedSession({ snapshot: false });
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(await stopOf(poor.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.StakeStop,
-    });
-    expect(await stopOf(blind.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.BalanceUnavailable,
-    });
+    for (const [seed, stopReason] of [
+      [poor, 'insufficient_balance'],
+      [small, 'below_min_trade_amount'],
+    ] as const) {
+      expect(await stopOf(seed.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.StakeStop),
+      );
+      expect(linesOf(seed.session.id)).toContainEqual(
+        expect.objectContaining({ level: 40, stopReason }),
+      );
+      expect(await reservedOf(seed.userId)).toBe(0n);
+    }
+    expect(await stopOf(blind.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.BalanceUnavailable),
+    );
     await orchestrator.stop();
   });
 
   it('H1-O9 two intents rejected past their entry window stop it with rejected_twice', async () => {
-    const seed = await seedSession({ settings: h1Settings() });
+    const seed = await seedSession();
     for (const step of [1, 2]) {
-      const { intent } = await createSessionIntent(tmp.db, {
-        sessionId: seed.session.id,
-        step,
-        telegramUserId: seed.telegramUserId,
-        brokerAccountId: seed.brokerAccountId,
-        mode: TradeMode.Demo,
-        assetId: 202,
-        amount: decimalStringSchema.parse('1.00'),
-        action: TradeAction.Up,
-        durationSec: 5,
-        decision: null,
+      const intent = await driverIntent(seed, step, {
         submitDeadlineAt: new Date(Date.now() - 1_000),
       });
       expect(await processIntent(intent.id)).toBe('rejected');
     }
-    const { orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
-    expect(await stopOf(seed.session.id)).toEqual({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.RejectedTwice,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(
+      stoppedWith(TradingSessionStopReason.RejectedTwice),
+    );
     await orchestrator.stop();
   });
 
   it('H1-BW a settlement newer than the balance holds the stake stop a tick; the payout clears it', async () => {
     const WAITS = 'trading session waits for the balance';
-    const demoBalance = (brokerAccountId: string, available: string) =>
-      applyBalanceEvent(tmp.db, {
-        brokerAccountId,
-        mode: TradeMode.Demo,
-        balance: balance(available),
-      });
-    const seed = await seedSession({ settings: h1Settings(), demo: '1.50' });
-    const { intent } = await createSessionIntent(tmp.db, {
-      sessionId: seed.session.id,
-      step: 1,
-      telegramUserId: seed.telegramUserId,
-      brokerAccountId: seed.brokerAccountId,
-      mode: TradeMode.Demo,
-      assetId: 202,
-      amount: decimalStringSchema.parse('1.00'),
-      action: TradeAction.Up,
-      durationSec: 5,
-      decision: null,
-    });
+    const seed = await seedSession({ demo: '1.50' });
+    const intent = await driverIntent(seed, 1);
     expect(await processIntent(intent.id)).toBe('accepted');
     // the snapshot after the opening holds the stake; the win settles before update_balance
     await demoBalance(seed.brokerAccountId, '0.50');
     await settle(seed, intent.id, MockTradeOutcome.Win);
-    const { signals, orchestrator } = h1Orchestrator();
+    const orchestrator = h1Orchestrator();
     await orchestrator.tick();
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     expect(linesOf(seed.session.id).find((line) => line.msg === WAITS)).toMatchObject({
       level: 30,
       step: 2,
     });
-    const DRIVER = 'trading session waits for the H1 driver';
     expect(msgsOf(seed.session.id)).not.toContain(DRIVER);
     advance(CONFIG.tickMs);
     await demoBalance(seed.brokerAccountId, '2.40');
@@ -2611,7 +1438,6 @@ describe('an H1 session (#670, #775)', () => {
     expect(await stopOf(seed.session.id)).toEqual(ACTIVE);
     expect(msgsOf(seed.session.id)).toContain(DRIVER);
     expect(msgsOf(seed.session.id).filter((msg) => msg === WAITS)).toHaveLength(1);
-    expect(signals.calls).toEqual([]);
     await orchestrator.stop();
   });
 });
@@ -2632,49 +1458,31 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
   });
 
-  // a signal held until release(); an abort answers at once, as the backend client does
-  function gatedSignals() {
-    let release = () => {};
-    const released = new Promise<void>((resolve) => (release = resolve));
-    const signals = signalsOf(
-      (signal) =>
-        new Promise<SignalOutcome>((resolve) => {
-          void released.then(() => resolve({ ok: true, response: signalAnswer(TradeAction.Up) }));
-          signal?.addEventListener('abort', () =>
-            resolve({ ok: false, reason: 'backend_unreachable' }),
-          );
-        }),
-    );
-    return { signals, release };
-  }
-
-  it('WK1 a wake after the settlement makes the next step within a second, with no tick called', async () => {
-    const seed = await seedSession();
-    const signals = signalsOf();
-    const orchestrator = wakeful({ signals, log: tagged('WK1') });
-    await tradeOnce(orchestrator, seed);
-    const before = ticksOf('WK1').length;
+  it('WK1′ a wake after the last settlement completes the session within a second, with no tick called', async () => {
+    const seed = await seedSession({ settings: h1Settings(1, SessionStakeStrategy.Fixed) });
+    const orchestrator = wakeful({ log: tagged('WK1') });
+    await driverTrade(seed, 1);
     const wokenAt = Date.now();
     orchestrator.wake();
-    await until('step 2', async () => (await intentsOf(seed.session.id)).length === 2);
-    expect(Date.now() - wokenAt).toBeLessThan(1_000);
-    await until('the tick line', () => ticksOf('WK1').length === before + 1);
-    expect((await intentsOf(seed.session.id))[1]!.clientRequestId).toBe(
-      `session:${seed.session.id}:2`,
+    await until(
+      'the completed stop',
+      async () => (await sessionRow(seed.session.id)).status === TradingSessionStatus.Stopped,
     );
-    expect(signals.calls).toHaveLength(2);
-    expect(ticksOf('WK1').slice(before)).toEqual([
-      expect.objectContaining({ runnable: 1, created: 1, woken: 1 }),
+    expect(Date.now() - wokenAt).toBeLessThan(1_000);
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
+    await until('the tick line', () => ticksOf('WK1').length === 1);
+    expect(ticksOf('WK1')).toEqual([
+      expect.objectContaining({ runnable: 1, stopped: 1, woken: 1 }),
     ]);
     await orchestrator.stop();
   });
 
-  it('WK2 wakes during a tick merge into one more tick: one intent, one decision row', async () => {
+  it('WK2′ wakes during a tick merge into one more tick', async () => {
     const seed = await seedSession();
-    const { signals, release } = gatedSignals();
-    const orchestrator = wakeful({ signals, log: tagged('WK2') });
+    const { pairs, release } = gatedPairs();
+    const orchestrator = wakeful({ pairs, log: tagged('WK2') });
     const first = orchestrator.tick();
-    await until('the signal call', () => signals.calls.length === 1);
+    await until('the catalog read', () => pairs.calls === 1);
     orchestrator.wake();
     orchestrator.wake();
     orchestrator.wake();
@@ -2683,25 +1491,21 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     await until('the follow-up tick', () => ticksOf('WK2').length >= 2);
     await orchestrator.stop();
     expect(ticksOf('WK2')).toEqual([
-      expect.objectContaining({ runnable: 1, created: 1, woken: 0 }),
-      // the live intent keeps the session out of the scan
+      expect.objectContaining({ runnable: 1, attempted: 1, held: 1, woken: 0 }),
+      // the hold of h1CheckMs keeps the session out of the scan
       expect.objectContaining({ runnable: 0, attempted: 0, woken: 3 }),
     ]);
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect(await decisionsOf(seed.session.id)).toHaveLength(1);
-    expect(signals.calls).toHaveLength(1);
+    expect(pairs.calls).toBe(1);
+    expect(msgsOf(seed.session.id).filter((msg) => msg === DRIVER)).toHaveLength(1);
   });
 
-  it('WK3 a lost wake loses nothing: the next tick makes the step', async () => {
-    const seed = await seedSession();
+  it('WK3′ a lost wake loses nothing: the next tick completes the session', async () => {
+    const seed = await seedSession({ settings: h1Settings(1, SessionStakeStrategy.Fixed) });
     const orchestrator = wakeful({ log: tagged('WK3') });
-    await tradeOnce(orchestrator, seed);
+    await driverTrade(seed, 1);
     await orchestrator.tick();
-    expect((await intentsOf(seed.session.id)).map((i) => i.clientRequestId)).toEqual([
-      `session:${seed.session.id}:1`,
-      `session:${seed.session.id}:2`,
-    ]);
-    expect(ticksOf('WK3').at(-1)).toMatchObject({ created: 1, woken: 0 });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
+    expect(ticksOf('WK3').at(-1)).toMatchObject({ stopped: 1, woken: 0 });
     await orchestrator.stop();
   });
 
@@ -2712,26 +1516,25 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     expect(() => orchestrator.wake()).not.toThrow();
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(ticksOf('WK4a')).toEqual([]);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
   });
 
-  it('WK4b a wake during a tick that stop() ends runs no deferred tick', async () => {
+  it('WK4b′ a wake during a tick that stop() ends runs no deferred tick', async () => {
     const seed = await seedSession();
-    const { signals } = gatedSignals();
+    const { pairs } = gatedPairs();
     const orchestrator = wakeful({
-      signals,
+      pairs,
       config: { attemptTimeoutMs: 5_000 },
       log: tagged('WK4b'),
     });
     const first = orchestrator.tick();
-    await until('the signal call', () => signals.calls.length === 1);
+    await until('the catalog read', () => pairs.calls === 1);
     orchestrator.wake();
     await orchestrator.stop();
     await first;
     await new Promise((resolve) => setTimeout(resolve, 200));
     expect(ticksOf('WK4b')).toEqual([expect.objectContaining({ attempted: 1, woken: 0 })]);
-    expect(signals.calls).toHaveLength(1);
-    expect(await intentsOf(seed.session.id)).toEqual([]);
+    expect(pairs.calls).toBe(1);
     expect(await sessionRow(seed.session.id)).toMatchObject({
       status: TradingSessionStatus.Active,
       lastDecisionAt: null,
@@ -2749,123 +1552,8 @@ describe('the wake after a write that ends an intent or halts its account (#696)
   });
 });
 
-describe('the candle wake (#697)', () => {
-  const aapl = eurUsd({ id: 202, symbol: 'AAPL', type: 'stock', minTimeframe: 5 });
-  const tagged = (wake: string) => logger.child({ wake });
-  const ticksOf = (wake: string) =>
-    lines.filter((line) => line.wake === wake && line.msg === 'trading session tick');
-  // a case that fails before its own stop() must not leave its timer running into the next one
-  const made: ReturnType<typeof orchestratorOf>[] = [];
-  const candleful = (options: Parameters<typeof orchestratorOf>[0]) => {
-    const orchestrator = orchestratorOf(options);
-    made.push(orchestrator);
-    return orchestrator;
-  };
-  afterEach(async () => {
-    await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
-  });
-  const boundaryOf = (step: number) => Math.floor(Date.now() / step) * step;
-  const callsOf = (signals: ReturnType<typeof signalsOf>, interval: string) =>
-    signals.calls.filter((call) => call.interval === interval);
-  const timeouts = () =>
-    process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
-
-  it('CT1 the candle timer makes the next ask at the boundary + the slack, with no tick called', async () => {
-    const seed = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
-    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
-    const orchestrator = candleful({
-      signals,
-      pairs: pairsOf(fresh([aapl])),
-      config: { candleSlackMs: 300 },
-      log: tagged('CT1'),
-    });
-    clock = boundaryOf(5_000) + 4_000;
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    const before = ticksOf('CT1').length;
-    // the boundary + 300 ms; rounded up to a tick the hold would end at the boundary + 4 000
-    advance(1_300);
-    await until('the second signal call', () => signals.calls.length === 2);
-    await until('the woken tick line', () => ticksOf('CT1').length === before + 1);
-    expect(ticksOf('CT1').at(-1)).toMatchObject({ attempted: 1, held: 1, woken: 1 });
-    expect(await intentsOf(seed.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
-
-  it('CT2 after it fires, the timer is armed again for a later candle hold', async () => {
-    const five = await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
-    const fifteen = await seedSession({
-      settings: sessionSettings({ assetId: 202, durationSec: 15 }),
-    });
-    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
-    const orchestrator = candleful({
-      signals,
-      pairs: pairsOf(fresh([aapl])),
-      config: { candleSlackMs: 300 },
-      log: tagged('CT2'),
-    });
-    const b15 = boundaryOf(15_000);
-    // the 5 s session until b15 + 10 300, the 15 s one until b15 + 15 300
-    clock = b15 + 9_700;
-    await orchestrator.tick();
-    expect(callsOf(signals, '5s')).toHaveLength(1);
-    expect(callsOf(signals, '15s')).toHaveLength(1);
-    advance(5_200);
-    await until('the 5 s session asked again', () => callsOf(signals, '5s').length === 2);
-    // b15 + 14 900: the 15 s session is still held
-    expect(callsOf(signals, '15s')).toHaveLength(1);
-    advance(400);
-    await until('the 15 s session asked again', () => callsOf(signals, '15s').length === 2);
-    expect(await intentsOf(five.session.id)).toEqual([]);
-    expect(await intentsOf(fifteen.session.id)).toEqual([]);
-    await orchestrator.stop();
-  });
-
-  it('CT3 stop() clears the armed candle timer; no tick after it', async () => {
-    await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
-    const signals = signalsOf({ ok: true, response: noSignalAnswer() });
-    const orchestrator = candleful({
-      signals,
-      pairs: pairsOf(fresh([aapl])),
-      config: { candleSlackMs: 300 },
-      log: tagged('CT3'),
-    });
-    clock = boundaryOf(5_000) + 4_000;
-    await orchestrator.tick();
-    const ticks = ticksOf('CT3').length;
-    const armed = timeouts();
-    // stop()'s synchronous part runs before it returns: nothing else changes the timers between
-    const stopping = orchestrator.stop();
-    expect(timeouts()).toBe(armed - 1);
-    await stopping;
-    advance(1_300);
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    expect(signals.calls).toHaveLength(1);
-    expect(ticksOf('CT3')).toHaveLength(ticks);
-  });
-
-  it('CT4 a hold that is not a candle hold arms no timer', async () => {
-    await seedSession({ settings: sessionSettings({ assetId: 202, durationSec: 5 }) });
-    const signals = signalsOf({ ok: true, response: fetchFailedAnswer(0) });
-    // a short tick: a wrongly armed timer would fire inside the wait below
-    const orchestrator = candleful({
-      signals,
-      pairs: pairsOf(fresh([aapl])),
-      config: { tickMs: 200 },
-      log: tagged('CT4'),
-    });
-    await orchestrator.tick();
-    expect(signals.calls).toHaveLength(1);
-    advance(200);
-    await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(signals.calls).toHaveLength(1);
-    expect(ticksOf('CT4')).toHaveLength(1);
-    await orchestrator.stop();
-  });
-});
-
 describe('the balance wait after a settlement (#696)', () => {
-  const LIMIT = sessionNoSignalTimeoutMs(60);
+  const LIMIT = sessionNoSignalTimeoutMs(5);
   const WAITS = 'trading session waits for the balance';
   // a case that fails before its own stop() must not leave its ticks running into the next one
   const made: ReturnType<typeof orchestratorOf>[] = [];
@@ -2877,62 +1565,24 @@ describe('the balance wait after a settlement (#696)', () => {
   afterEach(async () => {
     await Promise.all(made.splice(0).map((orchestrator) => orchestrator.stop()));
   });
-  const demoBalance = (brokerAccountId: string, available: string) =>
-    applyBalanceEvent(tmp.db, {
-      brokerAccountId,
-      mode: TradeMode.Demo,
-      balance: balance(available),
-    });
   // step 1 opened (the stake held: 1.50 - 1.00 on the snapshot), then won: the settlement is newer
   // than the snapshot, which still lacks the payout - the live order of close_trade.success and
   // update_balance
-  const wonBeforePayout = async (orchestrator: ReturnType<typeof orchestratorOf>) => {
+  const wonBeforePayout = async () => {
     const seed = await seedSession({ demo: '1.50' });
-    await orchestrator.tick();
-    const [intent] = await intentsOf(seed.session.id);
-    expect(await processIntent(intent!.id)).toBe('accepted');
+    const intent = await driverIntent(seed, 1);
+    expect(await processIntent(intent.id)).toBe('accepted');
     await demoBalance(seed.brokerAccountId, '0.50');
-    await settle(seed, intent!.id, MockTradeOutcome.Win);
+    await settle(seed, intent.id, MockTradeOutcome.Win);
     return seed;
   };
-  const stepTwoRows = async (sessionId: string) =>
-    (await decisionsOf(sessionId)).filter((row) => row.step === 2);
 
-  it('BW1 a woken attempt on the balance before the payout waits; the payout makes step 2', async () => {
+  it('BW2′ a balance written after the settlement that is short stops the session', async () => {
     const orchestrator = stoppable();
-    const seed = await wonBeforePayout(orchestrator);
-    orchestrator.wake();
-    await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Active,
-      stopReason: null,
-    });
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
-    expect(await stepTwoRows(seed.session.id)).toEqual([]);
-    expect(linesOf(seed.session.id).find((line) => line.msg === WAITS)).toMatchObject({
-      level: 30,
-      step: 2,
-    });
-    // the wait holds the session one tick
-    advance(CONFIG.tickMs);
-    await demoBalance(seed.brokerAccountId, '2.40');
-    await orchestrator.tick();
-    expect((await intentsOf(seed.session.id)).map((intent) => intent.amount)).toEqual([
-      '1.00000000',
-      '1.00000000',
-    ]);
-    await orchestrator.stop();
-  });
-
-  it('BW2 a balance written after the settlement that is short stops the session', async () => {
-    const orchestrator = stoppable();
-    const seed = await wonBeforePayout(orchestrator);
+    const seed = await wonBeforePayout();
     await demoBalance(seed.brokerAccountId, '0.50');
     await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.StakeStop,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.StakeStop));
     expect(linesOf(seed.session.id)).toContainEqual(
       expect.objectContaining({
         msg: 'trading session stopped',
@@ -2943,9 +1593,9 @@ describe('the balance wait after a settlement (#696)', () => {
     await orchestrator.stop();
   });
 
-  it('BW3 past the no-signal limit counted from the settlement the short balance stops the session', async () => {
+  it('BW3′ past the no-signal limit counted from the settlement the short balance stops the session', async () => {
     const orchestrator = stoppable();
-    const seed = await wonBeforePayout(orchestrator);
+    const seed = await wonBeforePayout();
     // the settlement is aged past the limit and the snapshot further back, so the settlement stays
     // newer than the balance; an UPDATE without status runs no transition trigger
     await tmp.db.execute(
@@ -2955,10 +1605,7 @@ describe('the balance wait after a settlement (#696)', () => {
       sql`update broker_balance_snapshots set rest_observed_at = now() - (${2 * LIMIT}::int * interval '1 millisecond'), demo_event_at = now() - (${2 * LIMIT}::int * interval '1 millisecond') where broker_account_id = ${seed.brokerAccountId}`,
     );
     await orchestrator.tick();
-    expect(await sessionRow(seed.session.id)).toMatchObject({
-      status: TradingSessionStatus.Stopped,
-      stopReason: TradingSessionStopReason.StakeStop,
-    });
+    expect(await stopOf(seed.session.id)).toEqual(stoppedWith(TradingSessionStopReason.StakeStop));
     expect(linesOf(seed.session.id)).toContainEqual(
       expect.objectContaining({
         msg: 'trading session stopped',
@@ -2969,23 +1616,19 @@ describe('the balance wait after a settlement (#696)', () => {
     await orchestrator.stop();
   });
 
-  it('BW4 inside the hold a wake does not ask the signal again; after it the step is tried once more', async () => {
-    const signals = signalsOf();
-    const orchestrator = stoppable({ signals });
-    const seed = await wonBeforePayout(orchestrator);
+  it('BW4′ inside the hold a wake does not attempt again; after it the session is tried once more', async () => {
+    const orchestrator = stoppable();
+    const seed = await wonBeforePayout();
     orchestrator.wake();
     await until('the wait', () => msgsOf(seed.session.id).includes(WAITS));
     // the line is written before the hold is applied: the tick that wrote it may still run, and the
     // wake below must start a tick of its own (#716)
     await orchestrator.tick();
-    const asked = signals.calls.length;
     const waits = () => msgsOf(seed.session.id).filter((msg) => msg === WAITS).length;
     orchestrator.wake();
     // single-flight: tick() returns the woken tick
     await orchestrator.tick();
     expect(waits()).toBe(1);
-    expect(signals.calls).toHaveLength(asked);
-    expect(await intentsOf(seed.session.id)).toHaveLength(1);
     advance(CONFIG.tickMs);
     await orchestrator.tick();
     expect(waits()).toBe(2);
@@ -3008,32 +1651,27 @@ describe('the balance wait after a settlement (#696)', () => {
     });
     return { seed, session: seed.session, intentId: intent.id };
   };
-  const earlierSession = async (orchestrator: ReturnType<typeof orchestratorOf>) => {
+  const earlierSession = async () => {
     const seed = await seedSession({ demo: '1.50' });
-    await orchestrator.tick();
-    const [intent] = await intentsOf(seed.session.id);
+    const intent = await driverIntent(seed, 1);
     await stopTradingSession(tmp.db, {
       id: seed.session.id,
       reason: TradingSessionStopReason.UserStopped,
     });
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId, {
-      settings: sessionSettings(),
+      settings: h1Settings(),
     });
-    return { seed, session, intentId: intent!.id };
+    return { seed, session, intentId: intent.id };
   };
 
-  const arrangements: [
-    string,
-    (orchestrator: ReturnType<typeof orchestratorOf>) => ReturnType<typeof oneOff>,
-  ][] = [
-    ["a bot's one-off trade", () => oneOff()],
+  it.each<[string, () => ReturnType<typeof oneOff>]>([
+    ["a bot's one-off trade", oneOff],
     ['the intent an earlier session left live at its stop', earlierSession],
-  ];
-  it.each(arrangements)(
-    'BW5 the settlement of %s on the account waits too, bounded from that settlement',
+  ])(
+    'BW5′ the settlement of %s on the account waits too, bounded from that settlement',
     async (_name, arrange) => {
       const orchestrator = stoppable();
-      const { seed, session, intentId } = await arrange(orchestrator);
+      const { seed, session, intentId } = await arrange();
       // the session's own bound would have passed: it has no intent, and started long ago
       await tmp.db
         .update(tradingSessions)
@@ -3044,15 +1682,13 @@ describe('the balance wait after a settlement (#696)', () => {
       await settle(seed, intentId, MockTradeOutcome.Win);
       orchestrator.wake();
       await until('the wait', () => msgsOf(session.id).includes(WAITS));
-      expect(await sessionRow(session.id)).toMatchObject({
-        status: TradingSessionStatus.Active,
-        stopReason: null,
-      });
-      expect(await intentsOf(session.id)).toHaveLength(0);
+      expect(await stopOf(session.id)).toEqual(ACTIVE);
       advance(CONFIG.tickMs);
       await demoBalance(seed.brokerAccountId, '2.40');
       await orchestrator.tick();
-      expect((await intentsOf(session.id)).map((intent) => intent.amount)).toEqual(['1.00000000']);
+      expect(await stopOf(session.id)).toEqual(ACTIVE);
+      expect(msgsOf(session.id)).toContain(DRIVER);
+      expect(await intentsOf(session.id)).toHaveLength(0);
       await orchestrator.stop();
     },
   );

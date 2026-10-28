@@ -248,8 +248,8 @@ const accountUnavailable = {
   reason: TradingSessionStopReason.AccountUnavailable,
 } as const;
 
-// What a session's intent creator does with each refusal of createSessionIntent: the worker's
-// orchestrator and the backend's H1 driver (#707) read the same table. Every code createTradeIntent
+// What a session's intent creator does with each refusal of createSessionIntent: the backend's H1
+// driver (#707) reads it; the worker's orchestrator did until #835. Every code createTradeIntent
 // can refuse with; a code added later fails tsc here.
 export const SESSION_INTENT_REFUSALS = {
   [TradeIntentErrorCode.UserNotFound]: accountUnavailable,
