@@ -22,7 +22,7 @@ pnpm test --project unit apps/backend/src/market-data   # mock broker and fake c
 | `createCandleSource`, `createPendingRequests` | `apps/backend/src/market-data/source.ts` | the adapter over the ring and the request set that implements the feed's port `SignalCandleSource` (`packages/signal/src/source.ts`, #405): a window only while the manager's `streaming()` is true and only for `SIGNAL_SCAN_INTERVALS`, `request` only for those; and the bounded request set the backfill drains (`pending()`) |
 | `createCandleBackfill` | `apps/backend/src/market-data/backfill.ts` | the REST backfill: due elements, the queue, one native GET per (pair, interval), `fill` (#590) |
 | `createTickStore` | `apps/backend/src/market-data/ticks.ts` | the newest tick per pair with its receipt time (#666): the manager pushes the active's ticks next to the ring (the ring's `tickProblem` rule, an older tick does not replace a newer one); `POST /trading/signal` answers it in a session's decision record ([trade-log.md](trade-log.md#the-last-tick)). The tick is kept until a newer one, never cleared on a socket drop, a failover or a quiet pair: a reader bounds its age itself (`taken_at_ms - last_tick.receivedAtMs` in the trade log). Since #668 it also keeps a window per pair, the last `TRADE_TICKS_BUFFER_MS` behind the pair's watermark (at most `TRADE_TICKS_MAX_PER_PAIR`), answered by `between(assetId, from, until)` with its coverage; the manager calls its `onDrop()` wherever it calls the ring's, and a tick ahead of its receipt moves the watermark only to the receipt + `TRADE_TICKS_AHEAD_MS`. The trade log keeper reads it ([trade-log.md → The ticks around a decision](trade-log.md#the-ticks-around-a-decision)) |
-| `createSecondSeries` | `apps/backend/src/market-data/seconds.ts` | the 1s closes of every pair for the H1 shadow (#669): the manager pushes the active's ticks into it next to the ring and the tick store, and calls its `onDrop()` wherever it calls the ring's. Its own closing rule is below; the series, the shadow that reads it and its counters are [h1.md](h1.md) |
+| `createSecondSeries` | `apps/backend/src/market-data/seconds.ts` | the 1s closes of every pair for the H1 scanner and driver (#669, #828): the manager pushes the active's ticks into it next to the ring and the tick store, and calls its `onDrop()` wherever it calls the ring's. Its own closing rule is below; the series, its readers and its counters are [h1.md](h1.md) |
 | `BrokerSocketClient` | `packages/broker-socket` | the worker's socket client, unchanged ([broker-socket.md](broker-socket.md)) |
 
 The source is created only when `BROKER_WS_URL` is set. It reads the same variable as the worker's
@@ -33,10 +33,9 @@ the backfill and the manager in one function (`createMarketData`), starts the ma
 backfill after `listen()` with the other loops, and stops the backfill and then the manager in
 shutdown phase 1. The start line
 `market data source { enabled }` says whether it runs. The second series is built with the ring,
-and the H1 shadow on it with the backfill and the manager, unless `H1_SHADOW=off`; it starts after
-them and stops before them ([h1.md](h1.md#start-stop-and-the-switch)). The H1 driver (#707) is
-built with them always, starts after the shadow and stops before it
-([h1.md → The driver](h1.md#the-driver-707)).
+and the H1 driver and the scanner on it with the backfill and the manager; they start after them
+and stop before them ([h1.md → Start and stop](h1.md#start-and-stop),
+[→ The driver](h1.md#the-driver-707)).
 
 ## The state machine
 
@@ -134,7 +133,7 @@ request was built: a bucket the broker answered as forming may be closed by the 
 arrives. `missing()` counts the empty closed
 buckets.
 
-**The seconds of the H1 shadow have a rule of their own** ([h1.md](h1.md#the-second-series)): a
+**The seconds of the H1 series have a rule of their own** ([h1.md](h1.md#the-second-series)): a
 second is closed by its own pair's first tick past it, not by the watermark of every pair, or by
 the clock `H1_SECOND_CLOSE_MARGIN_MS` (500 ms) after its end, inside `MARKET_DATA_SKEW_MARGIN_MS`.
 A drop makes the pair's seconds NaN until its next tick. The REST backfill does not touch them.
@@ -309,8 +308,8 @@ token, the socket URL or a payload (`manager.test.ts` M11).
 | `MARKET_DATA_BACKFILL_CONCURRENCY` | 2 | backfill GETs in flight |
 
 The backfill's slack is `CANDLE_CLOSE_SLACK_MS` (500, shared since #697) and its GET's limit `MARKET_DATA_RING_CANDLES + 1`.
-The second series and the H1 shadow have four constants of their own in the same file
-(`H1_SECOND_CLOSE_MARGIN_MS`, `H1_SHADOW_TICK_MS`, `H1_SHADOW_LOG_MS`, `H1_SERIES_CAPACITY_SEC`),
+The second series has three constants of its own in the same file
+(`H1_SECOND_CLOSE_MARGIN_MS`, `H1_SERIES_TICK_MS`, `H1_SERIES_CAPACITY_SEC`),
 with their links: [h1.md → Constants](h1.md#constants). The tick window has `TRADE_TICKS_BUFFER_MS`
 (240 000), `TRADE_TICKS_MAX_PER_PAIR` (10 000) and `TRADE_TICKS_AHEAD_MS` (500), chained with the
 keeper's constants in the same file ([trade-log.md → The ticks around a decision](trade-log.md#the-ticks-around-a-decision)).
@@ -442,5 +441,5 @@ The links:
   calls only `getChart`.
 - The tick window keeps the last 240 s of ticks per pair in memory only; what is kept of it is the
   trade log's `decision_ticks` ([trade-log.md](trade-log.md#the-ticks-around-a-decision)).
-- The second series keeps one close per second, not the ticks; the H1 shadow on it is #669
-  ([h1.md](h1.md)).
+- The second series keeps one close per second, not the ticks; the H1 scanner and driver on it
+  are [h1.md](h1.md).

@@ -28,21 +28,21 @@ duration ([The report](#the-report)).
 | The keeper's reads and writes | `listDecisionTicksCandidates`, `insertDecisionTicks`, `sweepSignalDecisions` in `packages/db/src/decision-ticks-ops.ts` |
 | The keeper | `createTradeLogKeeper` in `apps/backend/src/trade-log/keeper.ts` |
 | The export | `apps/backend/src/cli/trade-log.ts` |
-| The report (#502) | `readTradeReportStats` in `packages/db/src/signal-decision-ops.ts`; `apps/backend/src/cli/trade-report.ts`, dispatched from `trade-log.ts`; the window parser and the labels shared with `h1 shadow report` in `apps/backend/src/cli/report.ts` |
+| The report (#502) | `readTradeReportStats` in `packages/db/src/signal-decision-ops.ts`; `apps/backend/src/cli/trade-report.ts`, dispatched from `trade-log.ts`; the window parser and the labels in `apps/backend/src/cli/report.ts` (shared with `h1 shadow report` until #830) |
 
 ## The table
 
 | Column | Meaning | Clock / source |
 |---|---|---|
 | `id` | uuid | |
-| `context` | who decided: `session` (the orchestrator), `session_start` (`POST /trading/sessions`), `shadow` (the H1 shadow, #669, [h1.md](h1.md#the-row)) — `SignalDecisionContext`, CHECK `signal_decisions_context_check` | |
+| `context` | who decided: `session` (the orchestrator), `session_start` (`POST /trading/sessions`), `shadow` (the H1 shadow, #669, until #830, [h1.md](h1.md#the-row)) — `SignalDecisionContext`, CHECK `signal_decisions_context_check` | |
 | `trading_session_id` | the session; NULL for a start that created none and for `shadow` (`signal_decisions_session_pair_check`: required for `session` and for `started`) | |
 | `broker_account_id` | the account; required for `session` and `session_start` (`signal_decisions_account_pair_check`); with a session, the session's own account (`signal_decisions_session_account_fk → trading_sessions (id, broker_account_id)`, Rule 4) | |
 | `step` | the session's intents + 1 when the decision was taken — the step the intent key `session:<id>:<step>` names; only for `session` (`signal_decisions_step_pair_check`), `> 0` | |
 | `asset_id`, `interval` | the pair and the candle interval; `interval` in `SIGNAL_INTERVALS`, NULL allowed for a version that decides on ticks | |
 | `version` | the signal version (`v2`); an identifier, CHECK by `SIGNAL_VERSION_PATTERN` (`^[a-z0-9_-]{1,16}$`), not a list: a later detector adds one without a migration | |
 | `decided_at_ms` | the decider's `nowMs` (the entry's); a shadow row's: the end label `f` of the closed second it decided on | backend clock, read by the cache before its fetch; a shadow row's: the broker's (a second's label) |
-| `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads; the shadow's right after its detector |
+| `taken_at_ms` | when the writer took the decision | the orchestrator's clock right after `evaluate` returned; the start route's after its signal and balance reads; the H1 driver's right after its detector (the shadow's, until #830) |
 | `recorded_at` | the row's insert | database clock, the transaction's start |
 | `kind`, `action` | the decision's kind (`SignalKind`) and, for a signal only, its direction (`signal_decisions_action_pair_check`) | |
 | `payout` | the pair's payout when the decision was taken, `numeric(8,4)` as `broker_trades.payout`; NULL allowed, and NULL also when the catalog's value is outside the column (`payoutInColumn`, `packages/db/src/schema/columns.ts`, shared with `broker_trades.payout`, #675) | the catalog the writer read |
@@ -139,7 +139,7 @@ The backend's driver ([h1.md → The driver](h1.md#the-driver-707)) writes rows 
 acts on, for the repeat steps (#775), for one `no_signal` per waiting period (#775) and for the
 second it stops a session at the no-signal limit (#775, review round 1); a skip (a
 live intent, the limits, the sizer, an ineligible pair) is a counter of its `h1 driver` line.
-`params` of a `version = h1` row is the shadow row's shape with `set = session`, so the export
+`params` of a `version = h1` row is the H1 row's shape with `set = session`, so the export
 prints the row as an entry `replayH1Entry` decides again; `interval` and `ticks_until_ms` are
 NULL, `source` is the series' (`kind: ticks`). A repeat row (`version = h1-repeat`) is decided by
 the rule, not the detector: `params = { rule: repeat_step_2, strategy }`, `decision.after` the
@@ -168,9 +168,6 @@ export prints it as stored, the stand reports `unsupported_version`.
 
 Tests of the shapes: `signal-decision-ops.db.test.ts` SD19, `driver.db.test.ts` SD20 (the three
 `h1-start` rows), `trade-log.db.test.ts` X17, X19.
-
-`docs/h1.md` → Comparing with the shadow joins these rows with their trades and the shadow's R1
-row of the same pair and second.
 
 ### The start route (`context = session_start`, no `step`)
 
@@ -351,8 +348,8 @@ kept-forever test by `trade_intents_decision_key`. The sweep locks only `decisio
 `signal_decisions` rows (outside Rule 5's chain). A first run on a long-lived database deletes at
 most the batch cap an hour and continues the next hour.
 
-A report over shadow rows (#681's `h1 shadow report`) sees only what the sweep kept: a period longer
-than 7 days holds only the last 7 days of shadow rows.
+No shadow row is written since #830: the shadow band empties itself seven days after the deploy
+(#835 retires it).
 
 ## The record's columns
 
@@ -449,7 +446,7 @@ pnpm --silent --filter @binarius/backend trade-log report --since 7d
 database's clock), for every trade with or without a decision row. `--since` is an instant with a
 zone, up to milliseconds, or `Nh` / `Nd` (N 1…9999) back from `--until`; without `--until` the end
 is the database's clock at the start, as for the export (`readTradeLogEnd`). The window parser is
-`h1 shadow report`'s (`apps/backend/src/cli/report.ts`).
+`apps/backend/src/cli/report.ts` (`h1 shadow report`'s too until #830).
 
 **What is counted.** One intent of the window is one unit; a **trade** is its closed broker trade.
 Win, loss and tie are `tradeResultSql` (`profit > 0`, `< 0`, else), the result the session
@@ -609,10 +606,9 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
   `intent` and the sampled `shadow` rows; a report or dashboard; the worker (it neither reads nor
   writes `decision_ticks`).
 - #669: the H1 shadow's rows (`context: shadow`, `version: h1`, `result`, `ticks_until_ms`),
-  [h1.md](h1.md). #670's creators of session intents must pass `decision` to
+  [h1.md](h1.md); no writer since #830. #670's creators of session intents must pass `decision` to
   `createSessionIntent` (the type requires it).
 - The sender of the session messages reads the rows (#722), never writes them.
-- One-off bot trades and the bot's analyses are not recorded (owner, #666). Reports:
-  `h1 shadow report` over the shadow rows (#681, [h1.md → The report](h1.md#the-report)) and
-  `trade-log report` over the trades (#502, [The report](#the-report)); decisions without a trade
-  are only in the export.
+- One-off bot trades and the bot's analyses are not recorded (owner, #666). The report:
+  `trade-log report` over the trades (#502, [The report](#the-report); #681's `h1 shadow report`
+  was removed in #830); decisions without a trade are only in the export.

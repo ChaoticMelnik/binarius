@@ -34,8 +34,8 @@ or, when nothing was sent, over REST, and which answer means what, is in
 [docs/trade-executor.md](docs/trade-executor.md); how the backend caches the broker's pairs and serves
 them on `GET /trading/pairs` is in [docs/pairs-catalog.md](docs/pairs-catalog.md); how the
 backend builds candles from the price stream of a service account's socket is in
-[docs/market-data.md](docs/market-data.md); how the backend decides H1 on a 1s series of those
-ticks without trading and records each signal with its outcome is in [docs/h1.md](docs/h1.md); what
+[docs/market-data.md](docs/market-data.md); how the backend builds a 1s series of those ticks and
+decides H1 on it for the bot's signals and the sessions' trades is in [docs/h1.md](docs/h1.md); what
 `/account` shows about a user's Binodex links is in [docs/bot-account.md](docs/bot-account.md);
 what a connected user sees as the bot's home — the status card with the balances and the tokens —
 is in [docs/bot-menu.md](docs/bot-menu.md); what the demo button leads to — the signals, the

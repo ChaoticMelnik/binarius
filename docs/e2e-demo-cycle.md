@@ -47,7 +47,7 @@ The harness does not follow `index.ts` by itself. When `index.ts` gets a new dep
 | `createSessionNoticeListener` | the same (#723): on the harness's pool, `wake()` of the sender; started after it, stopped before it |
 | `createSecondSeries`, `createH1Scanner`, `createH1Driver` (inside `marketData`, #828) | built on a series of their own that the harness's pump fills ([The price path](#the-price-path)): the scanner serves the analysis's `h1` and the signals list, the driver trades every session; the driver's `submitBudgetMs` 5 000 (the run's take is not timed, as `session-routes.db.test.ts` H1-R10) and `scanMs` 1 000; `streaming` always true. The listener's notification reaches `h1Driver.notice` as in `index.ts` (the repeat step). Started after `listen()` before the pump, stopped first |
 | `createAdminBot`, `createMailingEngine`, `createStarReconciler`, `createServiceAccountKeeper` | not built: no staff, mailing, Stars or service account takes part in the cycle |
-| `marketData` (the manager, the ring, the backfill, the shadow) | not built: it exists only with the backend's `BROKER_WS_URL`; without it the candle feed reads REST (#405), as here |
+| `marketData` (the manager, the ring, the backfill, the driver, the scanner) | not built: it exists only with the backend's `BROKER_WS_URL`; without it the candle feed reads REST (#405), as here |
 | `createBotTextRefresher` | not built: the texts are the catalog's defaults |
 | `postbacks` | `{ db, secret }` with the harness's secret (`E2E_POSTBACK_SECRET`), as with `POSTBACK_URL_SECRET` set; the demo cycle sends none, the repeat run sends four |
 

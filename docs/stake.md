@@ -201,9 +201,9 @@ at import.
 
 Decided for #450 (owner 2026-10-10, item 3; the night's manager chose 12×). The strategy of new
 sessions is `SESSION_STAKE_STRATEGY` (`martingale` or `fixed`; unset is `martingale`; anything
-else, an empty value included, stops the backend and the `session-start` CLI at start). The start
-route and the CLI write it into the session's settings v3 (#552; v2 until then) with
-`buildSessionSettings`, and for
+else, an empty value included, stops the backend and `h1 session start` at start). The start
+route and the CLI write it into the session's settings v5 (#775) with `buildH1SessionSettings`
+(v3's `buildSessionSettings` was removed in #830), and for
 `martingale` the limits of the session's base stake B, from `martingaleLimitsFor(B)`
 (`packages/shared/src/trading-session.ts`, the one place of the multipliers):
 

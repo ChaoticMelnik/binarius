@@ -403,4 +403,4 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
   observed live ([broker-rest.md](broker-rest.md) → Observed live: one demo trade); the mock
   broker holds both modes.
 - A loss limit for real — a future issue. `/settings` names both stakes (#326); the CLI
-  `session-start` stays demo.
+  `h1 session start` follows the user's mode.

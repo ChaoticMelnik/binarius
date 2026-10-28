@@ -842,8 +842,9 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
   at the closed second: a 5-second move against the RMS of the 5-second moves of the last 300 s
   ([signal-stand.md → H1](signal-stand.md#h1-on-the-1s-series-667)). It is not a candle decider
   and not a version of this one: `SIGNAL_ALGORITHM_VERSIONS` stays `v1`, `v2`. The stand runs it on
-  history, and since #669 the backend's shadow runs it on a 1s series of live ticks with two sets,
-  R1 and the reference, without trading ([h1.md](h1.md)).
+  history; the shadow of #669 ran it on a 1s series of live ticks with two sets, R1 and the
+  reference, without trading until #830; since #828 the scanner and the driver run R1 on that
+  series ([h1.md](h1.md)).
 
 ## Boundaries
 
@@ -860,5 +861,5 @@ none». The decision stays Signal v2; MACD and MA stay on the card only.
   `packages/db` is not changed.
 - #483: MACD and MA as decision gates, backtested on the stand and not added
   ([MACD and MA on history](#macd-and-ma-on-history-483)); no Signal v3 task follows from it.
-- #667 (H1 detector and its stand run), #669 (the live 1s series and shadow mode), #670 (H1
-  sessions on a marked account), #828 (every session and every shown signal H1's).
+- #667 (H1 detector and its stand run), #669 (the live 1s series and shadow mode, removed in
+  #830), #670 (H1 sessions on a marked account), #828 (every session and every shown signal H1's).
