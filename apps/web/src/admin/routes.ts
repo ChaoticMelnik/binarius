@@ -2,7 +2,6 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import * as z from 'zod';
 import {
   AdminErrorCode,
-  AdminH1MarkOutcome,
   AdminStarRefundOutcome,
   BOT_TEXT_KEY_PATTERN,
   botProfileMethodsOf,
@@ -224,11 +223,6 @@ const adjustForm = z.object({
 // The service mark's form (#391): `return` is only ever one of the pages that carry the form.
 const serviceMarkBody = z.object({
   service: z.enum(['on', 'off']),
-  return: z.string().optional(),
-});
-// The H1 mark's form (#745): from the user card and the broker accounts list only
-const h1MarkBody = z.object({
-  h1: z.enum(['on', 'off']),
   return: z.string().optional(),
 });
 // «Вернуть Stars» (#510): only the body's shape, then the shared schema (the reason's bounds live
@@ -1203,46 +1197,6 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           );
         }
         // session_invalid clears the cookie in withStaffSession; anything else is our failure
-        throw error;
-      }
-      return reply.redirect(returnPathOf(form.data.return), 303);
-    }),
-  );
-
-  app.post('/admin/broker-accounts/:id/h1', async (request, reply) =>
-    withStaffSession(request, reply, async (token) => {
-      const { id } = request.params as { id: string };
-      if (!UUID_PATTERN.test(id)) return reply.redirect('/admin/broker-accounts', 303);
-      const form = h1MarkBody.safeParse(request.body);
-      if (!form.success) {
-        return sendHtml(reply, 400, adminNoticePage(TEXTS.h1MarkTitle, TEXTS.h1MarkBadForm));
-      }
-      try {
-        const answer = await backend.setH1Mark(token, id, { h1: form.data.h1 === 'on' });
-        if (answer.outcome === AdminH1MarkOutcome.ActiveSession) {
-          return sendHtml(
-            reply,
-            409,
-            adminNoticePage(TEXTS.h1MarkActiveSessionTitle, TEXTS.h1MarkActiveSessionBody),
-          );
-        }
-      } catch (error) {
-        if (isNotFound(error)) {
-          return sendHtml(
-            reply,
-            404,
-            adminNoticePage(TEXTS.serviceAccountNotFoundTitle, TEXTS.serviceAccountNotFoundBody),
-          );
-        }
-        const answered = outcome(error);
-        if (answered === undefined || answered.status >= 500) {
-          request.log.error(errorLogFields(error), 'the H1 mark outcome is unknown');
-          return sendHtml(
-            reply,
-            500,
-            adminNoticePage(TEXTS.outcomeUnknownTitle, TEXTS.h1MarkOutcomeUnknown),
-          );
-        }
         throw error;
       }
       return reply.redirect(returnPathOf(form.data.return), 303);

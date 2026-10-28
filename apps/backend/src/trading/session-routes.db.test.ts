@@ -62,7 +62,6 @@ import {
   readTradingSessionView,
   recordSignalDecision,
   referralCodes,
-  setH1Mark,
   setStake,
   signalDecisions,
   setTradingMode,
@@ -2066,7 +2065,7 @@ describe('the recovery routes (#567)', () => {
 });
 
 // #745, #775, #828: every start from the bot writes settings v5 (docs/h1.md -> From the bot), on
-// any account, marked or not: a regular session with the H1 signal
+// any account: a regular session with the H1 signal
 describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
   // a pair H1 trades: it accepts the 5 s expiry
   const h1Pair: BinaryPair = { ...pair, payout: 95 };
@@ -2079,8 +2078,6 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
     driverCalls = fakeH1Driver(reading);
     return appWith({ catalog: freshCatalog(pairs), h1Driver: driverCalls.h1Driver, ...options });
   };
-  const mark = (accountId: string, h1: boolean) =>
-    tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
   const h1Body = (seed: { telegramUserId: string }, patch: object = {}) =>
     bodyFor(seed, { durationSec: H1_EXPIRY_SEC, ...patch });
   const startRows = (brokerAccountId: string) =>
@@ -2130,23 +2127,7 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
     });
   });
 
-  it('H1-R14 the same request on a marked and an unmarked account writes v5 alike (#828)', async () => {
-    const unmarked = await seedReady();
-    const marked = await seedReady();
-    expect(await mark(marked.brokerAccountId, true)).toBe('marked');
-    const target = h1App();
-    const settings = await Promise.all(
-      [unmarked, marked].map(async (seed) => sessionOf(await start(target, h1Body(seed))).settings),
-    );
-    expect(settings[0]).toMatchObject({
-      version: 5,
-      durationSec: H1_EXPIRY_SEC,
-      signal: { kind: 'h1', params: H1_R1_PARAMS },
-    });
-    expect(settings[1]).toEqual(settings[0]);
-  });
-
-  it('H1-R15 a 15 s request on an unmarked account is 409 h1_duration_unsupported (#828)', async () => {
+  it('H1-R15 a 15 s request is 409 h1_duration_unsupported (#828)', async () => {
     const seed = await seedReady();
     const before = await sessionCount();
     const response = await start(h1App(), h1Body(seed, { durationSec: 15 }));

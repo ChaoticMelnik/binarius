@@ -268,7 +268,7 @@ describe('the worker environment for the token route and the trade lists', () =>
     }
   });
 
-  // #450: the start route and the session-start CLI read one value of .env
+  // #450: the start route and the backend's `h1 session start` CLI read one value of .env
   it('forwards SESSION_STAKE_STRATEGY through the broker anchor as a valueless entry', () => {
     expect(brokerAnchorValue(composeYaml, 'SESSION_STAKE_STRATEGY')).toBe('');
     for (const service of ['backend', 'trading-worker']) {
@@ -292,7 +292,7 @@ describe('the worker environment for the token route and the trade lists', () =>
     }
   });
 
-  // #669: the backend's switch, outside the anchor, so the worker never receives it
+  // #830: the H1 shadow's switch (#669) is gone; neither the anchor nor the worker carries it
   it('keeps H1_SHADOW out of the broker anchor and the worker', () => {
     expect(brokerAnchorValue(composeYaml, 'H1_SHADOW')).toBeUndefined();
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();

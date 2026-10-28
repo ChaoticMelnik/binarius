@@ -56,7 +56,8 @@ const marksOf = async (id: string) => {
 describe('migration 0072', () => {
   it('B1 closes the summary step of a session whose text summary was sent; B2 leaves the rest; B3 adds the index', async () => {
     // one active session per account; raw SQL at 0071's columns, so a later migration's column
-    // (0073's broker_accounts.h1_since, #670) does not reach this database through the schema
+    // (0073's broker_accounts.h1_since, #670, dropped by 0085) does not reach this database
+    // through the schema
     let telegramUserId = 900_000;
     const session = async () => {
       const [user] = (

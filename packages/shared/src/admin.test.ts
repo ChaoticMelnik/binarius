@@ -30,8 +30,6 @@ import {
   adminServiceAccountsResponseSchema,
   adminServiceAccountViewSchema,
   adminServiceMarkRequestSchema,
-  safeParseAdminH1MarkRequest,
-  safeParseAdminH1MarkResponse,
   adminServiceMarkResponseSchema,
   safeParseAdminBrokerAccountsQuery,
   adminConfirmRequestSchema,
@@ -370,7 +368,6 @@ describe('admin read responses', () => {
     createdAt: AT,
     updatedAt: AT,
     serviceSince: null,
-    h1Since: null,
   };
   const detail = {
     id: listItem.id,
@@ -885,7 +882,6 @@ describe('broker accounts contracts (#342)', () => {
     createdAt: AT,
     updatedAt: AT,
     serviceSince: null,
-    h1Since: null,
     userId: U1,
     telegramUserId: '4242',
   };
@@ -911,7 +907,7 @@ describe('broker accounts contracts (#342)', () => {
       'userId',
       'telegramUserId',
     ]);
-    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toHaveLength(16);
+    expect(Object.keys(adminBrokerAccountListItemSchema.shape)).toHaveLength(15);
   });
 
   const withoutOwner = Object.fromEntries(Object.entries(halted).filter(([k]) => k !== 'userId'));
@@ -1019,7 +1015,6 @@ describe('service accounts contracts (#391)', () => {
     createdAt: AT,
     updatedAt: AT,
     serviceSince: AT,
-    h1Since: null,
   };
   const row = {
     ...view,
@@ -1074,47 +1069,6 @@ describe('service accounts contracts (#391)', () => {
     expect(
       adminServiceMarkResponseSchema.safeParse({ ...mark, outcome: 'not_found' }).success,
     ).toBe(false);
-  });
-});
-
-describe('H1 mark contracts (#745)', () => {
-  const account = {
-    id: '00000000-0000-4000-8000-000000000021',
-    brokerUserId: 'broker-8',
-    email: null,
-    isPartnerClient: false,
-    status: 'active',
-    authRevokedReason: null,
-    tradingHalted: false,
-    haltedReason: null,
-    accessTokenExpiresAt: AT,
-    tokenRotatedAt: null,
-    createdAt: AT,
-    updatedAt: AT,
-    serviceSince: null,
-    h1Since: AT,
-  };
-
-  it('accepts every outcome, a marked and an unmarked view; refuses an extra key and a bad flag', () => {
-    for (const outcome of ['marked', 'unmarked', 'unchanged', 'active_session']) {
-      expect(safeParseAdminH1MarkResponse({ me: ME, outcome, account }).success).toBe(true);
-    }
-    expect(
-      safeParseAdminH1MarkResponse({
-        me: ME,
-        outcome: 'unmarked',
-        account: { ...account, h1Since: null },
-      }).success,
-    ).toBe(true);
-    const notFound = { me: ME, outcome: 'not_found', account };
-    expect(safeParseAdminH1MarkResponse(notFound).success).toBe(false);
-    expect(
-      safeParseAdminH1MarkResponse({ me: ME, outcome: 'marked', account: { ...account, x: 1 } })
-        .success,
-    ).toBe(false);
-    expect(safeParseAdminH1MarkRequest({ h1: true }).success).toBe(true);
-    expect(safeParseAdminH1MarkRequest({ h1: 'yes' }).success).toBe(false);
-    expect(safeParseAdminH1MarkRequest({ h1: false, x: 1 }).success).toBe(false);
   });
 });
 

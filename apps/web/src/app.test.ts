@@ -55,12 +55,10 @@ import {
   SAMPLE_BROKER_ACCOUNTS,
   SAMPLE_SERVICE_ACCOUNTS,
   SAMPLE_SERVICE_MARKED,
-  SAMPLE_H1_MARKED,
   SAMPLE_REFUNDED,
   SAMPLE_STAR_PAYMENT,
   SAMPLE_STAR_PAYMENT_REFUNDED,
   SAMPLE_STAR_REFUNDS,
-  H1_SINCE,
   SAMPLE_DEPOSIT,
   SAMPLE_DEPOSIT_UNOWNED,
   SAMPLE_DEPOSITS,
@@ -160,7 +158,6 @@ interface Calls {
   brokerAccounts: [string, AdminBrokerAccountsQuery][];
   serviceAccounts: string[];
   setServiceMark: unknown[][];
-  setH1Mark: unknown[][];
   starRefunds: [string, AdminStarRefundsQuery][];
   refundStarPayment: unknown[][];
   audit: [string, AdminAuditQuery][];
@@ -198,7 +195,6 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     brokerAccounts: [],
     serviceAccounts: [],
     setServiceMark: [],
-    setH1Mark: [],
     starRefunds: [],
     refundStarPayment: [],
     audit: [],
@@ -287,10 +283,6 @@ const build = (backend: Partial<BackendClient> = {}, secureCookies = false): Fas
     setServiceMark: async (token, id, request) => {
       calls.setServiceMark.push([token, id, request]);
       return SAMPLE_SERVICE_MARKED;
-    },
-    setH1Mark: async (token, id, request) => {
-      calls.setH1Mark.push([token, id, request]);
-      return SAMPLE_H1_MARKED;
     },
     starRefunds: async (token, query) => {
       calls.starRefunds.push([token, query]);
@@ -2599,7 +2591,6 @@ describe('the broker accounts page (#342)', () => {
       time(h.accessTokenExpiresAt),
       TEXTS.none,
       expect.stringContaining(TEXTS.serviceMark) as unknown,
-      expect.stringContaining(TEXTS.h1Mark) as unknown,
       time(h.createdAt),
       time(h.updatedAt),
     ]);
@@ -2617,8 +2608,6 @@ describe('the broker accounts page (#342)', () => {
       time(a.accessTokenExpiresAt),
       TEXTS.none,
       expect.stringContaining(TEXTS.serviceMark) as unknown,
-      // the list's second account is H1-marked (#745): its date and «Снять H1»
-      expect.stringMatching(new RegExp(`${H1_SINCE}[\\s\\S]*${TEXTS.h1Unmark}`)) as unknown,
       time(a.createdAt),
       time(a.updatedAt),
     ]);
@@ -4222,99 +4211,22 @@ describe('the service accounts (#391)', () => {
   });
 });
 
-describe('the H1 mark (#745)', () => {
+describe('no H1 mark since #830', () => {
   const withCookie = { [SESSION_COOKIE]: TOKEN };
-  const ACCOUNT = SAMPLE_BROKER_ACCOUNT.id;
-  const url = `/admin/broker-accounts/${ACCOUNT}/h1`;
-  const rebuild = async (backend: Partial<BackendClient>) => {
-    await app.close();
-    app = build(backend);
-  };
-  const formOf = (h1: 'on' | 'off', returnPath: string, id = ACCOUNT) =>
-    new RegExp(
-      `<form method="post" action="/admin/broker-accounts/${id}/h1">\\s*` +
-        `<input type="hidden" name="h1" value="${h1}" />\\s*` +
-        `<input type="hidden" name="return" value="${returnPath}" />`,
-    );
 
-  it('H1-W1 the card and the list carry the «H1» column: «Включить H1», or the date and «Снять H1»; the service page none', async () => {
-    const card = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
-    expect(card.body).toContain(`<th>${TEXTS.columnH1}</th>`);
-    expect(card.body).toMatch(formOf('on', `/admin/users/${SAMPLE_USER_ID}`));
-    expect(card.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.h1Mark}</button>`);
-    expect(card.body).not.toMatch(formOf('off', `/admin/users/${SAMPLE_USER_ID}`));
-
-    // the list's second account is marked (SAMPLE_BROKER_ACCOUNTS)
-    const list = await get('/admin/broker-accounts', withCookie);
-    const halted = SAMPLE_BROKER_ACCOUNTS.accounts[0]?.id;
-    expect(list.body).toMatch(formOf('on', '/admin/broker-accounts', halted));
-    expect(list.body).toMatch(formOf('off', '/admin/broker-accounts', ACCOUNT));
-    expect(list.body).not.toMatch(formOf('on', '/admin/broker-accounts', ACCOUNT));
-    expect(list.body).toContain(`<time datetime="${H1_SINCE}">${H1_SINCE}</time>`);
-    expect(list.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.h1Unmark}</button>`);
-
-    const service = await get('/admin/service-accounts', withCookie);
-    expect(service.body).not.toContain(`<th>${TEXTS.columnH1}</th>`);
-    expect(service.body).not.toContain('/h1"');
-  });
-
-  it('H1-W2 sends the mark and goes back to the card or the list', async () => {
-    const back = `/admin/users/${SAMPLE_USER_ID}`;
-    const marked = await post(url, { h1: 'on', return: back }, withCookie);
-    expect([marked.statusCode, marked.headers.location]).toEqual([303, back]);
-    const unmarked = await post(url, { h1: 'off', return: '/admin/broker-accounts' }, withCookie);
-    expect([unmarked.statusCode, unmarked.headers.location]).toEqual([
-      303,
-      '/admin/broker-accounts',
-    ]);
-    expect(calls.setH1Mark).toEqual([
-      [TOKEN, ACCOUNT, { h1: true }],
-      [TOKEN, ACCOUNT, { h1: false }],
-    ]);
-    expect(calls.setServiceMark).toEqual([]);
-  });
-
-  it('H1-W3 answers active_session with 409, an unknown account with 404, an unknown outcome with 500', async () => {
-    await rebuild({
-      setH1Mark: async () => ({ ...SAMPLE_H1_MARKED, outcome: 'active_session' }),
-    });
-    const held = await post(url, { h1: 'off' }, withCookie);
-    expect(held.statusCode).toBe(409);
-    expect(held.body).toContain(TEXTS.h1MarkActiveSessionBody);
-
-    await rebuild({
-      setH1Mark: async () => Promise.reject(httpFailure(404, AdminErrorCode.NotFound)),
-    });
-    const missing = await post(url, { h1: 'on' }, withCookie);
-    expect(missing.statusCode).toBe(404);
-    expect(missing.body).toContain(TEXTS.serviceAccountNotFoundBody);
-
-    for (const failure of [new BackendError(BackendErrorCode.Unreachable), httpFailure(500)]) {
-      await rebuild({ setH1Mark: async () => Promise.reject(failure) });
-      const unknown = await post(url, { h1: 'on' }, withCookie);
-      expect(unknown.statusCode).toBe(500);
-      expect(unknown.body).toContain(TEXTS.h1MarkOutcomeUnknown);
-      const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
-      expect(logged.some((line) => line.msg === 'the H1 mark outcome is unknown')).toBe(true);
+  it('H1-W6 the card and the list carry no «H1» column and no H1 form; the old route is gone', async () => {
+    for (const path of [`/admin/users/${SAMPLE_USER_ID}`, '/admin/broker-accounts']) {
+      const page = await get(path, withCookie);
+      expect(page.statusCode).toBe(200);
+      expect(page.body).not.toContain('<th>H1</th>');
+      expect(page.body).not.toContain('/h1"');
     }
-  });
-
-  it('H1-W4 refuses a bad form with 400 and an id that is not a uuid without the backend', async () => {
-    const bad = await post('/admin/broker-accounts/not-a-uuid/h1', { h1: 'on' }, withCookie);
-    expect([bad.statusCode, bad.headers.location]).toEqual([303, '/admin/broker-accounts']);
-    const maybe = await post(url, { h1: 'maybe' }, withCookie);
-    expect(maybe.statusCode).toBe(400);
-    expect(maybe.body).toContain(TEXTS.h1MarkBadForm);
-    expect(calls.setH1Mark).toEqual([]);
-  });
-
-  it('H1-W5 clears a session the backend calls gone', async () => {
-    await rebuild({
-      setH1Mark: async () => Promise.reject(httpFailure(401, AdminErrorCode.SessionInvalid)),
-    });
-    const gone = await post(url, { h1: 'on' }, withCookie);
-    expect([gone.statusCode, gone.headers.location]).toEqual([302, '/admin/login']);
-    expect(cookieOf(gone, SESSION_COOKIE)?.value).toBe('');
+    const old = await post(
+      `/admin/broker-accounts/${SAMPLE_BROKER_ACCOUNT.id}/h1`,
+      { h1: 'on' },
+      withCookie,
+    );
+    expect(old.statusCode).toBe(404);
   });
 });
 

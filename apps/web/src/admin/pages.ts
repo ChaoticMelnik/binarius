@@ -641,14 +641,6 @@ const serviceMarkForm = (accountId: string, service: boolean, returnPath: string
     <button type="submit" class="btn btn-secondary">${service ? TEXTS.serviceMark : TEXTS.serviceUnmark}</button>
   </form>`;
 
-// The H1 mark's form (#745): the service mark's shape, its own route
-const h1MarkForm = (accountId: string, h1: boolean, returnPath: string): SafeHtml =>
-  html`<form method="post" action="/admin/broker-accounts/${accountId}/h1">
-    <input type="hidden" name="h1" value="${h1 ? 'on' : 'off'}" />
-    <input type="hidden" name="return" value="${returnPath}" />
-    <button type="submit" class="btn btn-secondary">${h1 ? TEXTS.h1Mark : TEXTS.h1Unmark}</button>
-  </form>`;
-
 // The accounts table of the list (#342, with the owner column) and of the user card (without it):
 // one set of columns. The account id is the uuid the ledger's «Основание» and the intent card print.
 const brokerAccountsTable = <T extends AdminBrokerAccountView>(
@@ -670,7 +662,6 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
       { label: TEXTS.columnTokenExpiresAt },
       { label: TEXTS.columnTokenRotatedAt },
       { label: TEXTS.columnService },
-      { label: TEXTS.columnH1 },
       { label: TEXTS.columnUserCreatedAt },
       { label: TEXTS.columnUpdatedAt },
     ],
@@ -689,9 +680,6 @@ const brokerAccountsTable = <T extends AdminBrokerAccountView>(
       account.serviceSince === null
         ? serviceMarkForm(account.id, true, returnPath)
         : html`${when(account.serviceSince)} ${serviceMarkForm(account.id, false, returnPath)}`,
-      account.h1Since === null
-        ? h1MarkForm(account.id, true, returnPath)
-        : html`${when(account.h1Since)} ${h1MarkForm(account.id, false, returnPath)}`,
       when(account.createdAt),
       when(account.updatedAt),
     ]),

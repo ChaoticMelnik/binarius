@@ -83,7 +83,7 @@ export interface CreateTradingSessionInput {
   brokerAccountId: string;
   mode: TradeMode;
   settings: TradingSessionSettings;
-  // the direction of the signal the start route checked (#568); the CLI's session-start has none
+  // the direction of the signal the start route checked (#568); the CLI `h1 session start` has none
   startSignalAction?: TradeAction;
 }
 

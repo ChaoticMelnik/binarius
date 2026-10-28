@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, isNotNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm';
 import {
   H1_SESSION_SIGNAL_KIND,
   TradingSessionStatus,
@@ -10,62 +10,18 @@ import type { Db } from './client';
 import { brokerAccounts } from './schema/broker-accounts';
 import { tradingSessions } from './schema/trading-sessions';
 import { users } from './schema/users';
-import type { DbExecutor, Tx } from './trade-intent-ops';
+import type { DbExecutor } from './trade-intent-ops';
 
-// H1 sessions (#670, docs/h1.md -> Sessions): the account's mark and the reads of the h1 CLI
-// (apps/backend/src/cli/h1-mark.ts, h1-session.ts). The mark gates `h1 session start`, and makes a
-// session the bot starts on the account an H1 one (#745, checkTradingSessionStart).
+// H1 sessions (#670, docs/h1.md -> Sessions): the reads of the h1 CLI
+// (apps/backend/src/cli/h1-session.ts) and the driver's list. The account's H1 mark was removed
+// in #830 (migration 0085).
 
 // an H1 session, settings v5 or a read-only v4 row (#775): both carry signal.kind; the kind is
 // a bound parameter, not a literal in SQL
 export const h1SessionSql: SQL = sql`(${tradingSessions.settings} #>> '{signal,kind}') = ${H1_SESSION_SIGNAL_KIND}`;
 
-const activeH1SessionOfAccountSql: SQL = sql`exists (
-  select 1 from ${tradingSessions}
-  where ${tradingSessions.brokerAccountId} = ${brokerAccounts.id}
-    and ${tradingSessions.status} = ${TradingSessionStatus.Active}
-    and ${h1SessionSql})`;
-
-export type H1MarkResult = 'marked' | 'unmarked' | 'unchanged' | 'not_found' | 'active_session';
-
-// One conditional UPDATE, the current state in its predicate, as setServiceMark (#391): a re-mark
-// keeps the first date. An unmark also needs no active H1 session of the account, in the same
-// predicate; the row is locked first, so the predicate's snapshot is taken after any session start
-// that held the row (createTradingSession locks it) has committed. Nothing else on the row changes:
-// a revocation or a re-login keeps the mark. It writes no audit row: each caller writes its own in
-// the same transaction (#745) - the CLI `h1 mark|unmark` as system, the admin route by asStaff as
-// the staff member; a new caller writes one too.
-export async function setH1Mark(
-  tx: Tx,
-  { accountId, h1 }: { accountId: string; h1: boolean },
-): Promise<H1MarkResult> {
-  const [locked] = await tx
-    .select({ h1Since: brokerAccounts.h1Since })
-    .from(brokerAccounts)
-    .where(eq(brokerAccounts.id, accountId))
-    .for('no key update');
-  if (locked === undefined) return 'not_found';
-  const updated = await tx
-    .update(brokerAccounts)
-    .set({ h1Since: h1 ? sql`now()` : null, updatedAt: sql`now()` })
-    .where(
-      and(
-        eq(brokerAccounts.id, accountId),
-        sql`(${brokerAccounts.h1Since} is null) = ${h1}`,
-        h1 ? undefined : sql`not ${activeH1SessionOfAccountSql}`,
-      ),
-    )
-    .returning({ id: brokerAccounts.id });
-  if (updated.length === 0) {
-    if (h1 || locked.h1Since === null) return 'unchanged';
-    return 'active_session';
-  }
-  return h1 ? 'marked' : 'unmarked';
-}
-
 export interface H1Account {
   id: string;
-  h1Since: Date | null;
   status: BrokerAccountStatus;
   tradingHalted: boolean;
   userId: string;
@@ -76,7 +32,6 @@ export interface H1Account {
 
 const h1AccountColumns = {
   id: brokerAccounts.id,
-  h1Since: brokerAccounts.h1Since,
   status: brokerAccounts.status,
   tradingHalted: brokerAccounts.tradingHalted,
   userId: users.id,
@@ -101,33 +56,6 @@ export async function readH1Account(
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
     .where(eq(brokerAccounts.id, accountId));
   return row === undefined ? undefined : toH1Account(row);
-}
-
-export interface H1ListedAccount extends H1Account {
-  h1Since: Date;
-  // the account's active H1 session, if any
-  activeSessionId: string | null;
-}
-
-// the marked accounts, oldest mark first
-export async function listH1Accounts(exec: DbExecutor): Promise<H1ListedAccount[]> {
-  const rows = await exec
-    .select({
-      ...h1AccountColumns,
-      activeSessionId: sql<string | null>`(select ${tradingSessions.id} from ${tradingSessions}
-        where ${tradingSessions.brokerAccountId} = ${brokerAccounts.id}
-          and ${tradingSessions.status} = ${TradingSessionStatus.Active}
-          and ${h1SessionSql})`,
-    })
-    .from(brokerAccounts)
-    .innerJoin(users, eq(users.id, brokerAccounts.userId))
-    .where(isNotNull(brokerAccounts.h1Since))
-    .orderBy(asc(brokerAccounts.h1Since), asc(brokerAccounts.id));
-  return rows.map((row) => {
-    // the WHERE's term; a NULL here would be a broken query, not a state
-    if (row.h1Since === null) throw new Error('listH1Accounts: unmarked row');
-    return { ...toH1Account(row), h1Since: row.h1Since, activeSessionId: row.activeSessionId };
-  });
 }
 
 export interface AccountActiveSession {
@@ -181,8 +109,7 @@ export interface ActiveH1Session {
   startedAt: Date;
 }
 
-// The driver's list (#707): every active H1 session (settings v4/v5), oldest start first. The
-// account's H1 mark is not read since #828: every session the bot starts is H1's.
+// The driver's list (#707): every active H1 session (settings v4/v5), oldest start first.
 export async function listActiveH1Sessions(db: Db): Promise<ActiveH1Session[]> {
   const rows = await db
     .select({

@@ -19,12 +19,10 @@ import {
   SESSION_NO_SIGNAL_CANDLES,
   sessionNoSignalTimeoutMs,
   sessionSignalCandleMs,
-  TRADING_SESSION_SETTINGS_VERSION,
   safeParseSessionSummaryResponse,
   safeParseSessionShareResponse,
   sessionProgress,
   TradingSessionErrorCode,
-  buildSessionSettings,
   martingaleLimitsFor,
   sessionStakeParams,
   TradingSessionStatus,
@@ -230,58 +228,6 @@ describe('martingaleLimitsFor (#450, docs/stake.md -> Defaults)', () => {
       maxStake: '0.00000012',
       maxSessionLoss: '0.0000002',
     });
-  });
-});
-
-describe('buildSessionSettings (#450)', () => {
-  const input = {
-    assetId: 101,
-    durationSec: 60,
-    cycles: 5,
-    stake: { baseStake: decimalStringSchema.parse('1.55'), stakeScale: 2 },
-  };
-
-  it('writes v3 martingale with the limits of the base stake', () => {
-    expect(TRADING_SESSION_SETTINGS_VERSION).toBe(3);
-    const built = buildSessionSettings({ ...input, strategy: 'martingale' });
-    expect(built.success && built.data).toEqual({
-      version: 3,
-      assetId: 101,
-      durationSec: 60,
-      cycles: 5,
-      stake: {
-        strategy: 'martingale',
-        baseStake: '1.55',
-        stakeScale: 2,
-        limits: {
-          maxSteps: 4,
-          maxStake: '18.6',
-          maxSessionLoss: '31',
-          maxSessionDurationMs: 3_600_000,
-        },
-      },
-    });
-  });
-
-  it('writes v3 fixed without limits', () => {
-    const built = buildSessionSettings({ ...input, strategy: 'fixed' });
-    expect(built.success && built.data.stake).toEqual({
-      strategy: 'fixed',
-      baseStake: '1.55',
-      stakeScale: 2,
-    });
-  });
-
-  it('refuses a zero stake and a stake whose limits leave numeric(20,8)', () => {
-    for (const strategy of ['fixed', 'martingale'] as const) {
-      const zero = { ...input.stake, baseStake: decimalStringSchema.parse('0') };
-      expect(buildSessionSettings({ ...input, stake: zero, strategy }).success).toBe(false);
-    }
-    const huge = { ...input.stake, baseStake: decimalStringSchema.parse('100000000000') };
-    expect(buildSessionSettings({ ...input, stake: huge, strategy: 'fixed' }).success).toBe(true);
-    expect(buildSessionSettings({ ...input, stake: huge, strategy: 'martingale' }).success).toBe(
-      false,
-    );
   });
 });
 

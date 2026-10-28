@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { eq, sql } from 'drizzle-orm';
 import pino from 'pino';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -38,11 +37,9 @@ import {
 } from '@binarius/db';
 import {
   createTempDatabase,
-  R1_SHADOW_PARAMS_FIXTURE,
   seedBalanceSnapshot,
   seedBrokerTradeFor,
   seedUserWithAccount,
-  shadowDecisionFixture,
   type TempDatabase,
 } from '@binarius/db/testing';
 import { createSessionNoticeListener } from '../trading/session-notice-listener';
@@ -57,7 +54,7 @@ import {
 } from './driver';
 
 // The driver against the real operations (#707, docs/h1.md -> The driver) on a temporary migrated
-// database: an unmarked account's v5 session (#828), a scripted series whose ramp from F signals up.
+// database: an account's v5 session (#828), a scripted series whose ramp from F signals up.
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
   throw new Error(
@@ -144,7 +141,7 @@ const catalog: PairsCatalogView = {
   fresh: true,
 };
 
-// an unmarked account's v5 session: the bot's start since #828
+// an account's v5 session: the bot's start since #828
 async function botSession() {
   const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
   // the sizer's balance (#775)
@@ -213,14 +210,6 @@ async function tradeOnce() {
   return { seed, session, f, wakes };
 }
 
-// a shadow row on the driver's pair and second
-const twinOf = (f: number) => ({
-  assetId: ASSET,
-  decidedAtMs: f,
-  takenAtMs: f + 520,
-  ticksUntilMs: f + 7_000,
-});
-
 describe('the H1 driver on the database (#707)', () => {
   it('H1-DB1: the intent carries the deadline and its decision row; the outbox event is there', async () => {
     const { session, f } = await tradeOnce();
@@ -259,7 +248,7 @@ describe('the H1 driver on the database (#707)', () => {
     expect(events).toHaveLength(1);
   });
 
-  it("H1-DB2: docs/h1.md's comparison query pairs the trade with the shadow's r1 twin; the export replays the row", async () => {
+  it("H1-DB2′: the export replays the driver's row to its own decision", async () => {
     const { session, f } = await tradeOnce();
     const [intent] = await tmp.db
       .select()
@@ -271,45 +260,6 @@ describe('the H1 driver on the database (#707)', () => {
       profit: decimalStringSchema.parse('0.92'),
       closePrice: 1.1006,
     });
-    const entries = (entryPrice: number, outcome: string) => ({
-      entries: [
-        { entryDelaySec: 1, entryPrice, exitPrice: 1.1006, outcome },
-        { entryDelaySec: 2, entryPrice: 1.1009, exitPrice: 1.1004, outcome: 'loss' },
-      ],
-    });
-    await recordSignalDecision(
-      tmp.db,
-      shadowDecisionFixture({ ...twinOf(f), result: entries(1.1003, 'win') }),
-    );
-    await recordSignalDecision(
-      tmp.db,
-      shadowDecisionFixture(
-        { ...twinOf(f), result: entries(1.1007, 'loss') },
-        { ...R1_SHADOW_PARAMS_FIXTURE, set: 'h1', entryDelaySec: 2 },
-      ),
-    );
-
-    const docs = readFileSync(new URL('../../../../docs/h1.md', import.meta.url), 'utf8');
-    const section = docs.slice(docs.indexOf('### Comparing with the shadow'));
-    const query = /```sql\n([\s\S]*?)```/.exec(section)?.[1];
-    if (query === undefined) throw new Error('docs/h1.md has no comparison query');
-    expect(query).toContain("'<session id>'");
-    const { rows } = await tmp.db.execute<Record<string, unknown>>(
-      sql.raw(query.replace("'<session id>'", `'${session.id}'`).replace(/;\s*$/, '')),
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      f: String(f),
-      open_after_ms: '800',
-      open_price: 1.1001,
-      close_price: 1.1006,
-      profit: '0.92000000',
-      last_error: null,
-      shadow_entry: 1.1003,
-      shadow_exit: 1.1006,
-      shadow_outcome: 'win',
-    });
-
     const page = await readTradeLogPage(tmp.db, {
       from: new Date(0),
       to: new Date(Date.now() + 60_000),
@@ -423,10 +373,9 @@ describe('the shown start on the database (#829)', () => {
   });
 });
 
-// #745, #775, #828: the start route writes the same v5 for every account; the driver lists such a
-// session whatever the account's H1 mark says
+// #745, #775, #828: the start route writes the same v5 for every account; the driver lists it
 describe("the driver's list and a session of the bot's settings (#745, #828)", () => {
-  it('H1-DB3′: listed with its owner on an unmarked account, and still once marked', async () => {
+  it('H1-DB3′: listed with its owner', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
     const built = buildH1SessionSettings({
       assetId: ASSET,
@@ -448,10 +397,6 @@ describe("the driver's list and a session of the bot's settings (#745, #828)", (
     );
     const listed = (await listActiveH1Sessions(tmp.db)).find((row) => row.id === session.id);
     expect(listed).toMatchObject({ telegramUserId: seed.telegramUserId, settings: built.data });
-    await tmp.db.execute(
-      sql`update broker_accounts set h1_since = now() where id = ${seed.brokerAccountId}`,
-    );
-    expect((await listActiveH1Sessions(tmp.db)).map((row) => row.id)).toContain(session.id);
   });
 });
 

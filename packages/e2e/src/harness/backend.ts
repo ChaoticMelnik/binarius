@@ -20,7 +20,7 @@ import {
   H1_SCANNER_LOG_MS,
   H1_SECOND_CLOSE_MARGIN_MS,
   H1_SERIES_CAPACITY_SEC,
-  H1_SHADOW_TICK_MS,
+  H1_SERIES_TICK_MS,
   H1_START_SECOND_MAX_AGE_MS,
   INIT_DATA_MAX_AGE_MS,
   OutboxPublisher,
@@ -168,7 +168,7 @@ export async function startE2eBackend(deps: {
     logger: log,
     config: {
       scanMs: E2E_BACKEND_TUNING.h1ScanMs,
-      tickMs: H1_SHADOW_TICK_MS,
+      tickMs: H1_SERIES_TICK_MS,
       logMs: 60_000,
       submitBudgetMs: E2E_BACKEND_TUNING.h1SubmitBudgetMs,
       startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,

@@ -3310,25 +3310,7 @@ describe('broker_accounts.service_since (#391)', () => {
   });
 });
 
-describe('broker_accounts.h1_since and trade_intents.submit_deadline_at (#670)', () => {
-  it('H1-D1: h1_since is NULL by default and stores a timestamp', async () => {
-    await rolledBack(async (tx) => {
-      const seed = await seedAccount(tx);
-      const [before] = await tx
-        .select({ h1Since: brokerAccounts.h1Since })
-        .from(brokerAccounts)
-        .where(eq(brokerAccounts.id, seed.accountId));
-      expect(before?.h1Since).toBeNull();
-      const at = new Date('2026-10-21T20:00:00.123Z');
-      const [after] = await tx
-        .update(brokerAccounts)
-        .set({ h1Since: at })
-        .where(eq(brokerAccounts.id, seed.accountId))
-        .returning({ h1Since: brokerAccounts.h1Since });
-      expect(after?.h1Since).toEqual(at);
-    });
-  });
-
+describe('trade_intents.submit_deadline_at (#670)', () => {
   it('H1-D2: submit_deadline_at is NULL by default and takes any timestamp, before created_at too', async () => {
     await rolledBack(async (tx) => {
       const seed = await seedAccount(tx);

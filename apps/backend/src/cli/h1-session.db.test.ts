@@ -8,7 +8,7 @@ import {
   seedUserWithAccount,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { brokerAccounts, openTrading, setH1Mark, setStake, tradingSessions } from '@binarius/db';
+import { brokerAccounts, openTrading, setStake, tradingSessions } from '@binarius/db';
 import {
   AccountHaltReason,
   DEFAULT_SESSION_CYCLES,
@@ -76,13 +76,12 @@ async function run(
   return { code, out, err };
 }
 
-// a marked account with a snapshot: minimum 1, 10000 demo, 100 real
-async function marked(options: { tradingMode?: TradeMode; snapshot?: boolean } = {}) {
+// an account with a snapshot: minimum 1, 10000 demo, 100 real
+async function ready(options: { tradingMode?: TradeMode; snapshot?: boolean } = {}) {
   const seed = await seedUserWithAccount(tmp.db, {
     balance: 10n,
     ...(options.tradingMode === undefined ? {} : { tradingMode: options.tradingMode }),
   });
-  await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
   if (options.snapshot !== false) await seedBalanceSnapshot(tmp.db, seed.brokerAccountId);
   return seed;
 }
@@ -101,23 +100,15 @@ const sessionsOfAccount = (accountId: string) =>
   tmp.db.select().from(tradingSessions).where(eq(tradingSessions.brokerAccountId, accountId));
 
 describe('h1 session start (#670, #775)', () => {
-  it('H1-R2′ refuses an unmarked account; no payout floor: a pair at 90 % starts', async () => {
-    const plain = await seedUserWithAccount(tmp.db);
-    await seedBalanceSnapshot(tmp.db, plain.brokerAccountId);
-    expect(await run(startArgs(plain.brokerAccountId))).toEqual({
-      code: 1,
-      out: '',
-      err: [`аккаунт не помечен для H1: сначала h1 mark ${plain.brokerAccountId}`],
-    });
-
-    const low = await marked();
+  it('H1-R2′ no payout floor: a pair at 90 % starts', async () => {
+    const low = await ready();
     const at = await run(startArgs(low.brokerAccountId), catalogOf([pair({ payout: 90 })]).deps);
     expect(at).toMatchObject({ code: 0, err: [] });
     expect(await sessionsOfAccount(low.brokerAccountId)).toHaveLength(1);
   });
 
   it("H1-R3′ creates a v5 session: R1, the cycles, the process's strategy, the minimum as the stake, the user mode", async () => {
-    const seed = await marked();
+    const seed = await ready();
     const started = await run(startArgs(seed.brokerAccountId));
     expect(started.code).toBe(0);
     const id = started.out.trim();
@@ -143,7 +134,7 @@ describe('h1 session start (#670, #775)', () => {
     });
 
     // the saved stake of the mode wins over the minimum
-    const saver = await marked();
+    const saver = await ready();
     await setStake(
       tmp.db,
       BigInt(saver.telegramUserId),
@@ -170,7 +161,7 @@ describe('h1 session start (#670, #775)', () => {
   });
 
   it('H1-R5 DEMO_ONLY refuses a user in real mode before the catalog; without it the session is real', async () => {
-    const seed = await marked({ tradingMode: TradeMode.Real });
+    const seed = await ready({ tradingMode: TradeMode.Real });
     const catalog = catalogOf([pair()]);
     expect(
       await run(startArgs(seed.brokerAccountId), catalog.deps, {
@@ -189,7 +180,7 @@ describe('h1 session start (#670, #775)', () => {
   });
 
   it('H1-R6 every other refusal writes nothing and says why', async () => {
-    const seed = await marked();
+    const seed = await ready();
     const id = seed.brokerAccountId;
     const refusal = async (deps: H1SessionDeps, line: string, argv = startArgs(id)) => {
       expect(await run(argv, deps)).toEqual({ code: 1, out: '', err: [line] });
@@ -221,7 +212,7 @@ describe('h1 session start (#670, #775)', () => {
       .set({ tradingHalted: false, haltedReason: null })
       .where(eq(brokerAccounts.id, id));
 
-    const blind = await marked({ snapshot: false });
+    const blind = await ready({ snapshot: false });
     await refusal(
       catalogOf([pair()]).deps,
       'нет снимка баланса аккаунта: откройте экран сделки в боте и повторите',
@@ -248,30 +239,9 @@ describe('h1 session start (#670, #775)', () => {
   });
 });
 
-// #828: createTradingSession reads no mark under the account lock any more (every bot start is
-// H1); the CLI's own mark check before the catalog read stays until #830
-describe('h1 session start: the mark is checked once, before the catalog (#707, #828)', () => {
-  it('H1-R7′ an unmark after the check and before the insert no longer refuses the start', async () => {
-    const seed = await marked();
-    const { deps } = catalogOf([pair()]);
-    // the catalog is read after the CLI's own mark check: the unmark lands in between
-    const racing: H1SessionDeps = {
-      ...deps,
-      catalog: async () => {
-        await tmp.db.transaction((tx) =>
-          setH1Mark(tx, { accountId: seed.brokerAccountId, h1: false }),
-        );
-        return deps.catalog!();
-      },
-    };
-    expect((await run(startArgs(seed.brokerAccountId), racing)).code).toBe(0);
-    expect(await sessionsOfAccount(seed.brokerAccountId)).toHaveLength(1);
-  });
-});
-
 describe('h1 session stop and status (#670)', () => {
   it('H1-R4′ stops only an H1 session; status shows the last H1 session in cycles; none is exit 1', async () => {
-    const seed = await marked();
+    const seed = await ready();
     const id = seed.brokerAccountId;
     const account = ['--account', id];
     expect(await run(['session', 'status', ...account])).toEqual({
@@ -318,5 +288,33 @@ describe('h1 session stop and status (#670)', () => {
     const after = await run(['session', 'status', ...account]);
     expect(after.out.split('\n')[1]).toBe('статус stopped (user_stopped), режим demo');
     expect((await run(['session', 'stop', ...account])).code).toBe(1);
+  });
+});
+
+describe('the h1 entry point (#830)', () => {
+  it('H1-R9 a removed or unknown command is a usage error: exit 2, nothing on stdout, the usage last', async () => {
+    const brokerAccountId = '8b1c6f6e-0000-4000-8000-000000000000';
+    for (const [argv, first] of [
+      [['mark', brokerAccountId], 'неизвестная команда: mark'],
+      [['unmark', brokerAccountId], 'неизвестная команда: unmark'],
+      [['list'], 'неизвестная команда: list'],
+      [['shadow', 'report', '--since', '24h'], 'неизвестная команда: shadow'],
+      [[], 'нет команды'],
+    ] as const) {
+      const { code, out, err } = await run([...argv]);
+      expect({ argv, code, out, first: err[0] }).toEqual({ argv, code: 2, out: '', first });
+      expect(err.at(-1)).toContain('h1 session start --account');
+    }
+  });
+
+  it('H1-R10 without DATABASE_URL: exit 1, nothing on stdout, the variable named', async () => {
+    const { code, out, err } = await run(
+      ['session', 'status', '--account', '8b1c6f6e-0000-4000-8000-000000000000'],
+      catalogOf([pair()]).deps,
+      {},
+    );
+    expect(code).toBe(1);
+    expect(out).toBe('');
+    expect(err.join('\n')).toContain('DATABASE_URL');
   });
 });

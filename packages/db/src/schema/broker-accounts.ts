@@ -50,9 +50,6 @@ export const brokerAccounts = pgTable(
     // NULL = not a service account (#391, docs/service-accounts.md); else the mark's date, which
     // also orders the service accounts for #404. The one writer is setServiceMark.
     serviceSince: timestamp('service_since', { withTimezone: true }),
-    // NULL = an ordinary account (#670, docs/h1.md -> Sessions); else the date of its H1 mark,
-    // without which `h1 session start` creates nothing. The one writer is setH1Mark.
-    h1Since: timestamp('h1_since', { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },

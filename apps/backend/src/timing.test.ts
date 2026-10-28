@@ -65,8 +65,7 @@ import {
   ADMIN_TELEGRAM_API_TIMEOUT_MS,
   H1_SECOND_CLOSE_MARGIN_MS,
   H1_SERIES_CAPACITY_SEC,
-  H1_SHADOW_LOG_MS,
-  H1_SHADOW_TICK_MS,
+  H1_SERIES_TICK_MS,
   DEFAULT_H1_SUBMIT_BUDGET_MS,
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
@@ -203,9 +202,9 @@ describe('backend shutdown timing', () => {
 
   // #141: forwarded only when set, so the route is off unless the host sets it; the worker never
   // receives it (not in the shared broker anchor)
-  // #669: on unless set; the worker never reads it
-  it('forwards H1_SHADOW to the backend only, without a default', () => {
-    expect(composeServiceEnvValue(composeYaml, 'backend', 'H1_SHADOW')).toBe('');
+  // #830: the H1 shadow and its switch are gone; a leftover H1_SHADOW in .env reaches no process
+  it('forwards H1_SHADOW to no service', () => {
+    expect(composeServiceEnvValue(composeYaml, 'backend', 'H1_SHADOW')).toBeUndefined();
     expect(composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SHADOW')).toBeUndefined();
   });
 
@@ -451,22 +450,19 @@ describe('broker balance timing', () => {
   it('closes a second inside its margin, before the ring would, and holds the longest window (#669)', () => {
     expect({
       H1_SECOND_CLOSE_MARGIN_MS,
-      H1_SHADOW_TICK_MS,
-      H1_SHADOW_LOG_MS,
+      H1_SERIES_TICK_MS,
       H1_SERIES_CAPACITY_SEC,
     }).toEqual({
       H1_SECOND_CLOSE_MARGIN_MS: 500,
-      H1_SHADOW_TICK_MS: 100,
-      H1_SHADOW_LOG_MS: 60_000,
+      H1_SERIES_TICK_MS: 100,
       H1_SERIES_CAPACITY_SEC: 320,
     });
-    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SECOND_CLOSE_MARGIN_MS);
+    expect(H1_SERIES_TICK_MS).toBeLessThanOrEqual(H1_SECOND_CLOSE_MARGIN_MS);
     expect(H1_SECOND_CLOSE_MARGIN_MS).toBeLessThan(MARKET_DATA_SKEW_MARGIN_MS);
     expect(H1_SECOND_CLOSE_MARGIN_MS).toBeLessThan(TICK_MAX_SKEW_MS);
     expect(H1_SERIES_CAPACITY_SEC).toBeGreaterThanOrEqual(
       H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1,
     );
-    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SHADOW_LOG_MS);
   });
 
   it("bounds the H1 driver's submit budget by the expiry and its scan by phase 1 (#707)", () => {
@@ -486,14 +482,14 @@ describe('broker balance timing', () => {
     expect(MIN_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(DEFAULT_H1_SUBMIT_BUDGET_MS);
     expect(DEFAULT_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(MAX_H1_SUBMIT_BUDGET_MS);
     expect(MAX_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(H1_EXPIRY_SEC * 1000);
-    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
+    expect(H1_SERIES_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThanOrEqual(H1_DRIVER_LOG_MS);
   });
 
   it("bounds the H1 start's reading age by a quiet second's close and the entry window (#796)", () => {
     expect(H1_START_SECOND_MAX_AGE_MS).toBe(1_600);
-    expect(1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SHADOW_TICK_MS).toBeLessThanOrEqual(
+    expect(1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SERIES_TICK_MS).toBeLessThanOrEqual(
       H1_START_SECOND_MAX_AGE_MS,
     );
     expect(H1_START_SECOND_MAX_AGE_MS).toBeLessThan(H1_ENTRY_WINDOW_SEC.to * 1_000);
@@ -501,7 +497,7 @@ describe('broker balance timing', () => {
 
   it("spans the series' clock ticks with the H1 scanner's line (#828)", () => {
     expect(H1_SCANNER_LOG_MS).toBe(60_000);
-    expect(H1_SHADOW_TICK_MS).toBeLessThanOrEqual(H1_SCANNER_LOG_MS);
+    expect(H1_SERIES_TICK_MS).toBeLessThanOrEqual(H1_SCANNER_LOG_MS);
   });
 
   it('keeps a window inside the tick buffer at its latest capture and the sweep outside the capture horizon (#668)', () => {

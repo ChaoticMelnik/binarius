@@ -241,14 +241,13 @@ export const MARKET_DATA_BACKFILL_POLL_MS = 250;
 // backfill GETs in flight at once
 export const MARKET_DATA_BACKFILL_CONCURRENCY = 2;
 
-// --- The H1 shadow (#669, docs/h1.md) -------------------------------------------------------------
+// --- The H1 second series (#669, docs/h1.md -> The second series) ---------------------------------
 // H1_SECOND_CLOSE_MARGIN_MS and H1_START_SECOND_MAX_AGE_MS live in packages/shared (h1.ts) since
 // #828: the bot's wait polls on them. Re-exported for this process's readers.
 export { H1_SECOND_CLOSE_MARGIN_MS, H1_START_SECOND_MAX_AGE_MS };
-// the period of the series' clock rule and of the shadow's sweep: a clock close lags at most this
-export const H1_SHADOW_TICK_MS = 100;
-// the `h1 shadow` line
-export const H1_SHADOW_LOG_MS = 60_000;
+// the period of the series' clock rule, the driver's tick (series.advance()): a clock close lags at
+// most this
+export const H1_SERIES_TICK_MS = 100;
 // seconds of closes kept per pair: the longest window, the latest exit and a margin
 export const H1_SERIES_CAPACITY_SEC = 320;
 
@@ -573,32 +572,30 @@ const TIMING_CHAIN_HOLDS =
   MARKET_DATA_BACKFILL_POLL_MS * MAX_SIGNAL_SCAN_PER_MINUTE <= 60_000 &&
   MARKET_DATA_BACKFILL_SCAN_MS <= SIGNAL_CHART_INTERVAL_MS['5s'] &&
   SERVICE_ACCOUNTS_TICK_MS < MARKET_DATA_ACCOUNT_RETRY_MS &&
-  // the H1 shadow (#669): the clock rule runs inside its own margin; a second closes before the
-  // ring's clock rule would close its 5s bucket; the series' bound on a tick ahead of its receipt
-  // (the same margin) is tighter than the tick filter's skew bound; a pair holds the longest window
-  // (every set has moveSec <= sdStepSec) plus the latest exit; the line spans ticks. stop() waits for the INSERTs in
-  // flight, ordinary database latency (above)
-  H1_SHADOW_TICK_MS <= H1_SECOND_CLOSE_MARGIN_MS &&
+  // the H1 second series (#669): the clock rule runs inside its own margin; a second closes before
+  // the ring's clock rule would close its 5s bucket; the series' bound on a tick ahead of its
+  // receipt (the same margin) is tighter than the tick filter's skew bound; a pair holds the
+  // longest window of a reader (every set has moveSec <= sdStepSec) plus the latest exit
+  H1_SERIES_TICK_MS <= H1_SECOND_CLOSE_MARGIN_MS &&
   H1_SECOND_CLOSE_MARGIN_MS < MARKET_DATA_SKEW_MARGIN_MS &&
   H1_SECOND_CLOSE_MARGIN_MS < TICK_MAX_SKEW_MS &&
   H1_SERIES_CAPACITY_SEC >= H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1 &&
-  H1_SHADOW_TICK_MS <= H1_SHADOW_LOG_MS &&
   // the H1 driver (#707): the default sits inside its bounds; a take after the expiry would open a
-  // trade whose predicted window has passed; the series' clock (the shadow's tick) is no slower
+  // trade whose predicted window has passed; the series' clock (the driver's tick) is no slower
   // than the scan, the scan ends inside phase 1 and the line spans scans. stop() waits for the
   // intent creations in flight, ordinary database latency (above)
   MIN_H1_SUBMIT_BUDGET_MS <= DEFAULT_H1_SUBMIT_BUDGET_MS &&
   DEFAULT_H1_SUBMIT_BUDGET_MS <= MAX_H1_SUBMIT_BUDGET_MS &&
   MAX_H1_SUBMIT_BUDGET_MS <= H1_EXPIRY_SEC * 1000 &&
-  H1_SHADOW_TICK_MS <= H1_DRIVER_SCAN_MS &&
+  H1_SERIES_TICK_MS <= H1_DRIVER_SCAN_MS &&
   H1_DRIVER_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   H1_DRIVER_SCAN_MS <= H1_DRIVER_LOG_MS &&
   // the H1 start's reading (#796): a healthy series always has a current second, and a current
   // reading plus the driver's path opens inside the backtest's entry window
-  1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SHADOW_TICK_MS <= H1_START_SECOND_MAX_AGE_MS &&
+  1_000 + H1_SECOND_CLOSE_MARGIN_MS + H1_SERIES_TICK_MS <= H1_START_SECOND_MAX_AGE_MS &&
   H1_START_SECOND_MAX_AGE_MS < H1_ENTRY_WINDOW_SEC.to * 1_000 &&
   // the H1 scanner (#828): its line spans the series' clock ticks
-  H1_SHADOW_TICK_MS <= H1_SCANNER_LOG_MS &&
+  H1_SERIES_TICK_MS <= H1_SCANNER_LOG_MS &&
   // the ticks around a decision (#668): at the latest capture (decided + max wait, closed by the
   // clock rule, seen a scan later) the pair's watermark, at most the receipt clock + the clamp, has
   // not pruned the window's start; a watermark close precedes the clock close by at most the

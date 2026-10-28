@@ -1,13 +1,13 @@
 import { H1SecondClosedBy, type LastTick } from '@binarius/shared';
 import { assertDigits, tickProblem, type Tick } from '@binarius/signal';
 
-// The 1s closes of the data socket for the H1 shadow (#669, docs/h1.md -> The second series): a
+// The 1s closes of the data socket for H1 (#669, docs/h1.md -> The second series): a
 // second is labelled by its end s (a multiple of 1 000 ms) and covers (s - 1000, s], as the
 // broker's 1s chart does; c[s] is the price of the last tick with timestamp <= s, rounded to the
 // pair's digits, carried over quiet seconds. A second f is closed by its own pair's first tick past
 // it, or by the process clock closeMarginMs after f; a closed second never changes. When the
 // active socket leaves `ready`, each pair's seconds are NaN until its first tick after the drop.
-// No timers and no logger: the shadow drives advance() and reads counters().
+// No timers and no logger: the H1 driver's tick drives advance() (#830).
 
 export interface SecondSeriesOptions {
   capacitySec: number;

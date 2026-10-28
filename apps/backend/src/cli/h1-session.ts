@@ -41,9 +41,9 @@ import {
 import { formatFailure } from './kill-switch';
 
 // `h1 session start|stop|status` (#670, #775, docs/h1.md → Sessions): an H1 session (settings v5)
-// of a marked account - a regular session whose entries come from H1. The checks of `start` run in
-// a fixed order, each its own line and exit 1, before any write; its trades come from the driver
-// (#707), the orchestrator stops it.
+// of any account (the mark was removed in #830) - a regular session whose entries come from H1.
+// The checks of `start` run in a fixed order, each its own line and exit 1, before any write; its
+// trades come from the driver (#707), the orchestrator stops it.
 export type H1SessionCommand =
   | { kind: 'session_start'; accountId: string; assetId: number; cycles: number }
   | { kind: 'session_stop'; accountId: string }
@@ -139,10 +139,6 @@ async function start(
   const account = await readH1Account(db, accountId);
   if (account === undefined) {
     err('аккаунт брокера не найден');
-    return EXIT_FAILED;
-  }
-  if (account.h1Since === null) {
-    err(`аккаунт не помечен для H1: сначала h1 mark ${accountId}`);
     return EXIT_FAILED;
   }
   // the user's mode decides the session's (Rule 36); DEMO_ONLY before any broker read (Rule 33)

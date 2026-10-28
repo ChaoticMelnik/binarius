@@ -17,7 +17,6 @@ import {
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { applyBalanceEvent, upsertBalanceSnapshot } from './balance-snapshot-ops';
-import { setH1Mark } from './h1-ops';
 import { brokerBalanceSnapshots, tradeIntents, tradingSessions, users } from './schema/index';
 import {
   createTempDatabase,
@@ -153,14 +152,6 @@ describe('checkTradingSessionStart', () => {
     const result = await check(seed.telegramUserId);
     expect(result).toMatchObject({ ok: true, brokerAccountId: seed.brokerAccountId });
     expect(result.ok && result.accessTokenExpiresAt).toBeInstanceOf(Date);
-  });
-
-  it('H1-H6′ returns no H1 mark (#828): the start reads none, marked or not', async () => {
-    const seed = await seedUserWithAccount(tmp.db);
-    await tmp.db.transaction((tx) => setH1Mark(tx, { accountId: seed.brokerAccountId, h1: true }));
-    const result = await check(seed.telegramUserId);
-    expect(result.ok).toBe(true);
-    expect(result).not.toHaveProperty('h1Since');
   });
 
   it('E0 a closed trading switch refuses first, before the user and the account', async () => {

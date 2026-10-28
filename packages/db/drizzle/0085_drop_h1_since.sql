@@ -1,0 +1,1 @@
+ALTER TABLE "broker_accounts" DROP COLUMN "h1_since";

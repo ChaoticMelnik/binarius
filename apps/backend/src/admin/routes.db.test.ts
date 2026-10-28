@@ -30,9 +30,6 @@ import {
   adminServiceAccountsResponseSchema,
   adminServiceAccountViewSchema,
   adminServiceMarkResponseSchema,
-  adminH1MarkResponseSchema,
-  buildH1SessionSettings,
-  decimalStringSchema,
   AuthRevokedReason,
   adminDepositsResponseSchema,
   adminDepositViewSchema,
@@ -62,7 +59,6 @@ import {
   TradeIntentStatus,
   UserStatus,
   type LogLevel,
-  SessionStakeStrategy,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
@@ -1974,7 +1970,6 @@ describe('the read pages (#107)', () => {
       'createdAt',
       'updatedAt',
       'serviceSince',
-      'h1Since',
     ]);
     expect(response.body).not.toMatch(/Enc|Hash|KeyId|_enc|_hash|key_id/);
     const body = adminUserResponseSchema.parse(raw);
@@ -4268,180 +4263,6 @@ describe('the service accounts (#391)', () => {
     expect(wrongBearer.statusCode).toBe(401);
     expect(await auditCount()).toBe(before);
     expect((await serviceSinceOf(id))?.serviceSince).toBeNull();
-  });
-});
-
-describe('the H1 mark (#745)', () => {
-  const PATH = '/admin/broker-accounts/:id/h1';
-  const urlOf = (accountId: string) => `/admin/broker-accounts/${accountId}/h1`;
-  const h1Settings = () => {
-    const built = buildH1SessionSettings({
-      assetId: 101,
-      cycles: 5,
-      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-      strategy: SessionStakeStrategy.Martingale,
-    });
-    if (!built.success) throw new Error('H1 fixture settings do not parse');
-    return built.data;
-  };
-  const h1SinceOf = async (id: string) => {
-    const [row] = await tmp.db
-      .select({ h1Since: brokerAccounts.h1Since })
-      .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, id));
-    return row?.h1Since ?? null;
-  };
-  const h1EntriesOf = (accountId: string) =>
-    tmp.db
-      .select({ action: auditLog.action, actorType: auditLog.actorType, payload: auditLog.payload })
-      .from(auditLog)
-      .where(and(eq(auditLog.entityType, 'broker_account'), eq(auditLog.entityId, accountId)))
-      .orderBy(asc(auditLog.createdAt), asc(auditLog.id));
-
-  it('H1-A1 marks: the answer, the row and one staff audit row; a re-mark is unchanged', async () => {
-    const seeded = await seedStaff(tmp.db);
-    const token = await openSession(seeded);
-    const { userId } = await seedUser(tmp.db);
-    const id = await seedBrokerAccount(tmp.db, userId);
-
-    const response = await postAsStaff(urlOf(id), token, { h1: true });
-
-    expect(response.statusCode).toBe(200);
-    const answer = adminH1MarkResponseSchema.parse(response.json());
-    expect(answer.outcome).toBe('marked');
-    const since = await h1SinceOf(id);
-    expect(since).toBeInstanceOf(Date);
-    expect(answer.account).toMatchObject({ id, h1Since: since?.toISOString() });
-    expect(await lastEntry(seeded.staffId)).toEqual({
-      action: AuditAction.BrokerAccountH1Set,
-      actorType: AuditActorType.Admin,
-      entityType: AuditEntityType.BrokerAccount,
-      entityId: id,
-      payload: { path: PATH, result: 'marked', accountId: id },
-    });
-
-    const again = await postAsStaff(urlOf(id), token, { h1: true });
-    expect(adminH1MarkResponseSchema.parse(again.json()).outcome).toBe('unchanged');
-    expect(await h1SinceOf(id)).toEqual(since);
-    // the staff rows only: setH1Mark writes none of its own
-    expect((await h1EntriesOf(id)).map((row) => [row.actorType, row.payload.result])).toEqual([
-      [AuditActorType.Admin, 'marked'],
-      [AuditActorType.Admin, 'unchanged'],
-    ]);
-  });
-
-  it('H1-A2 keeps the mark under an active H1 session (200 active_session); unmarks once it stopped', async () => {
-    const seeded = await seedStaff(tmp.db);
-    const token = await openSession(seeded);
-    const { userId } = await seedUser(tmp.db);
-    const id = await seedBrokerAccount(tmp.db, userId);
-    await postAsStaff(urlOf(id), token, { h1: true });
-    const session = await seedTradingSession(tmp.db, id, { settings: h1Settings() });
-
-    const held = await postAsStaff(urlOf(id), token, { h1: false });
-    expect(held.statusCode).toBe(200);
-    expect(adminH1MarkResponseSchema.parse(held.json())).toMatchObject({
-      outcome: 'active_session',
-      account: { id },
-    });
-    expect(await h1SinceOf(id)).toBeInstanceOf(Date);
-    expect((await lastEntry(seeded.staffId))?.payload).toEqual({
-      path: PATH,
-      result: 'active_session',
-      accountId: id,
-    });
-
-    await tmp.pool.query(
-      `update trading_sessions set status = 'stopped', stop_reason = 'user_stopped', ended_at = now() where id = $1`,
-      [session.id],
-    );
-    const cleared = await postAsStaff(urlOf(id), token, { h1: false });
-    expect(adminH1MarkResponseSchema.parse(cleared.json())).toMatchObject({
-      outcome: 'unmarked',
-      account: { id, h1Since: null },
-    });
-    expect(await h1SinceOf(id)).toBeNull();
-    expect(await lastEntry(seeded.staffId)).toMatchObject({
-      action: AuditAction.BrokerAccountH1Cleared,
-      payload: { path: PATH, result: 'unmarked', accountId: id },
-    });
-  });
-
-  it('H1-A3 answers 404 for an id that is not a uuid (not recorded) and for an unknown uuid', async () => {
-    const seeded = await seedStaff(tmp.db);
-    const token = await openSession(seeded);
-
-    const bad = await postAsStaff(urlOf('not-a-uuid'), token, { h1: true });
-    expect([bad.statusCode, bad.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
-    expect(await lastEntry(seeded.staffId)).toEqual({
-      action: AuditAction.BrokerAccountH1Set,
-      actorType: AuditActorType.Admin,
-      entityType: null,
-      entityId: null,
-      payload: { path: PATH, result: 'not_found' },
-    });
-
-    const unknown = randomUUID();
-    const missing = await postAsStaff(urlOf(unknown), token, { h1: false });
-    expect([missing.statusCode, missing.json()]).toEqual([404, { error: AdminErrorCode.NotFound }]);
-    expect(await lastEntry(seeded.staffId)).toMatchObject({
-      action: AuditAction.BrokerAccountH1Cleared,
-      entityType: null,
-      payload: { path: PATH, result: 'not_found', accountId: unknown },
-    });
-  });
-
-  it.each([
-    ['a string', { h1: 'yes' }],
-    ['no key', {}],
-    ['an extra key', { h1: true, x: 1 }],
-  ])('H1-A4 refuses %s with 400 before the session, writing nothing', async (_label, payload) => {
-    const seeded = await seedStaff(tmp.db);
-    const token = await openSession(seeded);
-    const { userId } = await seedUser(tmp.db);
-    const id = await seedBrokerAccount(tmp.db, userId);
-    const before = await auditCount();
-
-    const response = await postAsStaff(urlOf(id), token, payload);
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json<{ error: string }>().error).toBe(AdminErrorCode.Validation);
-    expect(await auditCount()).toBe(before);
-    expect(await h1SinceOf(id)).toBeNull();
-  });
-
-  it('H1-A5 the user card, the broker accounts list and the service page carry h1Since', async () => {
-    const seeded = await seedStaff(tmp.db);
-    const token = await openSession(seeded);
-    const { userId } = await seedUser(tmp.db);
-    const marked = await seedBrokerAccount(tmp.db, userId);
-    const plain = await seedBrokerAccount(tmp.db, userId);
-    await postAsStaff(urlOf(marked), token, { h1: true });
-    await tmp.db
-      .update(brokerAccounts)
-      .set({ serviceSince: new Date('2026-10-01T00:00:00.000Z') })
-      .where(eq(brokerAccounts.id, marked));
-    const since = (await h1SinceOf(marked))?.toISOString();
-
-    const card = adminUserResponseSchema.parse(
-      (await readOnce(seeded.staffId, `/admin/users/${userId}`, token)).json(),
-    );
-    expect(
-      Object.fromEntries(card.brokerAccounts.map((account) => [account.id, account.h1Since])),
-    ).toEqual({ [marked]: since, [plain]: null });
-
-    const list = adminBrokerAccountsResponseSchema.parse(
-      (await readOnce(seeded.staffId, '/admin/broker-accounts', token)).json(),
-    );
-    const listed = Object.fromEntries(
-      list.accounts.map((account) => [account.id, account.h1Since]),
-    );
-    expect([listed[marked], listed[plain]]).toEqual([since, null]);
-
-    const service = adminServiceAccountsResponseSchema.parse(
-      (await readOnce(seeded.staffId, '/admin/service-accounts', token)).json(),
-    );
-    expect(service.accounts.find((account) => account.id === marked)?.h1Since).toBe(since);
   });
 });
 

@@ -79,7 +79,7 @@ import { H1_SCANNER_PARAMS } from './scanner';
 export interface H1DriverConfig {
   // how often the active H1 sessions are read
   scanMs: number;
-  // the period of series.advance(): with H1_SHADOW=off the driver alone closes quiet seconds
+  // the period of series.advance(): the driver's tick alone closes quiet seconds
   tickMs: number;
   logMs: number;
   // submit_deadline_at = taken_at_ms + this (H1_SUBMIT_BUDGET_MS)
@@ -249,10 +249,10 @@ export function h1DriverParams(settings: H1SessionSettings): H1ShadowParams {
   };
 }
 
-// The driver's row: the shadow row's shape (params.set = session), so the export's replay reads it
-// as it reads a shadow row; a session's writer leaves ticks_until_ms NULL (the keeper counts the
-// window from the trade's close). A no_signal decision is the waiting period's row (#775): the
-// row waitingForSignalSql reads
+// The driver's row: the H1 row's shape (params.set = session), so the export's replay reads it as
+// it reads a historical shadow row; a session's writer leaves ticks_until_ms NULL (the keeper
+// counts the window from the trade's close). A no_signal decision is the waiting period's row
+// (#775): the row waitingForSignalSql reads
 function h1SecondRow(
   facts: H1SecondFacts & { settings: H1SessionSettings; payout: number; symbol: string },
 ) {

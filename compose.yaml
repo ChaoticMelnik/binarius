@@ -16,7 +16,7 @@ x-broker-environment: &broker-environment
   # session in this process; see README -> Demo-only stand
   DEMO_ONLY:
   # the stake strategy of new sessions (#450): forwarded only when set; unset is martingale, read
-  # by the backend's start route and the worker's session-start CLI; see docs/stake.md -> Defaults
+  # by the backend's start route and its `h1 session start` CLI; see docs/stake.md -> Defaults
   SESSION_STAKE_STRATEGY:
 
 # One tag for every service built from this repository (`migrate` names it too), so a partial
@@ -183,9 +183,6 @@ services:
       # GET /postbacks/binodex/<secret>. Forwarded only when set; unset, the route does not exist.
       # Here rather than in the broker anchor: the worker never receives it.
       POSTBACK_URL_SECRET:
-      # The H1 shadow (#669, docs/h1.md): on unless set to off. Forwarded only when set; here
-      # rather than in the broker anchor: the worker never reads it.
-      H1_SHADOW:
       # The H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): 700 ms unless
       # set. Forwarded only when set; here rather than in the broker anchor: the worker never reads it.
       H1_SUBMIT_BUDGET_MS:

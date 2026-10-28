@@ -29,7 +29,6 @@ import {
   safeParseAdminAuditResponse,
   safeParseAdminBrokerAccountsResponse,
   safeParseAdminServiceAccountsResponse,
-  safeParseAdminH1MarkResponse,
   safeParseAdminServiceMarkResponse,
   safeParseAdminDepositsResponse,
   safeParseAdminTokenAdjustmentResponse,
@@ -65,8 +64,6 @@ import {
   type AdminBrokerAccountsQuery,
   type AdminBrokerAccountsResponse,
   type AdminServiceAccountsResponse,
-  type AdminH1MarkRequest,
-  type AdminH1MarkResponse,
   type AdminServiceMarkRequest,
   type AdminServiceMarkResponse,
   type AdminDepositsQuery,
@@ -188,12 +185,6 @@ export interface BackendClient {
     accountId: string,
     request: AdminServiceMarkRequest,
   ): Promise<AdminServiceMarkResponse>;
-  // the H1 mark of a broker account (#745)
-  setH1Mark(
-    session: string,
-    accountId: string,
-    request: AdminH1MarkRequest,
-  ): Promise<AdminH1MarkResponse>;
   /** the open /paysupport requests (#510) */
   starRefunds(token: string, query: AdminStarRefundsQuery): Promise<AdminStarRefundsResponse>;
   /** «Вернуть Stars» (#510); a refusal or an unknown outcome is an outcome, not an error */
@@ -435,15 +426,6 @@ export function createBackendClient({
       return parsed(
         safeParseAdminServiceMarkResponse,
         await call('POST', `admin/broker-accounts/${encodeURIComponent(accountId)}/service`, {
-          body: request,
-          session,
-        }),
-      );
-    },
-    async setH1Mark(session, accountId, request) {
-      return parsed(
-        safeParseAdminH1MarkResponse,
-        await call('POST', `admin/broker-accounts/${encodeURIComponent(accountId)}/h1`, {
           body: request,
           session,
         }),
