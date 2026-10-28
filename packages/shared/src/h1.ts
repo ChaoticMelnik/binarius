@@ -156,13 +156,13 @@ export function tradeOutcomeOf(action: TradeAction, entry: number, exit: number)
   return exit > entry === (action === TradeAction.Up) ? 'win' : 'loss';
 }
 
-// --- The H1 shadow (#669, docs/h1.md) -------------------------------------------------------------
+// --- The H1 row's shape (#669, docs/h1.md -> The row; the shadow was removed in #830) ------------
 
-// the two parameter sets the shadow decides with; a jsonb key of the row (params.set), not a status
+// the two parameter sets the shadow decided with until #830; a jsonb key of the row (params.set)
 export const H1ShadowSet = { R1: 'r1', H1: 'h1' } as const;
 export type H1ShadowSet = (typeof H1ShadowSet)[keyof typeof H1ShadowSet];
 // params.set of the H1 driver's decision rows (#707, context = session): the shadow's row shape,
-// so the export's replay reads both; the shadow's own report reads only context = shadow
+// so the export's replay reads the driver's rows and the historical shadow rows alike
 export const H1_SESSION_DECISION_SET = 'session';
 export const H1_DECISION_SETS = [
   H1ShadowSet.R1,

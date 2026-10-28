@@ -29,6 +29,9 @@ import {
   H1SecondClosedBy,
   SignalKind,
   type H1ShadowParams,
+  martingaleLimitsFor,
+  SessionStakeStrategy,
+  tradingSessionSettingsSchema,
 } from '@binarius/shared';
 import { bonusRules, brokerAccounts, staff, tradingSessions, users } from './schema/index';
 import { StaffStatus } from './schema/staff';
@@ -319,6 +322,29 @@ export const sessionSettings = (
   stake: { baseStake: '1' as DecimalString, stakeScale: 0 },
   ...patch,
 });
+
+// Settings v3 (#552) as the start route wrote them until #830: no writer is left, the
+// orchestrator's candle path still reads the rows until #835. A stake the schema refuses is a
+// failed parse, as before.
+export function buildSessionSettingsV3(input: {
+  assetId: number;
+  durationSec: number;
+  cycles: number;
+  stake: { baseStake: DecimalString; stakeScale: number };
+  strategy: SessionStakeStrategy;
+}) {
+  const { strategy, stake } = input;
+  return tradingSessionSettingsSchema.safeParse({
+    version: 3,
+    assetId: input.assetId,
+    durationSec: input.durationSec,
+    cycles: input.cycles,
+    stake:
+      strategy === SessionStakeStrategy.Martingale
+        ? { strategy, ...stake, limits: martingaleLimitsFor(stake.baseStake) }
+        : { strategy, ...stake },
+  });
+}
 
 // A session row written directly, past createTradingSession's checks: a suite can seed settings
 // no writer would (`{}`), a real session, or an old started_at.

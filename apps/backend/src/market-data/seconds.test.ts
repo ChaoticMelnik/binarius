@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSecondSeries, secondOf, type ClosedSecond } from './seconds';
 
-// The second series of the H1 shadow (#669, docs/h1.md -> The second series). T is a second's end
+// The H1 second series (#669, docs/h1.md -> The second series). T is a second's end
 // label; a tick at T + 300 belongs to the second T + 1000.
 const T = 1_760_000_000_000;
 const A = 101;

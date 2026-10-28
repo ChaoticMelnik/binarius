@@ -52,7 +52,6 @@ beforeEach(() => {
     brokerAccounts: unused,
     serviceAccounts: unused,
     setServiceMark: unused,
-    setH1Mark: unused,
     starRefunds: unused,
     refundStarPayment: unused,
     audit: unused,

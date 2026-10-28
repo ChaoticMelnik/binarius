@@ -117,8 +117,9 @@ export function createH1Detector(params: H1Params = DEFAULT_H1_PARAMS): H1Detect
 // a default edited out of its rules fails at import, not on the first decision
 assertH1Params(DEFAULT_H1_PARAMS);
 
-// The H1 shadow's two sets (#669, docs/h1.md): R1, the live rule, enters at +1 s; the backtest's
-// rule, kept as the reference, at +2 s. Each keeps its own one-trade-at-a-time cadence per pair.
+// The H1 shadow's two sets (#669, docs/h1.md; the shadow was removed in #830, the sets stay as
+// the historical rows' params.set and the window ceiling): R1, the live rule, enters at +1 s; the
+// backtest's rule, kept as the reference, at +2 s.
 export interface H1ShadowSetSpec {
   name: H1ShadowSet;
   params: Readonly<H1Params>;
@@ -131,8 +132,8 @@ export const H1_SHADOW_SETS: readonly H1ShadowSetSpec[] = Object.freeze([
 ]);
 
 // The earliest close a decision at f reads is f - sdWindowSec + sdStepSec - moveSec, so a window
-// of sdWindowSec + 1 closes - the one the shadow keeps and stores (Rule 44) and the H1 driver
-// decides on (#707) - holds all of them only while moveSec <= sdStepSec.
+// of sdWindowSec + 1 closes - the one an H1 row stores (Rule 44) and the H1 driver and the
+// scanner decide on (#707, #828) - holds all of them only while moveSec <= sdStepSec.
 export function assertH1WindowFits(params: H1Params, name: string): void {
   const { moveSec, sdStepSec } = params;
   if (moveSec > sdStepSec) {
@@ -150,12 +151,12 @@ export function assertH1ShadowSet(set: H1ShadowSetSpec): void {
 for (const set of H1_SHADOW_SETS) assertH1ShadowSet(set);
 
 // the longest window a set reads: a decision at f needs the closes of f - sdWindowSec .. f, exact
-// because every set passes assertH1ShadowSet
+// because every set passes assertH1ShadowSet; the series' capacity holds it (apps/backend timing)
 export const H1_SHADOW_MAX_WINDOW_SEC = Math.max(
   ...H1_SHADOW_SETS.map((set) => set.params.sdWindowSec),
 );
 
-// A shadow row decided again from what it stored (Rule 44): the series holds exactly the doubles
+// An H1 row decided again from what it stored (Rule 44): the series holds exactly the doubles
 // the detector read, with null where it read NaN, and the decision is at its last index.
 export function replayH1Entry(entry: H1ShadowEntry): H1Decision {
   const { moveSec, sdWindowSec, sdStepSec, threshold } = entry.params;

@@ -13,34 +13,21 @@ const refused = (argv: string[]) => {
   return false;
 };
 
-describe('parseH1Command (#670)', () => {
-  it('H1-C1 mark and unmark take one account uuid', () => {
-    expect(parseH1Command(['mark', ACCOUNT])).toEqual({ kind: 'mark', accountId: ACCOUNT });
-    expect(parseH1Command(['unmark', ACCOUNT])).toEqual({ kind: 'unmark', accountId: ACCOUNT });
-  });
-
-  it('H1-C2 refuses a missing, malformed or second account id and any option', () => {
-    for (const argv of [
-      ['mark'],
-      ['mark', 'not-a-uuid'],
-      ['unmark', '42'],
-      ['mark', ACCOUNT, ACCOUNT],
-      ['mark', ACCOUNT, '--since', '24h'],
-      ['unmark', '--account', ACCOUNT],
-    ]) {
-      expect(refused(argv), argv.join(' ')).toBe(true);
-    }
-  });
-
-  it('H1-C3 list takes nothing; shadow report keeps its own parser', () => {
-    expect(parseH1Command(['list'])).toEqual({ kind: 'list' });
-    expect(refused(['list', ACCOUNT])).toBe(true);
-    expect(refused(['list', '--all'])).toBe(true);
-    expect(parseH1Command(['shadow', 'report', '--since', '24h'])).toEqual({
-      kind: 'shadow_report',
-      args: { since: { hours: 24 }, until: undefined },
-    });
-    expect(refused(['marks', ACCOUNT])).toBe(true);
+describe('parseH1Command (#670, #830)', () => {
+  it('H1-C7 the removed commands are unknown: mark, unmark, list, shadow report', () => {
+    const messageOf = (argv: string[]) => {
+      try {
+        parseH1Command(argv);
+      } catch (error) {
+        return error instanceof UsageError ? error.message : `not a UsageError: ${String(error)}`;
+      }
+      return 'parsed';
+    };
+    expect(messageOf(['mark', ACCOUNT])).toBe('неизвестная команда: mark');
+    expect(messageOf(['unmark', ACCOUNT])).toBe('неизвестная команда: unmark');
+    expect(messageOf(['list'])).toBe('неизвестная команда: list');
+    expect(messageOf(['shadow', 'report', '--since', '24h'])).toBe('неизвестная команда: shadow');
+    expect(messageOf([])).toBe('нет команды');
   });
 });
 

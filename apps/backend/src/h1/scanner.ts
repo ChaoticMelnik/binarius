@@ -20,7 +20,7 @@ import type { ClosedSecond, SecondSeries } from '../market-data/seconds';
 // closes, at = length - 1, as the driver and the start do (Rule 43). The pair's newest decision is
 // kept in memory only, never written; GET /trading/signals and POST /trading/signal's `h1` serve a
 // signal only while its second is current: now - f <= maxAgeMs (H1_START_SECOND_MAX_AGE_MS, the
-// start's rule of #796). It listens to the series beside the driver and the shadow and advances
+// start's rule of #796). It listens to the series beside the driver and advances
 // nothing: the driver's tick closes quiet seconds. Synchronous in the socket's handler, never
 // throws.
 

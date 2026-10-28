@@ -7,7 +7,6 @@ import {
   parseBoundedIntegerEnv,
   parseDemoOnlyEnv,
   parseSessionStakeStrategyEnv,
-  parseH1ShadowEnv,
   parseDepositWidgetOriginsEnv,
   parseInternalTokenEnv,
   parseLogLevelEnv,
@@ -88,8 +87,6 @@ export interface Env {
   demoOnly: boolean;
   // the stake strategy frozen into every new session's settings (#450); martingale by default
   sessionStakeStrategy: SessionStakeStrategy;
-  // the H1 shadow (#669, docs/h1.md): on unless H1_SHADOW=off; nothing without BROKER_WS_URL
-  h1Shadow: boolean;
   // the H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): an intent's
   // submit_deadline_at is taken_at_ms + this; an empty value stops the start
   h1SubmitBudgetMs: number;
@@ -157,7 +154,6 @@ export function parseEnv(source: EnvSource): Env {
     webPublicUrl: parseOriginEnv(readEnv(source, 'WEB_PUBLIC_URL'), 'WEB_PUBLIC_URL'),
     demoOnly: parseDemoOnlyEnv(source),
     sessionStakeStrategy: parseSessionStakeStrategyEnv(source),
-    h1Shadow: parseH1ShadowEnv(source),
     h1SubmitBudgetMs: parseBoundedIntegerEnv(
       readEnv(source, 'H1_SUBMIT_BUDGET_MS', String(DEFAULT_H1_SUBMIT_BUDGET_MS)),
       'H1_SUBMIT_BUDGET_MS',

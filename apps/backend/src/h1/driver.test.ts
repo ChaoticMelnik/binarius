@@ -562,7 +562,7 @@ describe('the H1 driver (#707)', () => {
     expect(h.line()).toMatchObject({ sessions: 0, invalidSettings: 2 });
   });
 
-  it("H1-DR15: the tick advances the series by the clock (H1_SHADOW=off leaves it the driver's)", async () => {
+  it("H1-DR15: the driver's tick alone advances the series by the clock (#830)", async () => {
     vi.useFakeTimers();
     const h = await harness();
     clock.now = T + 5_000;

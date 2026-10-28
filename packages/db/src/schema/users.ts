@@ -60,8 +60,8 @@ export const users = pgTable(
     realStake: money('real_stake'),
     // The mode of the user's next single trade (#121, docs/trading-mode.md). Written only by
     // setTradingMode; a real intent is created only while it is `real` (createInTransaction's
-    // reserve UPDATE), a session through the route only while it is `demo`
-    // (checkTradingSessionStart; the CLI session-start does not read it).
+    // reserve UPDATE), a session only in this mode (Rule 36: checkTradingSessionStart, the CLI
+    // `h1 session start`).
     tradingMode: text('trading_mode').$type<TradeMode>().notNull().default(TradeMode.Demo),
     // The user's last analysis (#484, docs/mailing.md → The analysis reminder): when the bot
     // last showed the analysis card with a signal, of which pair and duration; all NULL after an

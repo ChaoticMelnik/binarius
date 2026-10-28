@@ -13,7 +13,6 @@ import {
   TradingSessionStatus,
   TradingSessionStopReason,
   buildH1SessionSettings,
-  buildSessionSettings,
   decimalStringSchema,
   H1_R1_PARAMS,
   isH1Settings,
@@ -39,6 +38,7 @@ import {
   users,
 } from '@binarius/db';
 import {
+  buildSessionSettingsV3,
   createTempDatabase,
   decisionFixture,
   shadowDecisionFixture,
@@ -103,7 +103,7 @@ const linesOf = (out: string): TradeLogLine[] =>
     .map((line) => tradeLogLineSchema.parse(JSON.parse(line)));
 
 function martingaleSettings() {
-  const built = buildSessionSettings({
+  const built = buildSessionSettingsV3({
     assetId: 101,
     durationSec: 15,
     cycles: 3,

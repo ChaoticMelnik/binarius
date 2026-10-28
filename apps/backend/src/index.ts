@@ -53,7 +53,6 @@ import { parseEnv } from './env';
 import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
-import { createH1Shadow } from './h1/shadow';
 import { createH1Driver, H1ReadingUnavailable } from './h1/driver';
 import { createH1Scanner } from './h1/scanner';
 import { createTradeLogKeeper } from './trade-log/keeper';
@@ -74,8 +73,7 @@ import {
   TRADE_TICKS_BUFFER_MS,
   TRADE_TICKS_MAX_PER_PAIR,
   H1_SERIES_CAPACITY_SEC,
-  H1_SHADOW_LOG_MS,
-  H1_SHADOW_TICK_MS,
+  H1_SERIES_TICK_MS,
   H1_DRIVER_LOG_MS,
   H1_DRIVER_SCAN_MS,
   H1_START_SECOND_MAX_AGE_MS,
@@ -188,7 +186,7 @@ const candleStore =
           maxPerPair: TRADE_TICKS_MAX_PER_PAIR,
           aheadMs: TRADE_TICKS_AHEAD_MS,
         }),
-        // the 1s closes the H1 shadow, driver and scanner decide on (#669, #707, #828, docs/h1.md)
+        // the 1s closes the H1 driver and scanner decide on (#669, #707, #828, docs/h1.md)
         seconds: createSecondSeries({
           capacitySec: H1_SERIES_CAPACITY_SEC,
           closeMarginMs: H1_SECOND_CLOSE_MARGIN_MS,
@@ -408,8 +406,8 @@ const starReconciler = createStarReconciler({
 });
 
 // docs/trade-log.md → The ticks around a decision, → Retention (#668): captures the ticks around
-// each intent decision and a sample of the shadow ones (only with BROKER_WS_URL), and sweeps the
-// decisions without a trade past their retention. Started after listen(), stopped in phase 1.
+// each intent decision (only with BROKER_WS_URL; no shadow row is written since #830), and sweeps
+// the decisions without a trade past their retention. Started after listen(), stopped in phase 1.
 const tradeLogKeeper = createTradeLogKeeper({ db, ticks: candleStore?.ticks, logger: app.log });
 
 // docs/broker-balance.md: refreshed on demand by POST /trading/access and every
@@ -489,24 +487,8 @@ function createMarketData(
       accountRetryMs: MARKET_DATA_ACCOUNT_RETRY_MS,
     },
   });
-  // docs/h1.md: the H1 shadow on the same series, unless H1_SHADOW=off (#669)
-  const h1Shadow = env.h1Shadow
-    ? createH1Shadow({
-        series: seconds,
-        catalog: pairsCatalog,
-        streaming: () => manager.streaming(),
-        record: (input) => recordSignalDecision(db, input),
-        logger: app.log,
-        config: {
-          tickMs: H1_SHADOW_TICK_MS,
-          logMs: H1_SHADOW_LOG_MS,
-          capacitySec: H1_SERIES_CAPACITY_SEC,
-        },
-      })
-    : undefined;
-  // docs/h1.md -> The driver: the H1 sessions' intents on the same series (#707); no switch, with
-  // no active H1 session it only listens. It advances the series too, so H1_SHADOW=off still
-  // closes quiet seconds
+  // docs/h1.md -> The driver: the H1 sessions' intents on the series (#707); no switch, with no
+  // active H1 session it only listens. Its tick is the series' clock: it closes quiet seconds
   const h1Driver = createH1Driver({
     series: seconds,
     catalog: pairsCatalog,
@@ -523,7 +505,7 @@ function createMarketData(
     logger: app.log,
     config: {
       scanMs: H1_DRIVER_SCAN_MS,
-      tickMs: H1_SHADOW_TICK_MS,
+      tickMs: H1_SERIES_TICK_MS,
       logMs: H1_DRIVER_LOG_MS,
       submitBudgetMs: env.h1SubmitBudgetMs,
       startMaxAgeMs: H1_START_SECOND_MAX_AGE_MS,
@@ -538,7 +520,7 @@ function createMarketData(
     logger: app.log,
     config: { logMs: H1_SCANNER_LOG_MS, maxAgeMs: H1_START_SECOND_MAX_AGE_MS },
   });
-  return { manager, backfill, h1Shadow, h1Driver, h1Scanner };
+  return { manager, backfill, h1Driver, h1Scanner };
 }
 const marketData =
   candleStore === undefined ? undefined : createMarketData(candleStore, signalPacer);
@@ -627,7 +609,6 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       async () => {
         marketData?.h1Scanner.stop();
         await marketData?.h1Driver.stop();
-        await marketData?.h1Shadow?.stop();
         await marketData?.backfill.stop();
         await marketData?.manager.stop();
       },
@@ -671,7 +652,6 @@ if (!shuttingDown) {
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
   app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
-  app.log.info({ enabled: marketData?.h1Shadow !== undefined }, 'h1 shadow');
   app.log.info(
     {
       enabled: marketData !== undefined,
@@ -699,7 +679,6 @@ if (!shuttingDown) {
   serviceAccounts.start();
   marketData?.manager.start();
   marketData?.backfill.start();
-  marketData?.h1Shadow?.start();
   marketData?.h1Driver.start();
   marketData?.h1Scanner.start();
   tradeLogKeeper.start();

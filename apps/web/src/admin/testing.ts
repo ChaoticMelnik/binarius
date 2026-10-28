@@ -1,5 +1,4 @@
 import {
-  AdminH1MarkOutcome,
   AdminServiceMarkOutcome,
   ServiceAccountNotWorkingReason,
   AccountHaltReason,
@@ -31,7 +30,6 @@ import {
   type AdminStarPaymentView,
   type AdminStarRefundResponse,
   type AdminStarRefundsResponse,
-  type AdminH1MarkResponse,
   type AdminServiceMarkResponse,
   type AdminBrokerAccountView,
   type AdminDepositsResponse,
@@ -229,7 +227,6 @@ export const SAMPLE_BROKER_ACCOUNT: AdminBrokerAccountView = {
   createdAt: AT,
   updatedAt: AT,
   serviceSince: null,
-  h1Since: null,
 };
 
 export const SAMPLE_USER: AdminUserResponse = {
@@ -426,11 +423,9 @@ export const SAMPLE_BROKER_ACCOUNT_HALTED: AdminBrokerAccountListItem = {
   haltedReason: AccountHaltReason.TradeMismatch,
 };
 
-export const H1_SINCE = '2026-10-20T00:00:00.000Z';
 export const SAMPLE_BROKER_ACCOUNTS: AdminBrokerAccountsResponse = {
   me: SAMPLE_ME,
-  // the second one H1-marked (#745), so the list shows both forms of the column
-  accounts: [SAMPLE_BROKER_ACCOUNT_HALTED, { ...SAMPLE_BROKER_ACCOUNT_ITEM, h1Since: H1_SINCE }],
+  accounts: [SAMPLE_BROKER_ACCOUNT_HALTED, SAMPLE_BROKER_ACCOUNT_ITEM],
   nextCursor: null,
 };
 
@@ -471,12 +466,6 @@ export const SAMPLE_SERVICE_MARKED: AdminServiceMarkResponse = {
   me: SAMPLE_ME,
   outcome: AdminServiceMarkOutcome.Marked,
   account: { ...SAMPLE_BROKER_ACCOUNT, serviceSince: SERVICE_SINCE },
-};
-
-export const SAMPLE_H1_MARKED: AdminH1MarkResponse = {
-  me: SAMPLE_ME,
-  outcome: AdminH1MarkOutcome.Marked,
-  account: { ...SAMPLE_BROKER_ACCOUNT, h1Since: H1_SINCE },
 };
 
 // The bot texts section (#300): welcome overridden by a staff member, its connectButton fragment by

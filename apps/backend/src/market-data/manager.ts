@@ -63,7 +63,7 @@ export interface MarketDataManagerDeps {
   // the newest tick and the window of ticks per pair (#666, #668): the active client's ticks, with
   // the ring's holes
   ticks: Pick<TickStore, 'push' | 'onDrop' | 'counters'>;
-  // the 1s closes of the H1 shadow (#669): the active client's ticks too, with the ring's holes
+  // the 1s closes of H1 (#669): the active client's ticks too, with the ring's holes
   seconds: Pick<SecondSeries, 'push' | 'onDrop' | 'counters'>;
   requests: Pick<PendingRequests, 'size'>;
   backfill: Pick<CandleBackfill, 'counters'>;

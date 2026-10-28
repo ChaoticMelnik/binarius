@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "session-start": "tsx src/cli/session-start.ts",
     "candle-spike": "tsx src/cli/candle-spike.ts",
     "signal-probe": "tsx src/cli/signal-probe.ts",
     "socket-probe": "tsx src/cli/socket-probe.ts"

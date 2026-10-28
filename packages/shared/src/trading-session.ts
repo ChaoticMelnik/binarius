@@ -32,12 +32,11 @@ import {
 } from './trading';
 
 // trading_sessions.settings (docs/trading-session.md -> Settings). The column is checked at read,
-// not at write: a row written by hand is a boundary too. Version 3 is the only one the start route
-// and the worker's CLI write (#552): its length is in cycles. A version 1 or 2 row keeps its length
-// in trades (sessionProgress); a version 1 row reads as the fixed strategy (sessionStakeParams).
-// Version 5 is an H1 session (#775): a v3 session whose entries come from the H1 signal, written
-// only by buildH1SessionSettings. Version 4 (#670) is read-only since #775: the rows on the pilot.
-export const TRADING_SESSION_SETTINGS_VERSION = 3;
+// not at write: a row written by hand is a boundary too. Version 5 is the only one written since
+// #830: an H1 session (#775), a v3 session whose entries come from the H1 signal, written only by
+// buildH1SessionSettings. Versions 1-4 are read only: v3 (#552) keeps its length in cycles, a
+// version 1 or 2 row in trades (sessionProgress); a version 1 row reads as the fixed strategy
+// (sessionStakeParams); version 4 (#670) is the rows on the pilot.
 export const MAX_SESSION_CYCLES = 20;
 // the CLI's and the start route's default; the schema itself requires the field
 export const DEFAULT_SESSION_CYCLES = 5;
@@ -74,7 +73,7 @@ const stakeFields = {
 };
 
 // the rules against baseStake are @binarius/stake's assertStakeParams (packages/stake/src/
-// config.ts), which planSessionStart and the orchestrator run
+// config.ts), which the orchestrator runs
 export const martingaleLimitsSchema = z.strictObject({
   maxSteps: z.int().min(2),
   maxStake: tradeAmountSchema,
@@ -131,8 +130,7 @@ const settingsV4Schema = z.strictObject({
 
 // An H1 session (#775, docs/trading-session.md -> Settings v5): a v3 session - cycles, the
 // stake strategy of the process - whose entries come from the H1 signal its driver decides with.
-// Written only by buildH1SessionSettings (the start route on a marked account, the h1 CLI of
-// apps/backend); TRADING_SESSION_SETTINGS_VERSION stays 3.
+// Written only by buildH1SessionSettings (the start route and the h1 CLI of apps/backend).
 export const H1_SESSION_SETTINGS_VERSION = 5;
 const settingsV5Schema = z.strictObject({
   version: z.literal(H1_SESSION_SETTINGS_VERSION),
@@ -395,29 +393,6 @@ export const martingaleLimitsFor = (baseStake: DecimalString): MartingaleLimits 
   maxSessionDurationMs: SESSION_MAX_DURATION_MS,
 });
 
-// The settings both writers store (the start route and the session-start CLI): v3 with the
-// strategy of the process (SESSION_STAKE_STRATEGY) and, for martingale, the default limits. A
-// stake the schema refuses (a zero minimum, a limit outside numeric(20,8)) is the caller's refusal.
-export function buildSessionSettings(input: {
-  assetId: number;
-  durationSec: number;
-  cycles: number;
-  stake: { baseStake: DecimalString; stakeScale: number };
-  strategy: SessionStakeStrategy;
-}) {
-  const { strategy, stake } = input;
-  return tradingSessionSettingsSchema.safeParse({
-    version: TRADING_SESSION_SETTINGS_VERSION,
-    assetId: input.assetId,
-    durationSec: input.durationSec,
-    cycles: input.cycles,
-    stake:
-      strategy === SessionStakeStrategy.Martingale
-        ? { strategy, ...stake, limits: martingaleLimitsFor(stake.baseStake) }
-        : { strategy, ...stake },
-  });
-}
-
 // The settings of an H1 session (#775): a v3 session's - the cycles, the strategy of the process
 // and, for martingale, the default limits - plus R1's parameters, the entry window's first second
 // and the expiry. A stake the schema refuses (a zero minimum, a limit outside numeric(20,8)) is
@@ -595,7 +570,8 @@ export const tradingSessionViewSchema = z.strictObject({
   lastIntent: tradeIntentViewSchema.nullable(),
   // the direction of the bot's session picture (#568): the last intent's, else the signal the
   // start route checked; null on a session without a trade yet that was started before #568, by
-  // the CLI session-start, which checks no signal, or without an H1 signal at an H1 start (#796)
+  // the CLI (`h1 session start`, the worker's session-start until #830), which checks no signal, or
+  // without an H1 signal at an H1 start (#796)
   signalAction: tradeActionSchema.nullable(),
   // null while the account has no snapshot
   balance: tradingSessionBalanceSchema.nullable(),

@@ -12,8 +12,6 @@ import {
   type DecimalString,
   type TradeIntentErrorCode,
   BotLanguage,
-  buildH1SessionSettings,
-  SessionStakeStrategy,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
@@ -73,7 +71,6 @@ import {
   type CreateTradingSessionInput,
 } from './trading-session-ops';
 import { claimSessionFinalNotice } from './session-notice-ops';
-import { setH1Mark } from './h1-ops';
 import { openTrading } from './trading-switch-ops';
 import { setTradingMode } from './user-ops';
 
@@ -949,38 +946,6 @@ describe('createSessionIntent: the submit deadline (#707)', () => {
     await reject(intent);
     const { intent: plain } = await createSessionIntent(tmp.db, intentInput(seed, { step: 2 }));
     expect(plain.submitDeadlineAt).toBeNull();
-  });
-});
-
-describe('createTradingSession: the H1 mark under the account lock (#707, review of #711)', () => {
-  const h1Settings = () => {
-    const built = buildH1SessionSettings({
-      assetId: 101,
-      cycles: 5,
-      stake: { baseStake: decimalStringSchema.parse('1'), stakeScale: 2 },
-      strategy: SessionStakeStrategy.Martingale,
-    });
-    if (!built.success) throw new Error('H1 fixture settings do not parse');
-    return built.data;
-  };
-  const mark = (accountId: string, h1: boolean) =>
-    tmp.db.transaction((tx) => setH1Mark(tx, { accountId, h1 }));
-  const input = (seed: { telegramUserId: string; brokerAccountId: string }, h1: boolean) => ({
-    telegramUserId: seed.telegramUserId,
-    brokerAccountId: seed.brokerAccountId,
-    mode: TradeMode.Demo,
-    settings: h1 ? h1Settings() : sessionSettings(),
-  });
-
-  it("H1-H4′ an H1 session needs no mark since #828; the account's mark is not read", async () => {
-    const unmarked = await seedUserWithAccount(tmp.db);
-    const h1 = await createSessionRow(input(unmarked, true));
-    expect((await sessionOf(h1.id))!.settings).toEqual(h1Settings());
-
-    const marked = await seedUserWithAccount(tmp.db);
-    expect(await mark(marked.brokerAccountId, true)).toBe('marked');
-    const plain = await createSessionRow(input(marked, false));
-    expect(plain.status).toBe('active');
   });
 });
 

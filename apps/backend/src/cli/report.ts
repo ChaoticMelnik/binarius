@@ -1,7 +1,7 @@
 import { parseInstant, UsageError } from './trade-log';
 
-// What the reports of the CLIs share (#502): the window parser of `h1 shadow report` and
-// `trade-log report`, and the labels of their cells.
+// What the reports of the CLIs share (#502): the window parser of `trade-log report` (and of
+// `h1 shadow report` until #830), and the labels of its cells.
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;

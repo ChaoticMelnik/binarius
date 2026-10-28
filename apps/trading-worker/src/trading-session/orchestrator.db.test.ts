@@ -10,7 +10,6 @@ import {
   AccountHaltReason,
   buildH1SessionSettings,
   CANDLE_CLOSE_SLACK_MS,
-  buildSessionSettings,
   decimalStringSchema,
   H1_R1_PARAMS,
   isClosedTrade,
@@ -58,6 +57,7 @@ import {
   type Db,
 } from '@binarius/db';
 import {
+  buildSessionSettingsV3,
   closeTradingSwitch,
   createTempDatabase,
   seedBrokerAccount,
@@ -1347,7 +1347,7 @@ describe('the decision rows of an attempt (#666)', () => {
       expect.objectContaining({ outcome: 'stake_stop', detail: 'below_min_trade_amount' }),
     ]);
 
-    const built = buildSessionSettings({
+    const built = buildSessionSettingsV3({
       assetId: 101,
       durationSec: 60,
       cycles: 5,
@@ -2036,7 +2036,7 @@ describe('restart recovery (#131)', () => {
 // which kept a series of losses clear of the pause of #379 until #698.
 describe('martingale (#450)', () => {
   const settingsOf = (strategy: SessionStakeStrategy, cycles = 5) => {
-    const built = buildSessionSettings({
+    const built = buildSessionSettingsV3({
       assetId: 101,
       durationSec: 60,
       cycles,
