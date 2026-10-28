@@ -62,7 +62,8 @@ received, journaled and deduplicated (nothing is credited yet) is in
 widget, the owner's probe of it, and the Mini App page that embeds it is in
 [docs/deposit.md](docs/deposit.md); which broker accounts are service accounts, how their tokens
 renew themselves and when the staff bot is told there are too few is in
-[docs/service-accounts.md](docs/service-accounts.md).
+[docs/service-accounts.md](docs/service-accounts.md); how the database is backed up every hour
+and how a backup is checked and restored is in [docs/backups.md](docs/backups.md).
 
 ## Requirements
 
@@ -133,7 +134,8 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
 The four apps and `migrate` are built from this one Dockerfile into one image, tagged
-`<project>-app` (`binarius-app` in a checkout named `binarius`).
+`<project>-app` (`binarius-app` in a checkout named `binarius`). `backup` (profile `backup`, off
+unless enabled) has its own image `<project>-backup` from `tooling/backup`.
 
 Replacing the trading worker of a running stack without a gap in job processing:
 `scripts/deploy-worker.sh` after `docker compose build trading-worker` and
@@ -414,3 +416,18 @@ payment becomes one deposit; nothing is credited yet (#386). Deposits are on the
 «Депозиты»; what each delivery carried is in the `postback_deliveries` journal. The route, its
 answers, how to read the journal, the cabinet setup and the migration's precondition are in
 [docs/postbacks.md](docs/postbacks.md).
+
+## Backups
+
+With `COMPOSE_PROFILES=backup` in `.env`, the `backup` service dumps the database every hour,
+encrypts it with age and stores it with the server's `.env` in an external bucket (B2 on the
+pilot), and once a week restores the latest run into a scratch database to check it:
+
+```bash
+docker compose exec -T backup backup-now      # one run now: backup ok: <run>, …
+docker compose exec -T backup restore-check   # the drill on the latest run: restore-check ok: …
+docker compose exec -T -e BACKUP_RESTORE_CONFIRM=<run> backup restore <run>   # replaces the live database
+```
+
+`restore` refuses while anything is connected to the database: the runbook, the configuration and
+the owner's setup on the pilot are in [docs/backups.md](docs/backups.md).
