@@ -414,9 +414,15 @@ describe.each([
     await until('every intent accepted', () => allIn(all, OPEN_OR_SETTLED));
     const rows = await intentRows(all);
     for (const row of rows) expect(row.lastError).toBeNull();
-    // A finished what it had taken, over its own transport; B took everything after
-    expect([...recordedBy(a)].sort()).toEqual([...early].sort());
-    for (const id of late) expect(recordedBy(b).has(id)).toBe(true);
+    // A finished what it had taken, over its own transport, and every intent was recorded once.
+    // A late one may be A's too: a fetch already parked in BullMQ's blocking pop takes a job until
+    // close() has ended that connection, and B forwards to A's own queue while its view still names
+    // A; the take's CAS (Rule 6) lets one worker record each intent
+    const byA = recordedBy(a);
+    const byB = recordedBy(b);
+    for (const id of early) expect(byA.has(id)).toBe(true);
+    expect([...byA].filter((id) => byB.has(id))).toEqual([]);
+    expect([...byA, ...byB].sort()).toEqual([...all].sort());
     for (const row of rows.filter((r) => early.includes(r.id))) {
       expect(row.transport).toBe(transport);
     }
