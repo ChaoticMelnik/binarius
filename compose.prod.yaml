@@ -38,3 +38,6 @@ services:
   web:
     command: node apps/web/dist/index.js
     logging: *logging
+  # the backup service (#143, docs/backups.md): log rotation only, its restart is compose.yaml's
+  backup:
+    logging: *logging

@@ -44,3 +44,27 @@ export function composeServiceValue(
   }
   return undefined;
 }
+
+/** The lines nested under one direct four-space key of a service, as written. */
+export function composeServiceChildLines(yaml: string, service: string, key: string): string[] {
+  const lines = serviceLines(yaml, service);
+  const start = lines.findIndex((line) => new RegExp(`^ {4}${key}:\\s*$`).test(line));
+  if (start === -1) return [];
+  const end = lines.findIndex((line, index) => index > start && /^ {4}\S/.test(line));
+  return lines
+    .slice(start + 1, end === -1 ? undefined : end)
+    .filter((line) => line.trim() !== '' && !line.trimStart().startsWith('#'));
+}
+
+/**
+ * A service's `environment:` map: its six-space `NAME: value` lines, the value as written ('' for
+ * a valueless entry). The same shape as composeServiceEnvValue in packages/shared/src/testing.ts.
+ */
+export function composeServiceEnv(yaml: string, service: string): Map<string, string> {
+  const env = new Map<string, string>();
+  for (const line of composeServiceChildLines(yaml, service, 'environment')) {
+    const match = /^ {6}([A-Z0-9_]+):\s*(.*?)\s*$/.exec(line);
+    if (match?.[1] !== undefined) env.set(match[1], match[2] ?? '');
+  }
+  return env;
+}
