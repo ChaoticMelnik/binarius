@@ -87,7 +87,7 @@ export const tradingSessions = pgTable(
     cycleMessageId: integer('cycle_message_id'),
     cycleMessageFrom: integer('cycle_message_from'),
     // The open trade's block (#700, docs/bot-session.md → Trade messages): the intent of the
-    // session whose «сделка открыта» block the sender claimed for the cycle message, NULL while no
+    // session whose «⏳» block the sender claimed for the cycle message, NULL while no
     // open trade's block was claimed. Written only by claimSessionOpenNotice's CAS before the
     // Telegram call and cleared only by releaseSessionOpenNotice, on its own intent, after a send
     // Telegram certainly did not deliver. The block is at most once: a claimed block is never sent

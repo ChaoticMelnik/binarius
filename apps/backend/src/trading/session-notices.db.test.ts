@@ -458,11 +458,11 @@ describe('the session notices (#464)', () => {
       expect(call.payload.parse_mode).toBe('HTML');
     }
     expect(trades.map((call) => pushedText(call.payload))).toEqual([
-      '⚡ Цикл 1 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 0.10000 → 0.10010</pre>',
-      '⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 0.20000 → 0.20010</pre>',
-      '⚡ Цикл 3 Шаг 1\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 0.30000 → 0.30010</pre>',
-      '⚡ Цикл 4 Шаг 1\n<pre>🟢 Ставка: $5.00 → +$9.25\n📊 Цена: 0.40000 → 0.40010</pre>',
-      '⚡ Цикл 5 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 0.50000 → 0.50010</pre>',
+      '⚡ Цикл 1 Шаг 1\n<pre>🟢 $5.00 → +$9.60\n📊 0.10000 → 0.10010</pre>',
+      '⚡ Цикл 2 Шаг 1\n<pre>🔴 $5.00 → -$5.00\n📊 0.20000 → 0.20010</pre>',
+      '⚡ Цикл 3 Шаг 1\n<pre>⚪ $5.00 → $0.00\n↩️ ставка вернулась\n📊 0.30000 → 0.30010</pre>',
+      '⚡ Цикл 4 Шаг 1\n<pre>🟢 $5.00 → +$9.25\n📊 0.40000 → 0.40010</pre>',
+      '⚡ Цикл 5 Шаг 1\n<pre>🔴 $5.00 → -$5.00\n📊 0.50000 → 0.50010</pre>',
     ]);
     const summary = sends[5]!;
     expect(summary.payload.disable_notification).toBeUndefined();
@@ -662,7 +662,7 @@ describe('the session notices in English (#633)', () => {
     const trade = await opened(target);
     await notices.tick();
     const [open] = sendsTo(captured.calls, target);
-    expect(pushedText(open!.payload)).toContain('⚡ Cycle 1 Step 1\n<pre>⏳ Stake: $5.00 · ');
+    expect(pushedText(open!.payload)).toContain('⚡ Cycle 1 Step 1\n<pre>⏳ $5.00 · ');
     expect(inlineButtons(open!.payload)).toEqual([
       { text: EN_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:c` },
     ]);
@@ -671,7 +671,7 @@ describe('the session notices in English (#633)', () => {
     await noSignal(target);
     await notices.tick();
     expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).toContain(
-      '<pre>🟢 Stake: $5.00 → +$9.60',
+      '<pre>🟢 $5.00 → +$9.60',
     );
     const [waiting] = waitingTo(captured.calls, target);
     expect(waiting!.payload.caption).toBe(
@@ -861,7 +861,7 @@ const ADAPTIVE = '🔄 Адаптивная ставка включена';
 const heads = (text: string) =>
   text.split('\n').filter((line) => line.startsWith('⚡') || line.startsWith('🔄'));
 const loss = (step: number, cycle = 1, at = step) =>
-  `⚡ Цикл ${cycle} Шаг ${step}\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: ${(at / 10).toFixed(5)} → ${(at / 10 + 0.0001).toFixed(5)}</pre>`;
+  `⚡ Цикл ${cycle} Шаг ${step}\n<pre>🔴 $5.00 → -$5.00\n📊 ${(at / 10).toFixed(5)} → ${(at / 10 + 0.0001).toFixed(5)}</pre>`;
 
 describe('a martingale cycle is one message (#551)', () => {
   it('D13 L, L, W: one silent message, two edits listing every step, then a new cycle sends anew', async () => {
@@ -893,7 +893,7 @@ describe('a martingale cycle is one message (#551)', () => {
         loss(1),
         ADAPTIVE,
         loss(2),
-        '⚡ Цикл 1 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 0.30000 → 0.30010</pre>',
+        '⚡ Цикл 1 Шаг 3\n<pre>🟢 $5.00 → +$9.60\n📊 0.30000 → 0.30010</pre>',
       ].join('\n\n'),
     );
     expect(await cycleStateOf(target)).toEqual({ messageId: id, from: 0 });
@@ -920,7 +920,7 @@ describe('a martingale cycle is one message (#551)', () => {
       ['⚡ Цикл 1 Шаг 1', ADAPTIVE, '⚡ Цикл 1 Шаг 2'],
     ]);
     expect(pushedText(editsTo(captured.calls, target)[0]!.payload)).toContain(
-      '⚪ Ставка: $5.00 → $0.00, ставка вернулась',
+      '⚪ $5.00 → $0.00\n↩️ ставка вернулась',
     );
   });
 
@@ -1072,10 +1072,10 @@ describe('a martingale cycle is one message (#551)', () => {
   );
 
   describe('D20 the length limit, under an override the registry accepts', () => {
-    // a loss's block of about 440 characters: eight of them fit in BOT_TEXT_LIMIT, nine do not —
+    // a loss's block of about 450 characters: eight of them fit in BOT_TEXT_LIMIT, nine do not —
     // 4079, inside the Bot API's 4096; a session holds up to MAX_SESSION_SUMMARY_TRADES trades, so
     // a split takes such an override
-    const PAD = 'ж'.repeat(380);
+    const PAD = 'ж'.repeat(394);
     const source = {
       sourceOf: (key: BotTextKey) =>
         key === 'sessionTradeLost'
@@ -2575,7 +2575,7 @@ describe('an H1 session is messaged as any session (#775)', () => {
     const { notices, captured } = sender();
     await notices.tick();
     const [open] = sendsTo(captured.calls, target);
-    expect(pushedText(open!.payload)).toContain('сделка открыта');
+    expect(pushedText(open!.payload)).toContain('<pre>⏳');
     expect(inlineButtons(open!.payload)).toEqual([
       {
         text: RU_LABELS.sessionStopButton,
@@ -2626,9 +2626,9 @@ describe('an H1 session is messaged as any session (#775)', () => {
 
 // #700: the open trade's block, sent at the open and edited into its result at the settle
 describe("the open trade's block (#700)", () => {
-  const OPEN_MARK = 'сделка открыта';
+  const OPEN_MARK = '<pre>⏳';
   const openBlock = (step: number, cycle = 1, at = step) =>
-    `⚡ Цикл ${cycle} Шаг ${step}\n<pre>⏳ Ставка: $5.00 · ⬆️ Вверх · ${OPEN_MARK}\n📊 Цена: ${(at / 10).toFixed(5)} → …</pre>`;
+    `⚡ Цикл ${cycle} Шаг ${step}\n${OPEN_MARK} $5.00 · ⬆️ Вверх\n📊 ${(at / 10).toFixed(5)} → …</pre>`;
   const STATUS_ID = 1;
   const statusMessage = (target: Target) =>
     tmp.db
@@ -3004,7 +3004,7 @@ describe("the open trade's block (#700)", () => {
     const target = await seedSession(MARTINGALE);
     const { notices, captured } = sender();
     const tie =
-      '⚡ Цикл 1 Шаг 1\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 0.10000 → 0.10010</pre>';
+      '⚡ Цикл 1 Шаг 1\n<pre>⚪ $5.00 → $0.00\n↩️ ставка вернулась\n📊 0.10000 → 0.10010</pre>';
     await settled(target, '0');
     await notices.tick();
     expect(chatOf(captured.calls, target)).toEqual([tie]);
@@ -3032,7 +3032,7 @@ describe("the open trade's block (#700)", () => {
 // #722 (docs/bot-session.md → The waiting message): the waiting message only while the session
 // waits for a signal - its latest decision is no_signal - and the «⏹» under the open trade's block
 describe('the waiting message by the decision log, «⏹» under the open block (#722)', () => {
-  const OPEN_MARK = 'сделка открыта';
+  const OPEN_MARK = '<pre>⏳';
   const STATUS_ID = 1;
   const statusMessage = (target: Target) =>
     tmp.db
@@ -3618,7 +3618,7 @@ describe('the hold-back of a thrown turn (#660)', () => {
 });
 
 describe('the wake (#723)', () => {
-  const OPEN_MARK = 'сделка открыта';
+  const OPEN_MARK = '<pre>⏳';
   const WAKE_GAP = SESSION_NOTICE_WAKE_GAP_MS;
   const realSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
   const made: { notices: SessionNoticeSender; listener?: SessionNoticeListener }[] = [];

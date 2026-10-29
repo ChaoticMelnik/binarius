@@ -419,17 +419,18 @@ Your recent payments. Need a refund — tap the button under the payment: a supp
   sessionShareCaption: `Join Binarius — get free tokens!
 {referralLink}`,
   sessionTradeWon: `⚡ Cycle {cycle} Step {step}
-<pre>🟢 Stake: {stake} → {outcome}
-📊 Price: {openPrice} → {closePrice}</pre>`,
+<pre>🟢 {stake} → {outcome}
+📊 {openPrice} → {closePrice}</pre>`,
   sessionTradeLost: `⚡ Cycle {cycle} Step {step}
-<pre>🔴 Stake: {stake} → {outcome}
-📊 Price: {openPrice} → {closePrice}</pre>`,
+<pre>🔴 {stake} → {outcome}
+📊 {openPrice} → {closePrice}</pre>`,
   sessionTradeTied: `⚡ Cycle {cycle} Step {step}
-<pre>⚪ Stake: {stake} → {outcome}, the stake returned
-📊 Price: {openPrice} → {closePrice}</pre>`,
+<pre>⚪ {stake} → {outcome}
+↩️ the stake returned
+📊 {openPrice} → {closePrice}</pre>`,
   sessionTradeOpen: `⚡ Cycle {cycle} Step {step}
-<pre>⏳ Stake: {stake} · {action} · trade open
-📊 Price: {openPrice} → …</pre>`,
+<pre>⏳ {stake} · {action}
+📊 {openPrice} → …</pre>`,
   sessionAdaptiveStake: `🔄 Adaptive stake is on`,
   sessionSummarySymbol: `📈 {symbol}`,
 

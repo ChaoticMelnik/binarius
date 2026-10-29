@@ -142,22 +142,22 @@ describe('sessionCycleText (#551)', () => {
 
   it('a cycle of one trade is its block alone: the cycle and step, stake → stake + profit, the prices', () => {
     expect(text([trade()])).toBe(
-      '⚡ Цикл 3 Шаг 1\n<pre>🟢 Ставка: $11.50 → +$22.08\n📊 Цена: 0.49803 → 0.49820</pre>',
+      '⚡ Цикл 3 Шаг 1\n<pre>🟢 $11.50 → +$22.08\n📊 0.49803 → 0.49820</pre>',
     );
   });
 
   it('prints a fractional stake and its return with every fraction digit (#684)', () => {
     expect(text([trade({ amount: d('0.005'), outcome: d('0.0096') })])).toContain(
-      '🟢 Ставка: $0.005 → +$0.0096\n',
+      '🟢 $0.005 → +$0.0096\n',
     );
   });
 
   it('prints a loss red with its loss signed, a tie white at $0.00 with its stake returned (#539)', () => {
     expect(text([trade({ result: SessionTradeResult.Lost, outcome: d('-11.5') })])).toContain(
-      '🔴 Ставка: $11.50 → -$11.50\n',
+      '🔴 $11.50 → -$11.50\n',
     );
     expect(text([trade({ result: SessionTradeResult.Tied, outcome: d('0.00000000') })])).toContain(
-      '⚪ Ставка: $11.50 → $0.00, ставка вернулась\n',
+      '⚪ $11.50 → $0.00\n↩️ ставка вернулась\n',
     );
   });
 
@@ -167,7 +167,7 @@ describe('sessionCycleText (#551)', () => {
 
   it('CT1 a lost step 1 with its slot below: the block, then the adaptive line alone (#718)', () => {
     expect(text([lost({ adaptiveLine: Below })])).toBe(
-      `⚡ Цикл 3 Шаг 1\n<pre>🔴 Ставка: $11.50 → -$11.50\n📊 Цена: 0.49803 → 0.49820</pre>\n\n${ADAPTIVE}`,
+      `⚡ Цикл 3 Шаг 1\n<pre>🔴 $11.50 → -$11.50\n📊 0.49803 → 0.49820</pre>\n\n${ADAPTIVE}`,
     );
   });
 
@@ -215,7 +215,7 @@ describe('sessionCycleText (#551)', () => {
 
   it('prints the prices with the pair’s digits, and as the broker sent them without a catalog', () => {
     expect(text([trade({ digits: 2 })])).toContain('0.50 → 0.50');
-    expect(text([trade({ digits: null })])).toContain('📊 Цена: 0.49803 → 0.4982');
+    expect(text([trade({ digits: null })])).toContain('📊 0.49803 → 0.4982');
   });
 
   it('CT7 names no strategy to the user', () => {
@@ -246,19 +246,19 @@ describe('sessionCycleText with the open trade (#700)', () => {
 
   it('the open block alone: the cycle and step, the stake, the direction, the open price, no result', () => {
     expect(text([], open({ step: 3 }))).toBe(
-      '⚡ Цикл 2 Шаг 3\n<pre>⏳ Ставка: $11.50 · ⬆️ Вверх · сделка открыта\n📊 Цена: 0.49790 → …</pre>',
+      '⚡ Цикл 2 Шаг 3\n<pre>⏳ $11.50 · ⬆️ Вверх\n📊 0.49790 → …</pre>',
     );
   });
 
   it('names the direction from the catalog, down too', () => {
     expect(text([], open({ action: TradeAction.Down }))).toContain(
-      `· ${texts.plain.actionDown} · сделка открыта`,
+      `<pre>⏳ $11.50 · ${texts.plain.actionDown}\n`,
     );
   });
 
   it('prints the open price with the pair’s digits, and as the broker sent it without a catalog', () => {
-    expect(text([], open({ digits: 2 }))).toContain('📊 Цена: 0.50 → …');
-    expect(text([], open({ digits: null }))).toContain('📊 Цена: 0.4979 → …');
+    expect(text([], open({ digits: 2 }))).toContain('📊 0.50 → …');
+    expect(text([], open({ digits: null }))).toContain('📊 0.4979 → …');
   });
 
   it('stands last, after the settled blocks, a blank line apart', () => {
@@ -267,7 +267,7 @@ describe('sessionCycleText with the open trade (#700)', () => {
       '⚡ Цикл 2 Шаг 1',
       '⚡ Цикл 2 Шаг 3',
     ]);
-    expect(blocks[1]).toContain('сделка открыта');
+    expect(blocks[1]).toContain('<pre>⏳');
   });
 
   it('CT6 the open block prints its slot as a settled one: above it once; under a lost step 1 the line stands between (#718)', () => {
@@ -293,7 +293,7 @@ describe('sessionCycleText with the open trade (#700)', () => {
   });
 
   it('without the open trade, the settled blocks alone', () => {
-    expect(text([trade()])).not.toContain('сделка открыта');
+    expect(text([trade()])).not.toContain('<pre>⏳');
   });
 });
 
