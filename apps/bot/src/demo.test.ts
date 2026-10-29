@@ -740,26 +740,28 @@ describe('the signals screen', () => {
       const { press, calls, apiErrors, answers, signalWaiter, logger } = setup({
         readSignals: SCANNING,
       });
-      apiErrors.set('editMessageMedia', ANIMATION_REFUSED);
       answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
+      // a first send brings the file_id, so the refused edit names it
+      await press(DEMO_CALLBACK_DATA);
+      calls.length = 0;
+      signalWaiter.waitList.mockClear();
+      apiErrors.set('editMessageMedia', ANIMATION_REFUSED);
       await press(LIST);
       expect(methods(calls)).toEqual([
         'answerCallbackQuery',
         'editMessageMedia',
         'editMessageText',
       ]);
+      expect(mediaOf(payloadOf(calls, 'editMessageMedia'))).toMatchObject({ media: SCAN_FILE_ID });
       expect(plainTextOf(payloadOf(calls, 'editMessageText')?.text as string)).toBe(SCAN_CAPTION);
       expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({ media: 'text' });
       expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
         'the scan animation was refused, sending the text',
       ]);
-      // the next one uploads the file again: a file, not an id
-      apiErrors.delete('editMessageMedia');
-      await press(DEMO_CALLBACK_DATA);
+      // the next one uploads the file again: a file, not the forgotten id
       await press(DEMO_CALLBACK_DATA);
       const sent = calls.filter((call) => call.method === 'sendAnimation');
-      expect(sent.map((call) => typeof call.payload.animation)).toEqual(['object', 'string']);
-      expect(sent[1]?.payload.animation).toBe(SCAN_FILE_ID);
+      expect(sent.map((call) => typeof call.payload.animation)).toEqual(['object']);
     });
 
     it('W-media4 a press under the animation draws the next screen as a new message, no edit', async () => {
