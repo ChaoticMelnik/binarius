@@ -263,7 +263,8 @@ deposit anew; the user stays in real until they switch back themselves (the mode
 cashier's widget.
 
 **The pass.** `createDepositModeSwitcher` (backend, a tick every `DEPOSIT_MODE_SWITCH_SCAN_MS`)
-lists `deposit_events` rows with `user_id` and no outcome (`mode_switch is null`, oldest first,
+lists `deposit_events` rows with `user_id`, `verification` ([postbacks.md](postbacks.md) →
+Authenticity, #142) and no outcome (`mode_switch is null`, oldest first,
 `DEPOSIT_MODE_SWITCH_SCAN_LIMIT` a tick, `deposit_events_mode_switch_pending_idx`) and calls
 `switchTradingModeOnDeposit` for each. A row gets a `user_id` at the postback's receipt (an active
 account) or at the account's activation (`attachDepositsToAccount`), and the pass handles both the
@@ -393,7 +394,8 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 
 - **#473** (shipped) — `/stop` returns the user to demo ([/stop](#the-bot) above).
 - **#686** — the switch after a deposit (above); crediting deposits is #386, the postbacks'
-  authenticity #142. The admin's deposits page does not show the outcome columns.
+  authenticity #142: the pass lists only verified rows. The admin's deposits page does not show
+  the outcome columns.
 - **#326** — the real stake and its picker ([bot-demo-trade.md](bot-demo-trade.md#the-stake-297-326)).
   **#327** (shipped) — real sessions.
 - **#450** — the Martingale of a session: #450 merged first, so #474 added «В сессии ставка
