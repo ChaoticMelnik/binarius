@@ -39,19 +39,67 @@ pnpm test --project unit apps/bot/src apps/backend/src/auth/client-push.test.ts 
   2026-10-02; its keyboards are built by role too, #475). A send method used outside the two seams
   is ESLint's to refuse (Rule 18).
 
-## The width (#506)
+## The width (#506, #887)
 
 Telegram sizes a message bubble to its longest line, and an inline keyboard takes the bubble's
 width, so a short text would leave narrow buttons and no room for two in a row. The Bot API has no
 width setting. Every **text** message therefore ends with the width spacer `BOT_MESSAGE_SPACER`
-(`packages/shared/src/bot-message-width.ts`): a line break, then `BOT_MESSAGE_SPACER_LENGTH` = 26
+(`packages/shared/src/bot-message-width.ts`): a line break, then `BOT_MESSAGE_SPACER_LENGTH` = 23
 characters U+2800 BRAILLE PATTERN BLANK. The character is a symbol, not whitespace, so the Bot API's
-trim keeps it; 26 of them with no break between make one line about 302 pt wide on an iPhone at the
-default font size (0.684 em measured in the macOS system font), the full text width of the bubble
-with one empty-looking line between the text and the keyboard; on Telegram Desktop it is about
-230 px of 430. It goes on a line of its own after the text, so the chat preview and the
-notification open with the text and the text's last word never wraps onto it.
+trim keeps it; N of them with no break between make one line. It goes on a line of its own after
+the text, so the chat preview and the notification open with the text and the text's last word
+never wraps onto it.
 
+**One width for the feed (#887).** A session's feed mixes pictures (the start card, the scanner's
+animation of the waiting message, the summary card) with text (the cycle messages), and the
+owner's iPhone drew three widths: the photo and the animation 630 of 921 px, a text with the old
+26-blank spacer 746, a step block's `<pre>` line longer than the spacer 810 (the widest text
+bubble). iOS draws a photo or an animation in its own ceiling — 0.684 of the screen, about 300 pt
+— whatever the picture's size or proportion (`setup-*.png` and `account-card.jpg` 1280×640, the
+scanner 640×320, the summary card 1200×675 all stop there; the proportion changes only the
+height). No picture reaches the text maximum, so the text comes down to the media: N is the
+media bubble's width, not the screen's.
+
+- **N.** U+2800 measured 0.684 em in the macOS system font (CoreText, SF 17 pt — iOS's font:
+  11.62 pt; 8.89 px at Desktop's 13 px). A text bubble is the spacer's line plus about 24 pt of
+  padding:
+
+  | N | line at 17 pt (iOS default) | bubble | at 18 pt (12.5 pt a blank) | bubble | Desktop 13 px line |
+  |---|---|---|---|---|---|
+  | 22 | 256 pt | 280 pt | 275 pt | 299 pt | 196 px |
+  | 23 | 267 pt | 291 pt | 288 pt | 312 pt | 204 px |
+  | 24 | 279 pt | 303 pt | 300 pt | 324 pt | 213 px |
+
+  23 is the middle between the default font size (−4 % against the ~302 pt photo) and the owner's
+  phone (+3 %). The spacer never wraps into two empty lines at 23: 267 pt is narrower than the
+  301 pt text width of a 375-pt screen up to a 19 pt font.
+- **The feed's lines within the spacer.** A line longer than the spacer widens its bubble past
+  the media, and a step block whose open line is longer than its result's would change width at
+  its edit. So the step blocks (`sessionTradeWon`, `sessionTradeLost`, `sessionTradeTied`,
+  `sessionTradeOpen`, ru and en) carry no «Ставка:»/«Цена:» labels and no «· сделка открыта» tail;
+  a tie says «↩️ ставка вернулась» on a line of its own. A `<pre>` line is monospace: the model
+  `preLineBlanks` counts it in spacer blanks — a Menlo character 0.602 em = `PRE_CHAR_BLANKS` 0.88,
+  an emoji 22.0 pt = `PRE_EMOJI_BLANKS` 1.9, a variation selector, a joiner or a keycap mark 0
+  (CoreText, 2026-10-29; within 0.05 of the measured lines). At the widest realistic values (a
+  $1 000.00 stake and its +$1 960.00 return, an 8-character price) the widest line is
+  «🟢 $1 000.00 → +$1 960.00», 22.1 blanks; the open block's «⏳ $1 000.00 · ⬆️ Вверх» 20.5. The
+  proportional lines of the feed measured in SF 17 pt: «⚡ Цикл 720 Шаг 28» 14.0 blanks,
+  «🔄 Адаптивная ставка включена» 22.4 — the bound for tuning down: at N = 22 both it and the
+  widest result line are past the spacer.
+- **Captions.** A caption does not widen its media bubble on iOS, so the waiting message's caption
+  edits and the cards' captions keep the media width. On Desktop this is not measured (risk 116 of
+  [bot-session.md](bot-session.md)).
+- **Not aligned.** One constant cannot align iPhone and Telegram Desktop at once: Desktop's photo
+  is about 430 px and its text with the spacer about 230 px, and aligning it would take N ≈ 45 —
+  two or three empty lines on an iPhone. Android and Windows glyph widths were not measured. The
+  user's text size moves the text's width and not the media's (risk 115). Texts outside the feed
+  with a line longer than the spacer (help, the pair lists, «Ближе всего к сигналу…», the
+  session's completion line) stay wider, up to the client's maximum; so does a line an override
+  makes longer (risk 117).
+- **Not taken: the cards as link previews.** A text message with a picture's link preview
+  (`link_preview_options`: `url`, `prefer_large_media`, `show_above_text`) is the only Bot API way
+  to a picture at the text maximum of iOS; it needs a public HTTPS endpoint for Telegram's crawler,
+  the preview comes with a delay, and an animation does not play in one.
 - Where: the two seams append it when they unwrap `TelegramHtml` — the bot's `replyHtml`,
   `editMessageTextHtml`, `editMessageTextByIdHtml`, `sendHtmlById` (#537) and their
   `…WithoutNextStep` forms (`send.ts`), the backend's `send` (the link push, mailings, the deposit
@@ -63,19 +111,24 @@ notification open with the text and the text's last word never wraps onto it.
   caption edits, #860 —, `editMessageMedia`, the inline share result), the Stars
   invoice, callback toasts or the staff bot: a picture sets a caption's width, and the others are
   not bubbles of the client chat.
-- The limit: a text message holds `BOT_TEXT_LIMIT` = 4096 − 27 = 4069 characters after entities
-  parsing (`botHtmlText`'s default, the text descriptions of `BOT_TEXT_MESSAGES`, the session
-  cycle's `fits`, `telegramTextProblems`' default); captions keep 1024. An override longer than
-  that after parsing is refused as `too_long` ([bot-texts.md](bot-texts.md#limits)).
-- Tuning: the owner sets N by looking at the clients — two empty lines on a phone mean N is too
-  large, a bubble narrower than the screen too small. Windows and Android glyph widths were not
-  measured.
+- The limit: a text message holds `BOT_TEXT_LIMIT` = 4096 − (N + 1) = 4072 characters after
+  entities parsing (`botHtmlText`'s default, the text descriptions of `BOT_TEXT_MESSAGES`, the
+  session cycle's `fits`, `telegramTextProblems`' default); captions keep 1024. An override longer
+  than that after parsing is refused as `too_long` ([bot-texts.md](bot-texts.md#limits)).
+- Tuning: N is the one width constant — the limit and the feed's line budget follow from it, the
+  pictures' sizes are not inputs. The owner sets it by ±1 (11.6 pt on an iPhone, 8.9 px on
+  Desktop) from screenshots of a demo session from its start to its summary: text wider than the
+  cards means N is too large, narrower too small; two empty lines under a text mean far too large.
+  Below 23 `bot-message-width.test.ts` F3 goes red — a sign to shorten the lines, not to weaken
+  the test.
 - Held by: `send.test.ts` (each function of the bot's seam), `client-push.test.ts` (each method of
   the backend's), `captureApi` (`apps/bot/src/testing.ts` → `refuseWidthSpacerMisuse`: in every
   scene of every bot test a `sendMessage` or `editMessageText` without the spacer at its end
   throws, and a caption, an inline answer or a toast with U+2800 throws; the call is recorded
   without the spacer), `pushedText` in the backend's suites (`apps/backend/src/admin/testing.ts`),
-  `bot-message-width.test.ts` (the spacer, the limit, no text limit above it).
+  `bot-message-width.test.ts` (the spacer, the limit, no text limit above it; F1–F2 the model
+  against the measured lines, F3–F6 every `<pre>` line of the step blocks within the spacer, ru
+  and en, the open block no wider than the results, no labels, the tie's own line).
 
 ## Roles, colours and rows (#475)
 

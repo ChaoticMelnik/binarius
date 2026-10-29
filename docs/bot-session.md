@@ -893,11 +893,12 @@ cycle, so every trade is a new message of one block, as before #551.
 
 **The open block** (#700, the owner's idea 2026-10-21). Once a trade is open at the broker (its
 intent `accepted` with its `broker_trades` row `open`), its block goes into the cycle message
-before the result: the same head, the stake, the direction (`actionUp`/`actionDown` of the
-catalog) and the open price, «сделка открыта» in place of the result, and «→ …» in place of the
-close price (`sessionTradeOpen`). Step 1 sends it as a new message, a later step edits the cycle
-message, exactly as a result block would; the trade's settlement then edits the same block into
-its result. A trade already settled when the sender gets to it shows only its result block. The
+before the result: the same head, ⏳ with the stake and the direction (`actionUp`/`actionDown`
+of the catalog) in place of the result, and the open price with «→ …» in place of the close price
+(`sessionTradeOpen`; no «сделка открыта» tail since #887, so the open block is no wider than its
+result, [The width of the feed](#the-width-of-the-feed-887)). Step 1 sends it as a new message, a
+later step edits the cycle message, exactly as a result block would; the trade's settlement then
+edits the same block into its result. A trade already settled when the sender gets to it shows only its result block. The
 open block's cycle and step are the ones the trade settles at (`sessionNextStep`: a trade's
 position depends only on the results before it), and the adaptive line stands between step 1
 and step 2 as with a settled step 2: under a lost step 1 at once, above step 2 after a tie (#718).
@@ -915,30 +916,31 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
 
 ```text
 ⚡ Цикл 2 Шаг 3
-⏳ Ставка: $11.50 · ⬆️ Вверх · сделка открыта
-📊 Цена: 0.49790 → …
+⏳ $11.50 · ⬆️ Вверх
+📊 0.49790 → …
 ```
 
 ```text
 ⚡ Цикл 2 Шаг 1
-🔴 Ставка: $5.00 → -$5.00           (each block's two lines in a code block: Telegram shows it with «copy»)
-📊 Цена: 0.49810 → 0.49790
+🔴 $5.00 → -$5.00           (each block's lines under the head in a code block: Telegram shows it with «copy»)
+📊 0.49810 → 0.49790
 
 🔄 Адаптивная ставка включена
 
 ⚡ Цикл 2 Шаг 2
-⚪ Ставка: $11.50 → $0.00, ставка вернулась
-📊 Цена: 0.49790 → 0.49790
+⚪ $11.50 → $0.00
+↩️ ставка вернулась
+📊 0.49790 → 0.49790
 
 ⚡ Цикл 2 Шаг 3
-🟢 Ставка: $11.50 → +$22.08
-📊 Цена: 0.49790 → 0.49815
+🟢 $11.50 → +$22.08
+📊 0.49790 → 0.49815
 ```
 
 - **The figures** (#539, #684): after «→» a win 🟢 prints what came back to the account, the stake
   plus the broker trade's profit (`+$22.08` for $11.50 at a profit of 10.58, the owner's decision
   2026-10-20); a loss 🔴 prints the profit, `-loss` (`-$5.00` for a full loss); a tie ⚪
-  `$0.00, ставка вернулась` (a zero has no sign). The figure is one SQL expression of the claim,
+  `$0.00` (a zero has no sign) and «↩️ ставка вернулась» on a line of its own (#887). The figure is one SQL expression of the claim,
   `case when profit > 0 then trade_intents.amount + broker_trades.profit else profit end`, a
   `numeric` the code only prints by `formatSignedUsd` with every fraction digit (Rule 2): a profit
   of `0.001` on a $5 stake prints `+$5.001`, `0.0046` on $0.005 prints `+$0.0096`. The stake is the
@@ -971,9 +973,9 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   `packages/shared/src/session-steps.ts`); `sessionCycleText` only prints it, so a continuation
   after a split from step 2 has the line only after a tie. No text says «Мартингейл».
 - **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
-  the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4069: the
+  the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4072: the
   Bot API's 4096 less the width spacer the seam appends,
-  [bot-navigation.md](bot-navigation.md#the-width-506)) opens a new message of the same cycle from
+  [bot-navigation.md](bot-navigation.md#the-width-506-887)) opens a new message of the same cycle from
   the trade that did not fit,
   and the full one stays as it is. The defaults never get there — a cycle has at most `maxSteps`
   (4) trades plus its ties, of about 100 characters each — so only an override can; the assembled-messages registry
@@ -1110,7 +1112,7 @@ message.
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
 | 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
-| the block does not fit (`BOT_TEXT_LIMIT`, 4069) | a new message from this trade; recorded from it | `info` … `split` |
+| the block does not fit (`BOT_TEXT_LIMIT`, 4072) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
 | **the open block** (#700): a new message sent | `open_notice_intent_id` = its intent; the cycle message = its id, `from` = the settled count, one CAS with the intent | the waiting message under it (as today); the result edits it |
 | the open block: an edit sent, or «message is not modified» | the mark set; the cycle message unchanged | the result edits it |
@@ -1506,6 +1508,29 @@ deletes it first — never a second «⏹» beside it.
   is still accepted; in the window an old bot's record carrying `replacesMessageId` is a 400, asked
   again each poll until the bot restarts — the rare old-«⏹» path only; a new bot on an old backend
   would get its stop body refused (400 → `unavailable` and «⏹» in place).
+
+### The width of the feed (#887)
+
+Every bubble of a session's feed — the start card, the cycle messages, the waiting message, the
+summary — is the client's media width on an iPhone: the pictures stop at about 300 pt whatever
+their size, and the width spacer of a text is set to that width with every step block's `<pre>`
+line within it ([bot-navigation.md → The width](bot-navigation.md#the-width-506-887)). A message's
+width therefore does not depend on how its send or edit ended:
+
+| Message | Sender → call | Outcome | Width after |
+|---|---|---|---|
+| waiting | backend `sendWaiting` → `sendAnimation` 640×320 | any ([its endings](#the-waiting-message-536)) | media |
+| waiting | backend `runCaptions` → `editMessageCaption` | 2xx, «not modified», 403, another 4xx, 5xx or a timeout | unchanged: a caption does not widen the media bubble on iOS (Desktop: risk 116) |
+| waiting | backend `runCaptions` yields to `wake()`, the 429 pause, `stop()`, a cooling chat, an equal caption, or the id re-read changed | no call | as it was |
+| waiting | backend `removeWaiting` → `deleteMessage` | deleted / refused | none / as it was |
+| waiting | bot `drawStopReply` → `editMessageMedia` with `scan-still.png` 640×320, or `editMessageCaption` when the file is refused | 2xx | media, the animation's width |
+| waiting | bot `drawStopReply`, the message gone → `replyHtml` | 2xx | the spacer; the completion line is wider (risk 117) |
+| cycle | backend `sendNew` → `sendMessage` (the open block or a result) | any | the spacer |
+| cycle | backend `editSessionTrade` → `editMessageText` (open → settled, the «⏹» off) | 2xx, «not modified», gone → a new message | the spacer before and after: every `<pre>` line within it, the open block no wider than the results |
+| cycle | backend yields, the 429 pause, a cooling chat | no call | as it was |
+| cycle | bot `stripKeyboard` on «⏹» `:c` → `editMessageReplyMarkup` | 2xx | unchanged (the same text) |
+| start / summary card | bot `sendPhoto` / `editMessageMedia` 1280×640, 1200×675 | 2xx | media |
+| summary as text | bot `sendHtmlById`, backend `sendSessionSummary` (the fallback) | 2xx | the spacer; a summary line up to 27 blanks is wider (risk 117) |
 
 ### Logs (backend)
 
@@ -2225,6 +2250,21 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     the caption under the animation of a session that still waits; the sender's memory keeps the
     caption it drew, so the next pass whose figures differ puts the scan back, with the same «⏹».
     The press failed and the wait goes on: a press of «⏹» stops it or answers again.
+115. **The user's text size moves the text, not the media** (#887): the spacer's width grows with
+    the font size set on the phone, the media bubble's does not; N = 23 keeps the two within about
+    4 % between 17 and 18 pt, at 20 pt the text is about 10 % wider. No one constant fits every
+    size; the owner tunes N for the common one (bot-navigation.md → The width).
+116. **Telegram Desktop and Android are not aligned** (#887): on Desktop the text with the spacer is
+    about 230 px and a photo about 430 px, the animation not measured; whether a longer caption
+    widens the waiting message's bubble there, so that its width changes with the caption, is not
+    checked. Android and Windows were not measured. Aligning Desktop would take N ≈ 45, two or
+    three empty lines on an iPhone.
+117. **A line wider than the spacer** (#887): the step blocks are held within the spacer on the
+    default texts at a $1 000.00 stake and an 8-character price; a larger stake or return, a price
+    printed without the pair's digits, an override that lengthens a block or `{action}`, and texts
+    outside the step blocks (the completion line «🏁 Сессия завершена: …» of 26.8 blanks in the
+    reply to «⏹» and in the text summary, help, the pair lists) make their message wider, up to
+    the client's maximum; the admin's preview does not warn.
 
 ## Running it locally
 
