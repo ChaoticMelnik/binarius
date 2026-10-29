@@ -106,7 +106,8 @@ import { finishedViewNeedsBalance, refreshFinishedBalance } from './session-view
 // the woken tick a whole one. Woken ticks start at least wakeGapMs apart, so a storm of
 // notifications costs at most a few ticks a second; a step skipped because its chat was cooling
 // wakes its session again at the end of that chat's gap. The fallback summary's balance refresh
-// is not waited for (#870): it starts once per session and the summary goes on a later tick.
+// is not waited for (#870): it starts once per session, and the summary goes on a later tick that
+// found the refresh over before it read the view.
 // The waiting message is the scanner's animation (#860, Rule 59), its caption the session pair's
 // scan from the H1 scanner's memory; a pass of its own, captions(), edits the caption to newer
 // figures every captionMs, serial with the ticks (one `ticking`) and inside the same pace and
@@ -928,7 +929,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // claim's mark. A summary that cannot be built closes the step, so the row leaves the list.
   // A view that needs the balance after the last trade (session-view.ts) starts its refresh and
   // skips the session (#870): the summary goes on a later tick, with the snapshot the refresh
-  // wrote or the stored one and its age; the refresh never holds the tick.
+  // wrote or the stored one and its age; the refresh never holds the tick. The refresh's entry is
+  // read before the view: one over before the read committed its snapshot before it, so the view
+  // carries it; one that answers during the read leaves the session to the next tick.
   async function serveFallback(session: SummaryFallbackSession): Promise<Step> {
     if (stopped) return 'skip';
     const { sessionId } = session;
@@ -940,15 +943,16 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
     if (cooling(session)) return 'skip';
     const telegramUserId = String(session.telegramUserId);
+    const refresh = balanceRefreshes.get(sessionId);
+    const refreshed = refresh?.done === true;
     const view = await readTradingSessionView(db, sessionId, telegramUserId);
-    if (view === undefined) return 'skip';
+    if (stopped || view === undefined) return 'skip';
     if (finishedViewNeedsBalance(view)) {
-      const refresh = balanceRefreshes.get(sessionId);
       if (refresh === undefined) {
         startRefresh(sessionId, telegramUserId);
         return 'skip';
       }
-      if (!refresh.done) return 'skip';
+      if (!refreshed) return 'skip';
     }
     const step = await sendFallback(session, view);
     if (step === 'next' || step === 'lost') balanceRefreshes.delete(sessionId);
@@ -958,9 +962,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   function startRefresh(sessionId: string, telegramUserId: string) {
     const refresh = { done: false };
     balanceRefreshes.set(sessionId, refresh);
-    const oldest = balanceRefreshes.keys().next();
-    if (balanceRefreshes.size > config.scan && oldest.done !== true) {
-      balanceRefreshes.delete(oldest.value);
+    if (balanceRefreshes.size > config.scan) {
+      const [oldest] = balanceRefreshes.keys();
+      balanceRefreshes.delete(oldest);
     }
     void refreshFinishedBalance({ db, balance }, sessionId, telegramUserId)
       .catch((error: unknown) => {
