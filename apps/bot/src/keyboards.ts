@@ -149,26 +149,31 @@ export const backToAnalysisKeyboard = (assetId: number, durationSec: DemoDuratio
   withMenu([backToAnalysisButton(assetId, durationSec)]);
 
 // The end of a path: a trade the tracker no longer follows, a stopped session (#350). The
-// analysis of the same pair at the demo's one duration and the signals list (#685: the duration
-// is one, so a trade or a session of an older one ends the same way) join the last row of actions
-// in `groups`, the menu with them. `beforeMenu` buttons go in a group of their own right above
-// and with the menu (the session result's deposit and invite, #115). `otherPair`, a session that
-// stopped for want of a signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in place
-// of «📡 Сигналы» on the same data, a step forward.
+// analysis of the same pair at the demo's one duration (#685: the duration is one, so a trade of
+// an older one ends the same way) and the signals list join the last row of actions in `groups`,
+// the menu with them. `assetId` null, the end of a session: no analysis, the signals list alone
+// (#858). `beforeMenu` buttons go in a group of their own right above and with the menu (the
+// session result's deposit and invite, #115). `otherPair`, a session that stopped for want of a
+// signal (#509): no analysis of that pair, «🔀 Выбрать другую пару» in place of «📡 Сигналы» on
+// the same data, a step forward.
 export function appendEndOfPath(
   groups: readonly ButtonGroup[],
-  assetId: number,
+  assetId: number | null,
   beforeMenu: readonly BotButton[] = [],
   { otherPair = false }: { otherPair?: boolean } = {},
 ): BotKeyboard {
   const end = otherPair
     ? [callbackButton(ButtonRole.Forward, LABELS.otherPairButton, DEMO_SIGNALS_CALLBACK_DATA)]
     : [
-        callbackButton(
-          ButtonRole.Secondary,
-          LABELS.newAnalysisButton,
-          demoAnalysisCallbackData(assetId, DEMO_DURATION_SEC),
-        ),
+        ...(assetId === null
+          ? []
+          : [
+              callbackButton(
+                ButtonRole.Secondary,
+                LABELS.newAnalysisButton,
+                demoAnalysisCallbackData(assetId, DEMO_DURATION_SEC),
+              ),
+            ]),
         callbackButton(ButtonRole.Nav, LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA),
       ];
   if (beforeMenu.length === 0) return keyboardOf(...joinLast(groups, [...end, menuButton()]));

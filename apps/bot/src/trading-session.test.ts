@@ -258,13 +258,10 @@ const replyOf = (view: TradingSessionView) => sessionStopReplyText(view).value;
 // SESSION_VIEW's own pair at the demo's one duration (#685); a demo session's opens the amount
 // screen as a new message (#476)
 const AGAIN = button(LABELS.sessionAgainButton, demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'));
-// #350: the end of the path under a stopped session, after its refresh and «🔁 Ещё сессия»: the
-// signals list (#685)
+// #350: the end of the path under a stopped session, in one row with «🔁 Ещё сессия»: the signals
+// list (#685), no analysis (#858)
 const TO_SIGNALS = [button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA)];
 const MENU = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
-const NEW_ANALYSIS = [
-  button(LABELS.newAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
-];
 // «👥 Позвать» beside the menu at every end of a session (#115)
 const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
 // «💳 Пополнить» (#27): the cashier Mini App, a step forward on its own row above the invite
@@ -272,7 +269,7 @@ const INVITE = [button(LABELS.inviteButton, INVITE_CALLBACK_DATA)];
 const DEPOSIT: Button[] = [{ text: LABELS.depositButton, web_app: { url: CASHIER_URL } }];
 const INVITE_MENU = [...INVITE, ...MENU];
 // a stopped session's end of the path: under the stop reply, the card and an old status (#536)
-const STOPPED_ROWS = [[AGAIN], [...NEW_ANALYSIS, ...TO_SIGNALS], DEPOSIT, INVITE_MENU];
+const STOPPED_ROWS = [[AGAIN, ...TO_SIGNALS], DEPOSIT, INVITE_MENU];
 const CONNECT_ROWS = [[button(LABELS.connectButton, CONNECT_CALLBACK_DATA)]];
 // #350: a refusal of the start leads back to the analysis and to the menu; a blocked user to support
 const MENU_ROW = [button(LABELS.menuButton, MENU_CALLBACK_DATA)];
@@ -856,7 +853,8 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     const edit = payloadOf(calls, 'editMessageText');
     expect(edit?.text).toBe(replyOf(realStopped));
     expect(rowsOf(edit)[0]).toEqual([
-      button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      button('🔁 Сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      ...TO_SIGNALS,
     ]);
   });
 
@@ -978,7 +976,8 @@ describe('«⏹ Остановить сессию» under the open trade’s blo
     const sent = payloadOf(calls, 'sendMessage');
     expect(sent?.text).toBe(replyOf(realStopped));
     expect(rowsOf(sent)[0]).toEqual([
-      button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      button('🔁 Сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      ...TO_SIGNALS,
     ]);
   });
 
@@ -1366,6 +1365,7 @@ describe('«🔁 Ещё сессия»', () => {
     expect(rows(STOPPED)).toEqual(STOPPED_ROWS);
     expect(rows(STOPPED)[0]).toEqual([
       button(LABELS.sessionAgainButton, `demo:l:${String(PAIR_EURUSD.id)}:5:n`),
+      button(LABELS.toSignalsButton, DEMO_SIGNALS_CALLBACK_DATA),
     ]);
     // #509: a session the no-signal limit stopped offers another pair: no «🔁 Ещё сессия», no
     // analysis of that pair, «🔀 Выбрать другую пару» on the signals list
@@ -1433,7 +1433,8 @@ describe('«🔁 Ещё сессия»', () => {
         ),
       )[0],
     ).toEqual([
-      button('🔁 Ещё сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      button('🔁 Сессия · REAL', sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5)),
+      ...TO_SIGNALS,
     ]);
   });
 
@@ -1468,10 +1469,13 @@ describe('«🔁 Ещё сессия»', () => {
   it('starts a real session again from a stopped real one', async () => {
     const realStopped = sessionView({ ...STOPPED, mode: TradeMode.Real });
     const realAgain = button(
-      '🔁 Ещё сессия · REAL',
+      '🔁 Сессия · REAL',
       sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
     );
-    expect(keyboardRows(sessionCardKeyboard(realStopped, CASHIER_URL))[0]).toEqual([realAgain]);
+    expect(keyboardRows(sessionCardKeyboard(realStopped, CASHIER_URL))[0]).toEqual([
+      realAgain,
+      ...TO_SIGNALS,
+    ]);
     const { press, startSession } = setup();
     await press(realAgain.callback_data ?? '');
     expect(startSession.mock.calls[0]?.[0]).toMatchObject({ mode: TradeMode.Real });
@@ -1514,10 +1518,10 @@ describe('the summary in one message (#318, #537)', () => {
   it('K1 is the end of the path; the invite and the menu alone without settings', () => {
     const rows = (view: TradingSessionView) => keyboardRows(sessionCardKeyboard(view, CASHIER_URL));
     expect(rows(DONE)).toEqual(CARD_ROWS);
-    // #475: again and the deposit green on their own rows, the analysis blue, the rest no colour
+    // #475, #858: again green beside the signals list, the deposit green on its own row, the rest
+    // no colour
     expect(inlineStyles({ reply_markup: sessionCardKeyboard(DONE, CASHIER_URL) })).toEqual([
-      ['success'],
-      ['primary', null],
+      ['success', null],
       ['success'],
       [null, null],
     ]);

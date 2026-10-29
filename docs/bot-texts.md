@@ -193,6 +193,8 @@ The labels that stand in a row of two or three were shortened to fit it (owner's
 | `stakeBackAnalysisButton` | ↩️ Назад к анализу | ↩️ К анализу | ↩️ Back to the analysis → ↩️ Analysis | 3 |
 | `stakeBackSettingsButton` | ↩️ Назад к настройкам | ↩️ Настройки | ↩️ Back to the settings → ↩️ Settings | 3 |
 | `stakeBackLaunchButton` | ↩️ К запуску | the same | ↩️ To the launch → ↩️ Launch | 3 |
+| `sessionAgainButton` | 🔁 Ещё сессия | the same (demo; #858, in a row with «📡 Сигналы») | 🔁 One more session → 🔁 New session | 2 |
+| `sessionAgainShortButton` | 🔁 Ещё сессия · REAL | 🔁 Сессия · REAL (real, the bot adds « · REAL», 13; #858) | 🔁 One more session · REAL → 🔁 Session · REAL (14) | 2 |
 
 #708 took the language button off the status card (the language is the `/language` command) and
 put the mode button, the invite and the purchase in one row of three, so the mode button and

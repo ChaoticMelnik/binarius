@@ -167,7 +167,7 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 ## Sequence
 
 ```text
-<mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 циклов · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
+<mode>:sess:<assetId>:<sec>[:l]    (in real «🚀 Сессия из 5 циклов · REAL» under the analysis or a finished trade, «🚀 Запустить цикл · REAL» with :l (#418), «🔁 Ещё сессия · REAL», #327, «🔁 Сессия · REAL» since #858; demo buttons sent before #476; the longest, real:sess:2147483647:15:l, 25 bytes)
   bot → answerCallbackQuery ∥ GET /trading/pairs (for the symbol only)
   bot → POST /trading/sessions { telegramUserId, mode, assetId, durationSec, cycles: 5,
         shownSignal? }   (#829: the direction the bot showed for the pair, taken once)
@@ -250,7 +250,8 @@ session:<id>                       (an old status message's «🔄 Обнови�
   `sessionStartDataOf`, so a datum that does not fit starts nothing. The label is built from `DEFAULT_SESSION_CYCLES` with
   `cyclesCount` («5 циклов», #552), and the request sends the same number as `cycles`, so the label, the check and the request
   cannot disagree. In real mode every door's label ends with « · REAL» (`sessionStartButtonLabel`,
-  `launchCycleButtonLabel`, `sessionAgainButtonLabel`; `MODE_LABELS`, as the real stake button):
+  `launchCycleButtonLabel`, `sessionAgainButtonLabel` on its short label `sessionAgainShortButton`,
+  #858; `MODE_LABELS`, as the real stake button):
   a real session never starts from a button that looks like a demo one (#327).
 - The mode in the data is the mode the screen was drawn in; the handler sends it as `mode` and the
   backend compares it with the user's `trading_mode` (`mode_not_allowed` on a mismatch, below).
@@ -486,10 +487,10 @@ loses its «🔄 Обновить» and «⏹» on the tracker's edit at the sto
 «⚠️ Статус сессии недоступен.» under «🏠 В меню», as the caption of the picture when the last view
 read had a direction (`editMessagePhotoByIdHtml`), else as a text. **The end of the path** (`sessionCardKeyboard`)
 is the stopped session's next step under the reply to its stop, an old status message the stop
-drew in place and the summary (#537): «🔁 Ещё сессия» (#320) on the same pair and duration — drawn
-only when the view has `settings` and its duration is one the demo still offers (`durationOf`) —
-then (#350, [bot-navigation.md](bot-navigation.md)) «📊 Анализ» on the same pair and
-duration (when the demo still offers it) and «📡 Сигналы» in one row, «💳 Пополнить» (#27,
+drew in place and the summary (#537): «🔁 Ещё сессия» (#320; «🔁 Сессия · REAL» in real, #858) on
+the same pair and duration — drawn only when the view has `settings` and its duration is one the
+demo still offers (`durationOf`) — and «📡 Сигналы» (#350, [bot-navigation.md](bot-navigation.md))
+in one row, with no «📊 Анализ» since #858, «💳 Пополнить» (#27,
 [deposit.md](deposit.md), only when `WEB_PUBLIC_URL` is https) on its own row, «👥 Позвать»
 (#115, [referrals.md](referrals.md)) and «🏠 В меню» in one row (the rows: bot-navigation.md →
 Roles, colours and rows, #475); without `settings` only «💳 Пополнить», then «👥 Позвать»
@@ -1604,17 +1605,18 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   caption (Rule 30) — the caption, the bot's text and the backend's fallback text are the same
   lines; the text path sends them with the width spacer.
 - **The keyboard** is the end of the path ([The session message](#the-session-message)): «🔁 Ещё
-  сессия» at 5 s (#685) while a session at it fits, «📊 Анализ» and
-  «📡 Сигналы» in one row, «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать»
+  сессия» at 5 s (#685) while a session at it fits and «📡 Сигналы» in one row, no «📊 Анализ»
+  (#858), «💳 Пополнить» (#27, https only) on its own row, «👥 Позвать»
   (#115) and «🏠 В меню» in one row (#475); «💳 Пополнить», then «👥 Позвать» and «🏠 В меню»
   without `settings`
   (`sessionCardKeyboard`); under a `no_signal_timeout` stop «🔀 Выбрать другую пару» in place of the
-  first three (#509). «📤 Поделиться» comes on top of these rows by
+  first two (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321), on the photo and on the text after a refused photo, not on
   a session without a trade (its share would answer nothing).
   «📡 Сигналы» tries no edit under the card (#761, `pressedUnderMedia`, `demo.ts`): the press
   carries the photo, so the list comes as a new message at once, with no `warn` (until #761 the edit
-  was tried, refused with «there is no text in the message to edit» and logged per press). «📊 Анализ» tries no edit (#482): the press carries the photo, so
+  was tried, refused with «there is no text in the message to edit» and logged per press). «📊 Анализ»
+  of a card sent before #858 (and the analysis card's «🔄 Заново») tries no edit (#482): the press carries the photo, so
   «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
   card goes as a photo and «⏳» is deleted ([bot-demo.md → The analysis](bot-demo.md#the-analysis)).
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about

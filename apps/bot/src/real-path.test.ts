@@ -293,7 +293,7 @@ describe('the real path (#121)', () => {
   it.each([
     ['a real session start', 'Реальная сессия'],
     ['a real session refused for the balance', 'На реальном счёте недостаточно средств'],
-    ['a stopped real session', '🔁 Ещё сессия · REAL'],
+    ['a stopped real session', '🔁 Сессия · REAL'],
     ['a stopped real session', 'проверь баланс в /account'],
     ['a demo session button of an earlier render', 'Режим или сумма сделки изменились'],
     ['the launch', '🚀 Запустить цикл · REAL'],

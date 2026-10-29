@@ -1437,7 +1437,7 @@ describe('the session words', () => {
     expect(sessionStartButtonLabel(5, TradeMode.Real)).toBe('🚀 Сессия из 5 циклов · REAL');
     expect(launchCycleButtonLabel(TradeMode.Real)).toBe('🚀 Запустить цикл · REAL');
     expect(launchCycleButtonLabel(TradeMode.Demo)).toBe('🚀 Запустить цикл');
-    expect(sessionAgainButtonLabel(TradeMode.Real)).toBe('🔁 Ещё сессия · REAL');
+    expect(sessionAgainButtonLabel(TradeMode.Real)).toBe('🔁 Сессия · REAL');
     expect(sessionAgainButtonLabel(TradeMode.Demo)).toBe('🔁 Ещё сессия');
   });
 });
@@ -1534,6 +1534,7 @@ describe('the facades over the catalog', () => {
         'demoSignalsRefreshButton',
         'launchCycleButton',
         'sessionAgainButton',
+        'sessionAgainShortButton',
         'stakeBackLaunchButton',
         'stakeChangeButton',
         'accountCommand',
@@ -1722,6 +1723,20 @@ describe('the widths of the labels of data (#475)', () => {
         BUTTON_LABEL_WIDTHS[2],
       );
     }
+  });
+
+  // #858: «🔁 Ещё сессия» shares a row with «📡 Сигналы» in either mode and language, « · REAL» included
+  it('the session-again label fits a row of two in both modes and languages', () => {
+    const en = <T>(run: () => T): T => runWithLanguage(BotLanguage.En, run);
+    for (const mode of Object.values(TradeMode)) {
+      for (const label of [
+        sessionAgainButtonLabel(mode),
+        en(() => sessionAgainButtonLabel(mode)),
+      ]) {
+        expect(buttonLabelWidth(label), label).toBeLessThanOrEqual(BUTTON_LABEL_WIDTHS[2]);
+      }
+    }
+    expect(en(() => sessionAgainButtonLabel(TradeMode.Real))).toBe('🔁 Session · REAL');
   });
 
   it('a type with up to 999 open pairs fits a row of two', () => {

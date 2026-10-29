@@ -119,12 +119,12 @@ const LEGACY_SESSION_REFRESH_PATTERN = new RegExp(`^session:${UUID}$`);
 // A stopped session's next steps: «🔁 Ещё сессия» on its own pair and mode (#320, #327) at the
 // demo's one duration (#685: a 15 s session gets a 5 s one) - in real the session button's data,
 // so the start handler checks it as any other; in demo the amount screen (#476) - while a session
-// at that duration fits, then the end of the path with «💳 Пополнить» (#27) on its own row and
-// «👥 Позвать» (#115) beside the menu; the deposit, the invite and the menu alone when its
-// settings could not be read. A no_signal_timeout stop (#509) offers another pair instead of the
-// same one again. Under its summary (#318, #537), under the reply to its stop and under an old
-// status message the stop drew in place (#536). «📊 Анализ» and «📡 Сигналы» edit the message they
-// are under: a photo's edit is refused as gone and their screen is answered anew
+// at that duration fits, in one row with «📡 Сигналы» and no «📊 Анализ» (#858), then «💳
+// Пополнить» (#27) on its own row and «👥 Позвать» (#115) beside the menu; the deposit, the invite
+// and the menu alone when its settings could not be read. A no_signal_timeout stop (#509) offers
+// another pair instead of the same one again. Under its summary (#318, #537), under the reply to
+// its stop and under an old status message the stop drew in place (#536). «📡 Сигналы» edits the
+// message it is under: a photo's edit is refused as gone and its screen is answered anew
 // (telegram-refusals.ts in @binarius/shared).
 export function sessionCardKeyboard(
   { mode, settings, stopReason }: Pick<TradingSessionView, 'mode' | 'settings' | 'stopReason'>,
@@ -138,7 +138,7 @@ export function sessionCardKeyboard(
           // a demo session's again opens the amount screen (#476) as a new message, so this one
           // stays
           callbackButton(
-            ButtonRole.Forward,
+            ButtonRole.ForwardShared,
             sessionAgainButtonLabel(mode),
             mode === TradeMode.Demo
               ? demoLaunchCallbackData(settings.assetId, DEMO_DURATION_SEC, 'n')
@@ -146,12 +146,9 @@ export function sessionCardKeyboard(
           ),
         ]
       : [];
-  return appendEndOfPath(
-    [again],
-    settings.assetId,
-    [...depositButtons(cashierUrl), inviteButton()],
-    { otherPair },
-  );
+  return appendEndOfPath([again], null, [...depositButtons(cashierUrl), inviteButton()], {
+    otherPair,
+  });
 }
 
 export interface TradingSessionDeps {
