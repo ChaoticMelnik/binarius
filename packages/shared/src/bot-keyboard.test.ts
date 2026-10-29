@@ -31,6 +31,7 @@ describe('keyboardOf (#475)', () => {
     expect(BUTTON_ROLE_STYLES).toEqual({
       forward: 'success',
       forward_down: 'danger',
+      forward_shared: 'success',
       danger: 'danger',
       stake: 'success',
       stake_risk: 'danger',
@@ -60,6 +61,13 @@ describe('keyboardOf (#475)', () => {
       ['c'],
     ]);
     expect(keyboardOf([down]).inline_keyboard[0]?.[0]?.style).toBe('danger');
+  });
+
+  it('K15: forward_shared is green and shares a row with nav and secondary (#858)', () => {
+    const fs = (text: string) => callbackButton(ButtonRole.ForwardShared, text, `fs:${text}`);
+    expect(texts(keyboardOf([fs('A'), n('b')]))).toEqual([['A', 'b']]);
+    expect(texts(keyboardOf([fs('A'), s('b'), f('F')]))).toEqual([['A', 'b'], ['F']]);
+    expect(keyboardOf([fs('A'), n('b')]).inline_keyboard[0]?.[0]?.style).toBe('success');
   });
 
   it('K3/K4: actions in rows of two, an odd run of three or more ends in a three', () => {

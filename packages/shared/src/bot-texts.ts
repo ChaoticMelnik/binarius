@@ -2053,8 +2053,13 @@ export const BOT_TEXT_CATALOG = {
   stakeBackLaunchButton: plain(g.Buttons, 'Экран суммы: назад к экрану ставки.', '↩️ К запуску'),
   sessionAgainButton: plain(
     g.Buttons,
-    'Итог сессии: новая сессия на том же активе; у реальной сессии бот дописывает « · REAL».',
+    'Итог демо-сессии: новая сессия на том же активе; в реальной — `sessionAgainShortButton` с « · REAL» (#858).',
     '🔁 Ещё сессия',
+  ),
+  sessionAgainShortButton: plain(
+    g.Buttons,
+    'Итог реальной сессии: та же кнопка короче, бот дописывает « · REAL» — вместе с меткой подпись входит в ряд из двух с «📡 Сигналы» (#858).',
+    '🔁 Сессия',
   ),
   demoAnalysisButton: plain(g.Buttons, 'Демо: кнопка анализа.', '📊 Анализ'),
   demoRetryButton: plain(

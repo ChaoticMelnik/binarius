@@ -88,10 +88,11 @@ own (owner's decisions 1 and 3, 2026-10-14):
 |---|---|---|---|
 | `forward` | the step forward of the funnel: an entry into demo or trading, a connection, a confirmation, a start of a session or a cycle, «💼 Включить реальный режим», a payment and a deposit, a package, «📊 Анализ» of a pair's summary, «📡 Показать сигналы», «🔀 Выбрать другую пару», «📤 Поделиться», a refund request, the staff bot's «Войти в админку» and «Подтвердить вход» | `success` (green) | its own |
 | `forward_down` | the single trade's button on a ⬇️ signal | `danger` (red) | its own |
+| `forward_shared` | a step forward that shares a row: «🔁 Ещё сессия» of a session's end, beside «📡 Сигналы» (#858) | `success` (green) | shared |
 | `danger` | a stop of a session, the staff bot's «Это не я» | `danger` | shared |
 | `stake` / `stake_risk` | a stake preset below / from `STAKE_RISK_THRESHOLD` ($10, inclusive), the latter labelled «· риск» (`stakeRiskButton`) | `success` / `danger` | a list |
 | `up` / `down` | a pair of the signals list or of the wait, by its signal's direction | `success` / `danger` | a list |
-| `secondary` | refresh, repeat, «➕ Ещё», «💵 Ставка»/«💵 Сумма», «✏️ Ввести», «🔁 Минимум», «🔄 Новый код», «✏️ Изменить адрес», «⭐ Купить», «🎮 В демо», «💵 Демо»/«💼 Реал» of /settings, «👥 Пригласить ещё», «📊 Анализ» at the end of a path | `primary` (blue) | shared |
+| `secondary` | refresh, repeat, «➕ Ещё», «💵 Ставка»/«💵 Сумма», «✏️ Ввести», «🔁 Минимум», «🔄 Новый код», «✏️ Изменить адрес», «⭐ Купить», «🎮 В демо», «💵 Демо»/«💼 Реал» of /settings, «👥 Пригласить ещё», «📊 Анализ» at the end of a trade | `primary` (blue) | shared |
 | `nav` | the menu, a way back, the types, the pairs, a page, support, «🧭 Вручную», «📡 Сигналы», «⚙️ Режим», «⚙️ Режим торговли» of /settings and of the real-mode message (#686), «👥 Позвать», a choice among options (a level of /settings, a language, a type, a pair of the manual path) with its current ✅ | none | shared |
 
 `BUTTON_ROLE_STYLES` and `FULL_WIDTH_ROLES` are the one place of the colour and the row: a new
@@ -100,9 +101,9 @@ button gets them by its role, never by a field of its own.
 **The rows.** `keyboardOf(...groups)` lays out the groups a screen's author gives it, in order, a
 group never sharing a row with the next:
 
-- a group of actions (an array): every `forward`/`forward_down` button takes a row of its own; the
-  others go two a row, and an odd run of three or more ends in a row of three, so none is left
-  alone unless it is alone in its run;
+- a group of actions (an array): every `forward`/`forward_down` button takes a row of its own
+  (`forward_shared` does not); the others go two a row, and an odd run of three or more ends in a
+  row of three, so none is left alone unless it is alone in its run;
 - a list (`{ buttons, perRow }`: the signals, the pairs, the types, the presets): rows of `perRow`
   (2 or 3), the remainder as it falls.
 
@@ -162,14 +163,16 @@ longer than its row: Telegram cuts them with an ellipsis; the loader still takes
 | `demoRetryButton`, `demoSignalsRefreshButton` | 🔄 Повторить, 🔄 Обновить | secondary | blue | 3 |
 | `demoManualButton` | 🧭 Вручную | nav | — | 3 |
 | `showSignalsButton` | 📡 Показать сигналы | forward | green | own |
-| `launchCycleButton`, `sessionAgainButton` | 🚀 Запустить цикл, 🔁 Ещё сессия | forward | green | own |
+| `launchCycleButton` | 🚀 Запустить цикл | forward | green | own |
+| `sessionAgainButton` | 🔁 Ещё сессия (demo) | forward_shared | green | 2 |
+| `sessionAgainShortButton` | 🔁 Сессия (in real, with « · REAL», #858) | forward_shared | green | 2 |
 | `stakeChangeButton`, `stakeMenuButton` | 💵 Ставка, 💵 Сумма | secondary | blue | 2 |
 | `backToListButton` | ↩️ К списку | nav | — | 2 |
 | `stakeCustomButton`, `stakeResetButton` | ✏️ Ввести, 🔁 Минимум | secondary | blue | 3 |
 | `stakeBackAnalysisButton`, `stakeBackSettingsButton`, `stakeBackLaunchButton` | ↩️ К анализу, ↩️ Настройки, ↩️ К запуску | nav | — | 3 |
 | `stakeBackButton` | ↩️ Назад | nav | — | alone |
 | `demoAnalysisButton` | 📊 Анализ (a pair's summary) | forward | green | own |
-| `newAnalysisButton` | 📊 Анализ (the end of a path) | secondary | blue | 3 |
+| `newAnalysisButton` | 📊 Анализ (the end of a trade) | secondary | blue | 3 |
 | `toSignalsButton` | 📡 Сигналы | nav | — | 3 |
 | `otherPairButton` | 🔀 Выбрать другую пару | forward | green | own |
 | `analysisMoreButton`, `repeatAnalysisButton` | ➕ Ещё, 🔄 Заново | secondary | blue | 2, 3 |
@@ -231,8 +234,8 @@ chat with the bot:
   actions), `joinLast`, `demoButton`/`demoKeyboard`, `supportButton`/`supportKeyboard`,
   `retryButton`/`retryKeyboard`, `backToAnalysisButton`/`backToAnalysisKeyboard`, `appendEndOfPath`
   (its «📡 Сигналы» carries `demo:sig`, the one list, since #685; «📊 Анализ» at 5 s, «📡 Сигналы» and
-  the menu join the caller's last row of actions; its `beforeMenu` buttons go with the menu in a group
-  of their own), `waitingStopKeyboard`;
+  the menu join the caller's last row of actions; a null `assetId`, the end of a session, leaves out
+  «📊 Анализ» (#858); its `beforeMenu` buttons go with the menu in a group of their own), `waitingStopKeyboard`;
   since #115 `inviteButton` (`invite`), `statusCardKeyboard`, `withInvite` (the deposit on its own
   row, then the invite and the menu) and `inviteKeyboard`
   ([referrals.md](referrals.md)); since #117 `buyButton`, `withBuy` (the deposit on its own row, then
@@ -341,12 +344,12 @@ no repeat.
 | the waiting message (#536, sent by the backend while the session waits for a signal, #722; the scanner's animation with its caption since #860, the caption's edits carry the same keyboard) | ⏹ Остановить сессию (`session:stop:<id>:w`, red) |
 | the cycle message with an open trade's block (#722, sent or edited by the backend; a session the sender read stopped gets none) | ⏹ Остановить сессию (`session:stop:<id>:c`, red); the result's edit takes it off |
 | the reply to the stop under the open trade's block (#722, a new message) | the end of the path (`sessionCardKeyboard`), as `/stop`'s for one session; a failure: 🏠 В меню, the block's «⏹» stays |
-| the reply to the stop under the waiting message (drawn in place of it, #587 — under the animation on the scanner's still, its caption the reply, #860; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) // 📊 Анализ \| 📡 Сигналы // 💳 Пополнить (#27, https only) // 👥 Позвать (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать \| 🏠 В меню |
+| the reply to the stop under the waiting message (drawn in place of it, #587 — under the animation on the scanner's still, its caption the reply, #860; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320; in real 🔁 Сессия · REAL) \| 📡 Сигналы, no 📊 Анализ (#858) // 💳 Пополнить (#27, https only) // 👥 Позвать (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать \| 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeOutcomeUnknown` | ⚙️ Режим (`mode`, a read, the screen as a new message) \| 🏠 В меню — never a switch |
-| the session's summary (#318, #537: the card's photo with the whole summary as its caption, with sound; a text when there is no trade or the photo is refused) | 📤 Поделиться (not on a session without a trade) (#321, by an edit right after the send, `stackKeyboards`; the card keeps the rest when the edit fails) // the end of the path as above. «📊 Анализ» and «📡 Сигналы» answer with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
+| the session's summary (#318, #537: the card's photo with the whole summary as its caption, with sound; a text when there is no trade or the photo is refused) | 📤 Поделиться (not on a session without a trade) (#321, by an edit right after the send, `stackKeyboards`; the card keeps the rest when the edit fails) // the end of the path as above. «📡 Сигналы» answers with a new message under the card: the photo's edit is refused as gone (`telegram-refusals.ts`) |
 | the backend's fallback summary (#537) | 🏠 В меню; by `no_signal_timeout` 🔀 Выбрать другую пару // 🏠 В меню |
 | `stakeInputInvalid` | the picker's way back |
 | the first-session reminders (#202) | 🎮 Демо-торговля |
@@ -356,7 +359,7 @@ no repeat.
 | the real-mode message after a deposit `realModeByDeposit` (#686, the backend's mailing, [mailing.md](mailing.md#the-real-mode-notification-686)) | ⚙️ Режим торговли (`mode`, the mode screen) \| 🏠 В меню, in the user's language |
 | the staff bot (`apps/backend/src/admin/telegram.ts`) | `/start`: Войти в админку; the login prompt: Подтвердить вход // Это не я (red) |
 
-«📊 Анализ» opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never
+«📊 Анализ» at the end of a trade opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never
 a stake: the analysis is not skipped (Rule 20). «📡 Сигналы» opens the signals list
 (`demo:sig`, the list at 5 s since #685; `demo:sig:<sec>` of older buttons leads there too).
 «🔀 Выбрать другую пару» (#509) carries the same data: a session stopped for want of a signal

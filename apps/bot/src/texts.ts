@@ -519,11 +519,15 @@ const withModeLabel = (label: string, mode: TradeMode): string =>
 // cycles it starts (#552)
 export const sessionStartButtonLabel = (cycles: number, mode: TradeMode): string =>
   withModeLabel(plain.sessionStartButton({ cycles: cyclesCount(cycles) }), mode);
-// the launch screen's cycle button (#320) and «🔁 Ещё сессия» under a finished session (#318)
+// the launch screen's cycle button (#320)
 export const launchCycleButtonLabel = (mode: TradeMode): string =>
   withModeLabel(LABELS.launchCycleButton, mode);
+// «🔁 Ещё сессия» under a finished session (#318); in real the short label, so that with « · REAL»
+// it fits the row of two it shares with «📡 Сигналы» (#858)
 export const sessionAgainButtonLabel = (mode: TradeMode): string =>
-  withModeLabel(LABELS.sessionAgainButton, mode);
+  mode === TradeMode.Real
+    ? withModeLabel(LABELS.sessionAgainShortButton, mode)
+    : LABELS.sessionAgainButton;
 
 type LastTradeLineKey =
   'sessionOpenTradePlaysOut' | 'sessionLastTradeChecking' | 'sessionLastTradeOpening';

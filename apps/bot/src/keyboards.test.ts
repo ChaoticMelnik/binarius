@@ -148,6 +148,21 @@ describe('the rows and colours of the shared keyboards (#475)', () => {
     ]);
   });
 
+  // #858: the end of a session has no analysis; «🔁 Ещё сессия» shares the row with «📡 Сигналы»
+  it('R5b-R5d: appendEndOfPath without an asset: «📡 Сигналы» alone at the end of the actions', () => {
+    const again = callbackButton(ButtonRole.ForwardShared, LABELS.sessionAgainButton, 'again');
+    const AGAIN = [LABELS.sessionAgainButton, ButtonRole.ForwardShared, 'success'];
+    expect(
+      rows(appendEndOfPath([[again]], null, [depositButton(CASHIER), inviteButton()])),
+    ).toEqual([[AGAIN, SIGNALS], [DEPOSIT], [INVITE, MENU]]);
+    expect(rows(appendEndOfPath([], null))).toEqual([[SIGNALS, MENU]]);
+    expect(rows(appendEndOfPath([[again]], null, [], { otherPair: true }))).toEqual([
+      [AGAIN],
+      [[LABELS.otherPairButton, F, 'success']],
+      [MENU],
+    ]);
+  });
+
   // a session stopped for want of a signal (#509): another pair, a step forward on its own row
   it('R7: appendEndOfPath otherPair: «🔀 Выбрать другую пару» alone and green', () => {
     expect(rows(appendEndOfPath([], 101, [], { otherPair: true }))).toEqual([

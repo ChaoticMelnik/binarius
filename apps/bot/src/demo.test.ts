@@ -3021,7 +3021,8 @@ describe('the demo and the email dialog', () => {
 
 // #318: the summary card is a photo, so a button under it that would edit the pressed message
 // tries no edit: the press carries the photo, and the screen goes as a new message at once (#761),
-// as «⏳» under «📊 Анализ» does (#482).
+// as «⏳» under «📊 Анализ» does (#482). Since #858 the card's only such button is «📡 Сигналы»;
+// `demo:an` under a photo is the analysis card's «🔄 Заново» and a card sent before #858.
 describe('a press under the session card (a photo)', () => {
   // the card's buttons that edit the pressed message: «🔁 Ещё сессия» replies (K7 in
   // trading-session.test.ts; in demo its amount screen, `:n`, #476) and «🏠 В меню» replies too
@@ -3049,13 +3050,10 @@ describe('a press under the session card (a photo)', () => {
     return scene;
   };
 
-  // #685: a session of any duration ends on the 5 s analysis and the one list
+  // #685: a session of any duration ends on the one list; #858: no analysis
   it('pins the buttons this covers; a button added to the card needs its press here', () => {
     for (const durationSec of [5, 15, 60]) {
-      expect(editingButtons(durationSec)).toEqual([
-        demoAnalysisCallbackData(PAIR_EURUSD.id, 5),
-        DEMO_SIGNALS_CALLBACK_DATA,
-      ]);
+      expect(editingButtons(durationSec)).toEqual([DEMO_SIGNALS_CALLBACK_DATA]);
     }
   });
 

@@ -10,6 +10,8 @@ export const ButtonRole = {
   Forward: 'forward',
   // the trade button of a ⬇️ signal: a step forward, red as «⬇️ Вниз» is
   ForwardDown: 'forward_down',
+  // a step forward that shares a row with a step aside: «🔁 Ещё сессия» next to «📡 Сигналы» (#858)
+  ForwardShared: 'forward_shared',
   // a risk or the irreversible: a stop, «Это не я»
   Danger: 'danger',
   // a stake preset below / at or above STAKE_RISK_THRESHOLD (stake.ts)
@@ -30,6 +32,7 @@ export type ButtonStyle = 'success' | 'danger' | 'primary';
 export const BUTTON_ROLE_STYLES: Readonly<Record<ButtonRole, ButtonStyle | null>> = {
   [ButtonRole.Forward]: 'success',
   [ButtonRole.ForwardDown]: 'danger',
+  [ButtonRole.ForwardShared]: 'success',
   [ButtonRole.Danger]: 'danger',
   [ButtonRole.Stake]: 'success',
   [ButtonRole.StakeRisk]: 'danger',
