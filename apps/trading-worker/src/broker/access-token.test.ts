@@ -506,4 +506,42 @@ describe('createCachedAccessTokenSource (#868)', () => {
     expect(h.calls).toHaveLength(3);
     expect(await h.tokens.accessToken('a')).toEqual({ ok: true, accessToken: 'T4' });
   });
+
+  // a plain request that starts after the report's drop and is answered with the refused token:
+  // the backend handled it before the report, or another backend process answered it
+  async function lateRefusedAnswer(reportAnswer: AccessTokenOutcome, reportFirst: boolean) {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT);
+    const report = deferred();
+    const late = deferred();
+    h.answers.push(
+      () => report.promise,
+      () => late.promise,
+    );
+    const reported = h.tokens.accessToken(ACCOUNT, { refusedToken: hashToken('T1') });
+    const plain = h.tokens.accessToken(ACCOUNT);
+    if (reportFirst) {
+      report.resolve(reportAnswer);
+      expect(await reported).toEqual(reportAnswer);
+    }
+    late.resolve({ ok: true, accessToken: 'T1' });
+    expect(await plain).toEqual({ ok: true, accessToken: 'T1' });
+    if (!reportFirst) {
+      report.resolve(reportAnswer);
+      expect(await reported).toEqual(reportAnswer);
+    }
+    return h;
+  }
+
+  it('C8 an answer with the token the account last reported refused is not stored', async () => {
+    const h = await lateRefusedAnswer({ ok: false, reason: 'refresh_rate_limited' }, false);
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T4' });
+    expect(h.calls).toHaveLength(4);
+  });
+
+  it("C9 nor after the report's own answer was stored", async () => {
+    const h = await lateRefusedAnswer({ ok: true, accessToken: 'T2' }, true);
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls).toHaveLength(3);
+  });
 });

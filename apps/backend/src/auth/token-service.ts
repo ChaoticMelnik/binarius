@@ -101,21 +101,34 @@ export interface AccessTokenOptions {
 // its own read, never taking the flight's result: the policies differ, and after an exchange its
 // own read finds the fresh token without the lock. Revocation is committed by the transaction and
 // only then reported — throwing inside it would roll the revocation back.
+//
+// A fast hit is returned only when no flight of the account runs at the start of the read or at
+// its end: a flight replaces the token it read, and its transaction is not committed while the
+// read runs. Nothing awaits between the second check and runFlight, which registers its flight
+// before its first await.
 export async function ensureFreshAccessToken(
   deps: TokenServiceDeps,
   accountId: string,
   options: AccessTokenOptions = {},
 ): Promise<AccessTokenResult> {
   for (;;) {
+    const running = flights.get(accountId);
+    if (running !== undefined) {
+      await running;
+      continue;
+    }
     // a refused token always goes under the lock: it may mark the stored one expired
     const fast =
       options.refusedToken === undefined
         ? await readStoredToken(deps, accountId, options)
         : undefined;
+    const begun = flights.get(accountId);
+    if (begun !== undefined) {
+      await begun;
+      continue;
+    }
     if (fast !== undefined) return fast;
-    const flight = flights.get(accountId);
-    if (flight === undefined) return runFlight(deps, accountId, options);
-    await flight;
+    return runFlight(deps, accountId, options);
   }
 }
 

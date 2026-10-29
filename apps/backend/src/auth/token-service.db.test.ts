@@ -25,7 +25,12 @@ import {
 import { until } from '@binarius/shared/testing';
 import { createBrokerOAuthClient, type BrokerOAuthClient } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
-import { ensureFreshAccessToken, type TokenServiceDeps } from './token-service';
+import {
+  ensureFreshAccessToken,
+  type AccessTokenOptions,
+  type AccessTokenResult,
+  type TokenServiceDeps,
+} from './token-service';
 
 const baseUrl = process.env.TEST_DATABASE_URL;
 if (baseUrl === undefined || baseUrl === '') {
@@ -243,9 +248,9 @@ const expireAccessToken = (id: string) =>
     .set({ accessTokenExpiresAt: sql`now() - interval '1 minute'` })
     .where(eq(brokerAccounts.id, id));
 
-// an expired account whose tokens came from a stub of its own, so its exchange can be held
-// there while the account row stays locked
-async function slowExpiredAccount(slow: OAuthStub) {
+// an account whose tokens came from a stub of its own, so its exchange can be held there while
+// the account row stays locked
+async function slowAccount(slow: OAuthStub) {
   const patient = createBrokerOAuthClient({
     baseUrl: slow.url,
     clientId: CLIENT_ID,
@@ -264,8 +269,13 @@ async function slowExpiredAccount(slow: OAuthStub) {
     activate: true,
   });
   if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
-  await expireAccessToken(linked.account.id);
   return { patient, account: linked.account };
+}
+
+async function slowExpiredAccount(slow: OAuthStub) {
+  const linked = await slowAccount(slow);
+  await expireAccessToken(linked.account.id);
+  return linked;
 }
 
 const startSlowStub = () =>
@@ -1158,22 +1168,6 @@ describe('the fast path and the flights (#868)', () => {
     createDb(pool, { logger: { logQuery: (query) => void queries.push(query) } });
   const begins = (queries: string[]) => queries.filter((query) => query === 'begin').length;
 
-  // a joiner's own pool of one client: idle again only once the joiner's read has returned, so a
-  // test knows it is waiting on the flight and not still reading
-  const pools: Pool[] = [];
-  function joiner(queries: string[]) {
-    const pool = new Pool({ connectionString: tmp.url, max: 1 });
-    pools.push(pool);
-    const sent = queries.length;
-    return {
-      db: logged(pool, queries),
-      readDone: () => queries.length > sent && pool.totalCount === 1 && pool.idleCount === 1,
-    };
-  }
-  afterAll(async () => {
-    await Promise.all(pools.map((pool) => pool.end()));
-  });
-
   async function holdRow(accountId: string) {
     const holder = await tmp.pool.connect();
     await holder.query('begin');
@@ -1258,9 +1252,10 @@ describe('the fast path and the flights (#868)', () => {
     expect(stub.tokenRequests).toBe(requests);
   });
 
-  it('S1 two callers on an expired token: one exchange, one transaction, the joiner holds no lock', async () => {
+  it('S1 two callers on an expired token: one exchange, one transaction, the joiner reads nothing and holds no lock while the flight runs', async () => {
     const slow = await startSlowStub();
     const queries: string[] = [];
+    const lateQueries: string[] = [];
     let first: Promise<unknown> | undefined;
     let second: Promise<unknown> | undefined;
     try {
@@ -1272,9 +1267,12 @@ describe('the fast path and the flights (#868)', () => {
         account.id,
       );
       await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
-      const late = joiner(queries);
-      second = ensureFreshAccessToken(deps({ db: late.db, broker: patient }), account.id);
-      await until("the joiner's read to return", late.readDone);
+      second = ensureFreshAccessToken(
+        deps({ db: logged(tmp.pool, lateQueries), broker: patient }),
+        account.id,
+      );
+      await sleep(100);
+      expect(lateQueries).toEqual([]);
       expect(await lockWaiters(tmp.db)).toBe(0);
       slow.hang = false;
       slow.release();
@@ -1285,7 +1283,7 @@ describe('the fast path and the flights (#868)', () => {
       expect(a.ok && b.ok).toBe(true);
       expect(b.accessToken).toBe(a.accessToken);
       expect(slow.tokenRequests).toBe(before + 1);
-      expect(begins(queries)).toBe(1);
+      expect(begins([...queries, ...lateQueries])).toBe(1);
     } finally {
       await slow.close();
       await first?.catch(() => undefined);
@@ -1302,9 +1300,7 @@ describe('the fast path and the flights (#868)', () => {
     try {
       first = ensureFreshAccessToken(deps(), account.id, { mayRefresh: false });
       await until('the flight to wait for the lock', async () => (await lockWaiters(tmp.db)) === 1);
-      const late = joiner([]);
-      second = ensureFreshAccessToken(deps({ db: late.db }), account.id, { mayRefresh: true });
-      await until("the joiner's read to return", late.readDone);
+      second = ensureFreshAccessToken(deps(), account.id, { mayRefresh: true });
       await holder.commit();
       expect(await first).toEqual({ ok: false, reason: 'refresh_needed' });
       expect(await second).toMatchObject({ ok: true, brokerUserId: account.brokerUserId });
@@ -1340,9 +1336,7 @@ describe('the fast path and the flights (#868)', () => {
     try {
       first = ensureFreshAccessToken(deps({ db: failing }), account.id);
       await until('the flight to wait for the lock', async () => (await lockWaiters(tmp.db)) === 1);
-      const late = joiner([]);
-      second = ensureFreshAccessToken(deps({ db: late.db }), account.id);
-      await until("the joiner's read to return", late.readDone);
+      second = ensureFreshAccessToken(deps(), account.id);
       await holder.commit();
       await expect(first).rejects.toThrow('boom');
       expect(await second).toMatchObject({ ok: true, brokerUserId: account.brokerUserId });
@@ -1363,5 +1357,114 @@ describe('the fast path and the flights (#868)', () => {
       ok: true,
     });
     expect(stub.tokenRequests).toBe(requests + 2);
+  });
+
+  // flights that replace a still valid token: the refused-token report, and the keeper's
+  // exchange ahead of the expiry
+  const replacing = [
+    {
+      flight: 'a refused-token report',
+      prepare: async () => undefined,
+      options: (token: string): AccessTokenOptions => ({
+        refusedToken: hashToken(token),
+        mayRefresh: true,
+      }),
+    },
+    {
+      flight: "the keeper's renewal",
+      prepare: (id: string) =>
+        tmp.db
+          .update(brokerAccounts)
+          .set({
+            serviceSince: sql`now()`,
+            accessTokenExpiresAt: sql`now() + interval '1 hour'`,
+          })
+          .where(eq(brokerAccounts.id, id)),
+      options: (): AccessTokenOptions => ({
+        mayRefresh: true,
+        serviceOnly: true,
+        renewAheadMs: 24 * 3_600_000,
+      }),
+    },
+  ] as const;
+
+  it.each(replacing)(
+    'S5 a plain caller that comes during a flight replacing a valid token reads nothing until it ends, then gets the new token ($flight)',
+    async ({ prepare, options }) => {
+      const slow = await startSlowStub();
+      const queries: string[] = [];
+      let flight: Promise<AccessTokenResult> | undefined;
+      let plain: Promise<AccessTokenResult> | undefined;
+      try {
+        const { patient, account } = await slowAccount(slow);
+        await prepare(account.id);
+        const before = slow.tokenRequests;
+        slow.hang = true;
+        flight = ensureFreshAccessToken(
+          deps({ broker: patient }),
+          account.id,
+          options(accessOf(account)),
+        );
+        await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
+        plain = ensureFreshAccessToken(deps({ db: logged(tmp.pool, queries) }), account.id);
+        await sleep(100);
+        expect(queries).toEqual([]);
+        expect(await lockWaiters(tmp.db)).toBe(0);
+        slow.hang = false;
+        slow.release();
+        const replaced = await flight;
+        expect(replaced.ok).toBe(true);
+        const answer = await plain;
+        expect(answer).toEqual(replaced);
+        expect(answer.ok && answer.accessToken).not.toBe(accessOf(account));
+        expect(slow.tokenRequests).toBe(before + 1);
+      } finally {
+        await slow.close();
+        await flight?.catch(() => undefined);
+        await plain?.catch(() => undefined);
+      }
+    },
+  );
+
+  it("S6 a flight that begins during the fast read: the read's token is not handed out", async () => {
+    const slow = await startSlowStub();
+    let report: Promise<AccessTokenResult> | undefined;
+    let plain: Promise<AccessTokenResult> | undefined;
+    try {
+      const { patient, account } = await slowAccount(slow);
+      const stored = accessOf(account);
+      slow.hang = true;
+      // drizzle logs a statement before it sends it: the report becomes the flight while the
+      // plain caller's read is on its way
+      const db = createDb(tmp.pool, {
+        logger: {
+          logQuery: (query) => {
+            if (
+              report === undefined &&
+              query.includes('inner join "users"') &&
+              !query.includes('for no key update')
+            ) {
+              report = ensureFreshAccessToken(deps({ broker: patient }), account.id, {
+                refusedToken: hashToken(stored),
+                mayRefresh: true,
+              });
+            }
+          },
+        },
+      });
+      plain = ensureFreshAccessToken(deps({ db }), account.id);
+      await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
+      slow.hang = false;
+      slow.release();
+      const replaced = await report;
+      expect(replaced?.ok).toBe(true);
+      const answer = await plain;
+      expect(answer).toEqual(replaced);
+      expect(answer.ok && answer.accessToken).not.toBe(stored);
+    } finally {
+      await slow.close();
+      await report?.catch(() => undefined);
+      await plain?.catch(() => undefined);
+    }
   });
 });
