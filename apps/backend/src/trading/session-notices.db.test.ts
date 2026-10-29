@@ -4059,12 +4059,21 @@ describe('the wake (#723)', () => {
     expect(ticks()[1]).toMatchObject({ sessions: 'all' });
   });
 
-  it("K10 a settle that finishes a session: its woken tick closes its notices and lists its fallback by id; another finished session waits for the interval's tick", async () => {
+  it("K10 a settle that finishes a session: its woken tick closes its notices and lists its fallback by id; other finished sessions wait for the interval's tick", async () => {
     const finishing = await seedSession();
     const trade = await opened(finishing);
     const waiting = await seedSession();
     await settled(waiting, '-5');
     await stop(waiting);
+    // its notices closed, its fallback summary due: in the fallback's list alone
+    const closed = await seedSession();
+    await settled(closed, '-5');
+    await stop(closed);
+    await snapshot(closed);
+    await tmp.db
+      .update(tradingSessions)
+      .set({ notifiedTrades: 1, finalNoticeSentAt: sql`now()` })
+      .where(eq(tradingSessions.id, closed.session.id));
     const { notices, captured, ticks, refreshCalls } = await wakeful();
     await stop(finishing);
     await settle(trade, '4.6');
@@ -4075,9 +4084,11 @@ describe('the wake (#723)', () => {
     expect(refreshCalls[0]![0]).toBe(finishing.seed.brokerAccountId);
     expect(sequenceOf(captured.calls, waiting)).toEqual([]);
     expect((await rowOf(waiting)).finalNoticeSentAt).toBeNull();
+    expect(sequenceOf(captured.calls, closed)).toEqual([]);
     await notices.tick();
     expect(textsTo(captured.calls, waiting)).toHaveLength(1);
     expect((await rowOf(waiting)).finalNoticeSentAt).toBeInstanceOf(Date);
+    expect(sequenceOf(captured.calls, closed)).toEqual(['summary']);
   });
 
   it('K11 a payload that is no session id, or more than scan sessions woken, reads the lists whole', async () => {
