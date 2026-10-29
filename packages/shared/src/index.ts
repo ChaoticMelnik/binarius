@@ -57,5 +57,7 @@ export * from './http-body';
 export * from './fetch-deadline';
 export * from './rate-window';
 export * from './telegram-refusals';
+export * from './telegram-file-ids';
+export * from './scan-summary';
 export * from './telegram-logging';
 export * from './telegram-retry-log';

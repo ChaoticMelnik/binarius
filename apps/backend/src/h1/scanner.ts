@@ -3,12 +3,15 @@ import {
   errorLogFields,
   H1_EXPIRY_SEC,
   H1_R1_PARAMS,
+  h1ClosenessPct,
+  H1NoSignalReason,
   isPairOpen,
   pairAcceptsDuration,
   SignalKind,
   type H1Decision,
   type H1Params,
   type H1SignalWire,
+  type ScanSummary,
 } from '@binarius/shared';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import { assertH1WindowFits, createH1Detector } from '@binarius/signal';
@@ -53,7 +56,16 @@ export interface H1ScannerList {
   scanned: number;
   // those of them that decided a signal, in the order their seconds closed
   signals: H1ScannerSignal[];
+  // the wait screen's figures (#859, Rule 58): the same current decisions
+  summary: ScanSummary;
 }
+
+// the list without a scanner, or without a market-data source yet
+export const EMPTY_H1_SCANNER_LIST: H1ScannerList = Object.freeze({
+  scanned: 0,
+  signals: [],
+  summary: { streaming: false, scanning: null, closeness: [] },
+});
 
 export interface H1Scanner {
   start(): void;
@@ -164,16 +176,34 @@ export function createH1Scanner(deps: H1ScannerDeps): H1Scanner {
     };
   }
 
+  // The summary (#859): `scanning` rotates over the current pairs by assetId once a second of
+  // nowMs, so the wait's every redraw names another pair the scanner really decides; `closeness`
+  // is each current below-threshold decision's share of the threshold, highest first.
   function fresh(nowMs: number): H1ScannerList {
-    let scanned = 0;
+    const ids: number[] = [];
     const signals: H1ScannerSignal[] = [];
+    const closeness: ScanSummary['closeness'] = [];
     for (const [assetId, entry] of entries) {
       if (!isCurrent(entry, nowMs)) continue;
-      scanned += 1;
+      ids.push(assetId);
       const signal = served(entry, nowMs);
       if (signal !== null) signals.push({ assetId, ...signal });
+      const { decision } = entry;
+      if (
+        decision.kind === SignalKind.NoSignal &&
+        decision.reason === H1NoSignalReason.BelowThreshold
+      ) {
+        closeness.push({ assetId, pct: h1ClosenessPct(decision.features.z, params.threshold) });
+      }
     }
-    return { scanned, signals };
+    ids.sort((a, b) => a - b);
+    closeness.sort((a, b) => b.pct - a.pct || a.assetId - b.assetId);
+    const scanning = ids.length === 0 ? null : ids[Math.floor(nowMs / 1000) % ids.length];
+    return {
+      scanned: ids.length,
+      signals,
+      summary: { streaming: streaming(), scanning: scanning ?? null, closeness },
+    };
   }
 
   function current(assetId: number, nowMs: number): H1SignalWire | null {

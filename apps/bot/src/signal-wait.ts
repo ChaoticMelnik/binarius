@@ -26,7 +26,13 @@ import {
 import { shownRecordsOf, type CycleBack, type DemoScreen, type ShownSignal } from './demo';
 import { runWithLanguage } from './language';
 import type { Logger } from './logging';
-import { editMessagePhotoByIdHtml, editMessageTextByIdHtml } from './send';
+import type { ScanMedia, ScanMediaKind } from './scan-media';
+import {
+  editMessageAnimationByIdHtml,
+  editMessageCaptionByIdHtml,
+  editMessagePhotoByIdHtml,
+  editMessageTextByIdHtml,
+} from './send';
 import type { SetupCardPhotos } from './setup-card';
 import type { ShownSignalRecord, ShownSignals } from './shown-signals';
 
@@ -41,16 +47,24 @@ import type { ShownSignalRecord, ShownSignals } from './shown-signals';
 // retry_after. stop() turns the waiting messages into the start of trading inside its window.
 // A list, the other pairs' buttons or a card the wait drew records its directions for the start
 // once the edit is on screen (#829), from the answers it read.
+// The wait is a media message (#859, Rule 58): the scanner's animation under a caption that prints
+// the poll's scanner summary, redrawn at most once in captionMs, after the tick's edits that end
+// waits and at most captionEditsPerTick a tick; whatever ends the wait — a list, the next step, a
+// refusal, the expiry, the stop, the user leaving — turns it into the still in one edit. A message
+// the handler had to draw as text (the animation refused) stays text.
 
-type WaitApi = Pick<Api, 'editMessageText' | 'editMessageMedia'>;
+type WaitApi = Pick<Api, 'editMessageText' | 'editMessageMedia' | 'editMessageCaption'>;
+
+// what the message is now: a text, the scanner's animation, or its still under a caption
+export type WaitMedia = 'text' | ScanMediaKind;
 
 // where the wait for a pair started: the pair's door drawn without a signal (`demo:l…:n`), the
 // analysis without an H1 signal
 export type WaitOrigin = 'door' | 'analysis';
 
-// the other pairs' buttons under the wait for a pair: to be drawn by the first poll, standing since
-// a time, or gone for good
-export type WaitAlternatives = 'pending' | 'shown' | 'done';
+// the other pairs' buttons under the wait for a pair: to be drawn by the first poll, the ones the
+// handler drew, or gone for good
+export type WaitAlternatives = 'pending' | readonly ShownSignal[] | 'done';
 
 interface WaitTarget {
   api: WaitApi;
@@ -61,6 +75,10 @@ interface WaitTarget {
   language: BotLanguage;
   // what the message shows now, the render key's start
   drawn: DemoScreen;
+  media: WaitMedia;
+  // the drawn screen holds the scanner's lines: its caption is redrawn captionMs after the
+  // registration, else on the first poll (#859)
+  scanned: boolean;
 }
 
 export interface ListWaitRequest extends WaitTarget {
@@ -78,10 +96,17 @@ export interface PairWaitRequest extends WaitTarget {
   alternatives: WaitAlternatives;
 }
 
+// the poll's list and catalog, for the scanner's lines of a pair's wait (#859)
+export interface PairScan {
+  list: TradingSignalsResponse['lists'][number];
+  pair: PairView;
+}
+
 // What the waits draw, demo.ts's screens (createSignalWaitScreens). Every call runs in the entry's
 // language.
 export interface SignalWaitScreens {
-  // the signals screen, how many pairs it lists and their buttons; undefined without the demo's list
+  // the signals screen, how many pairs it lists and their buttons, the scanner's caption without a
+  // pair; undefined without the demo's list
   list(
     signals: TradingSignalsResponse,
     catalog: PairsCatalogResponse,
@@ -89,8 +114,13 @@ export interface SignalWaitScreens {
   ): { screen: DemoScreen; listed: number; shown: ShownSignal[] } | undefined;
   // the start of trading: the list expired, the bound, the stop
   expired(): DemoScreen;
-  // the wait for a pair, with the other pairs' buttons when there are some
-  waiting(base: TelegramHtml, alternatives: readonly ShownSignal[]): DemoScreen;
+  // the wait for a pair, with the scanner's lines when the poll read them and the other pairs'
+  // buttons when there are some
+  waiting(
+    base: TelegramHtml,
+    alternatives: readonly ShownSignal[],
+    scan: PairScan | undefined,
+  ): DemoScreen;
   // the pairs with a signal now, in the list's order; the wait leaves the chosen pair out
   alternatives(
     signals: TradingSignalsResponse['lists'][number]['signals'],
@@ -117,6 +147,7 @@ export interface SignalWaitScreens {
     access: TradingAccessResponse | null,
   ): { text: TelegramHtml; keyboard: BotKeyboard; action: TradeAction } | undefined;
   photos: Pick<SetupCardPhotos, 'photo' | 'remember' | 'forget'>;
+  media: ScanMedia;
 }
 
 export interface SignalWaiter {
@@ -145,6 +176,9 @@ export interface SignalWaiterOptions {
   listTtlMs: number;
   maxMs: number;
   editGapMs: number;
+  // the scanner's caption (#859): at most once in captionMs an entry, captionEditsPerTick a tick
+  captionMs: number;
+  captionEditsPerTick: number;
   editFailuresMax: number;
   shutdownBudgetMs: number;
   maxEntries?: number;
@@ -160,21 +194,25 @@ type Entry =
       kind: 'pair';
       startedAt: number;
       pair: Omit<PairWaitRequest, keyof WaitTarget | 'alternatives'> & {
-        alternatives: 'pending' | 'done' | { shownAt: number };
+        // the drawn buttons stand while shown, so a caption redraw keeps the same snapshot
+        alternatives: 'pending' | 'done' | { shownAt: number; shown: readonly ShownSignal[] };
       };
     } & Common);
 
 interface Common {
   rendered: string;
+  // when the screen was last drawn or its caption last tried
+  captionAt: number;
   editFailures: number;
   // the warn lines already written for this entry
   warned: Set<string>;
 }
 
-// The whole screen: the alternatives' removal changes only the keyboard, the list's first pairs
-// only the buttons when two texts are equal (overrides).
-export const renderKey = (screen: DemoScreen): string =>
-  `${screen.text.value}\n${JSON.stringify(screen.keyboard.inline_keyboard)}`;
+// The whole screen and its media: the alternatives' removal changes only the keyboard, the list's
+// first pairs only the buttons when two texts are equal (overrides), the end of a wait only the
+// media when its caption stays.
+export const renderKey = (screen: DemoScreen, media: WaitMedia): string =>
+  `${media}\n${screen.text.value}\n${JSON.stringify(screen.keyboard.inline_keyboard)}`;
 
 // the reads of one tick: the demo's list and the catalog, undefined where a read failed
 interface Snapshot {
@@ -194,12 +232,16 @@ export function createSignalWaiter({
   listTtlMs,
   maxMs,
   editGapMs,
+  captionMs,
+  captionEditsPerTick,
   editFailuresMax,
   shutdownBudgetMs,
   maxEntries = SIGNAL_WAIT_MAX_ENTRIES,
   now = Date.now,
 }: SignalWaiterOptions): SignalWaiter {
   const entries = new Map<number, Entry>();
+  // the stills of the waits the users left, awaited by stop()
+  const freezes = new Set<Promise<void>>();
   let attachedScreens: SignalWaitScreens | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<void> | undefined;
@@ -263,9 +305,19 @@ export function createSignalWaiter({
     ...(entry.kind === 'pair' ? { origin: entry.pair.origin } : {}),
   });
 
-  function common(drawn: DemoScreen): Common {
-    return { rendered: renderKey(drawn), editFailures: 0, warned: new Set() };
+  function common({ drawn, media, scanned }: WaitTarget): Common {
+    return {
+      rendered: renderKey(drawn, media),
+      captionAt: scanned ? now() : Number.NEGATIVE_INFINITY,
+      editFailures: 0,
+      warned: new Set(),
+    };
   }
+
+  // a waiting screen keeps the entry's media; one that ends the wait shows the still. A text stays
+  // a text.
+  const waitingMedia = (entry: Entry): WaitMedia => entry.media;
+  const endMedia = (entry: Entry): WaitMedia => (entry.media === 'text' ? 'text' : 'still');
 
   function attached(): SignalWaitScreens {
     if (attachedScreens === undefined) {
@@ -326,9 +378,60 @@ export function createSignalWaiter({
         end(entry);
         continue;
       }
-      if (outcome === 'paused' || stopped) break;
+      if (outcome === 'paused' || stopped) return;
+    }
+    await refreshCaptions(snapshot, nowMs);
+  }
+
+  // The scanner's caption, the last of a tick (#859): the waits not redrawn for captionMs, the
+  // longest waiting first, at most captionEditsPerTick; a 429 stops them with the tick.
+  async function refreshCaptions(snapshot: Snapshot, nowMs: number): Promise<void> {
+    const due = [...entries.values()]
+      .filter((entry) => waiting(entry) && nowMs - entry.captionAt >= captionMs)
+      .sort((a, b) => a.captionAt - b.captionAt)
+      .slice(0, captionEditsPerTick);
+    for (const entry of due) {
+      if (!live(entry)) continue;
+      let outcome: EditOutcome;
+      try {
+        outcome = await runWithLanguage(entry.language, () => redraw(entry, snapshot, nowMs));
+      } catch (error) {
+        logger.error(
+          { ...errorLogFields(error), ...entryFields(entry) },
+          'signal wait entry failed',
+        );
+        end(entry);
+        continue;
+      }
+      if (outcome === 'paused' || stopped) return;
     }
   }
+
+  // still waiting: a list without its pairs, or a pair
+  const waiting = (entry: Entry) => entry.kind === 'pair' || entry.shownAt === undefined;
+
+  // the waiting screen again, from this tick's reads; nothing to print without them
+  async function redraw(entry: Entry, snapshot: Snapshot, nowMs: number): Promise<EditOutcome> {
+    const { signals, list, catalog } = snapshot;
+    if (signals === undefined || list === undefined || catalog === undefined) return 'kept';
+    entry.captionAt = now();
+    const screens = attached();
+    if (entry.kind === 'list') {
+      const drawn = screens.list(signals, catalog, nowMs);
+      if (drawn === undefined || drawn.listed > 0) return 'kept';
+      return edit(entry, drawn.screen, waitingMedia(entry));
+    }
+    const check = checkDemoTrade(catalog, entry.pair.assetId, DEMO_DURATION_SEC, nowMs);
+    if (!check.ok) return 'kept';
+    return edit(
+      entry,
+      screens.waiting(entry.pair.base, shownAlternatives(entry), { list, pair: check.pair }),
+      waitingMedia(entry),
+    );
+  }
+
+  const shownAlternatives = (entry: Extract<Entry, { kind: 'pair' }>): readonly ShownSignal[] =>
+    typeof entry.pair.alternatives === 'object' ? entry.pair.alternatives.shown : [];
 
   async function advance(entry: Entry, snapshot: Snapshot, nowMs: number): Promise<EditOutcome> {
     const screens = attached();
@@ -341,7 +444,7 @@ export function createSignalWaiter({
       if (signals === undefined || catalog === undefined) return 'kept';
       const drawn = screens.list(signals, catalog, nowMs);
       if (drawn === undefined || drawn.listed === 0) return 'kept';
-      const outcome = await edit(entry, drawn.screen);
+      const outcome = await edit(entry, drawn.screen, endMedia(entry));
       if (outcome === 'drawn') {
         entry.shownAt = now();
         remember(entry, ShownSignalSource.List, shownRecordsOf(drawn.shown));
@@ -366,9 +469,13 @@ export function createSignalWaiter({
           pair.alternatives = 'done';
           return 'kept';
         }
-        const outcome = await edit(entry, screens.waiting(pair.base, alternatives));
+        const outcome = await edit(
+          entry,
+          screens.waiting(pair.base, alternatives, { list, pair: check.pair }),
+          waitingMedia(entry),
+        );
         if (outcome === 'drawn') {
-          pair.alternatives = { shownAt: now() };
+          pair.alternatives = { shownAt: now(), shown: alternatives };
           remember(entry, ShownSignalSource.List, shownRecordsOf(alternatives));
         }
         return outcome;
@@ -376,7 +483,13 @@ export function createSignalWaiter({
     }
     const { alternatives } = pair;
     if (typeof alternatives === 'object' && nowMs - alternatives.shownAt >= listTtlMs) {
-      const outcome = await edit(entry, screens.waiting(pair.base, []));
+      const check =
+        list === undefined || catalog === undefined
+          ? undefined
+          : checkDemoTrade(catalog, pair.assetId, DEMO_DURATION_SEC, nowMs);
+      const scan =
+        list !== undefined && check?.ok === true ? { list, pair: check.pair } : undefined;
+      const outcome = await edit(entry, screens.waiting(pair.base, [], scan), waitingMedia(entry));
       if (outcome === 'drawn') pair.alternatives = 'done';
       return outcome;
     }
@@ -490,7 +603,7 @@ export function createSignalWaiter({
             { ...errorLogFields(error), ...telegramErrorFields(error), kind: entry.kind },
             'the signal wait card photo was refused, sending its text',
           );
-          return finish(entry, { text: card.text, keyboard: card.keyboard });
+          return finish(entry, { text: card.text, keyboard: card.keyboard }, entry.media);
         }
       }
       const outcome = refused(entry, error, 'editMessageMedia');
@@ -499,9 +612,14 @@ export function createSignalWaiter({
     }
   }
 
-  // an edit that ends the entry once it is on screen, or once the message is gone for good
-  async function finish(entry: Entry, screen: DemoScreen): Promise<EditOutcome> {
-    const outcome = await edit(entry, screen);
+  // an edit that ends the entry once it is on screen, or once the message is gone for good; the
+  // still unless `media` says otherwise
+  async function finish(
+    entry: Entry,
+    screen: DemoScreen,
+    media: WaitMedia = endMedia(entry),
+  ): Promise<EditOutcome> {
+    const outcome = await edit(entry, screen, media);
     if (outcome === 'drawn' || outcome === 'ended') end(entry);
     return outcome;
   }
@@ -512,24 +630,71 @@ export function createSignalWaiter({
     lastEditAt = now();
   }
 
-  async function edit(entry: Entry, screen: DemoScreen): Promise<EditOutcome> {
-    const key = renderKey(screen);
+  // One edit of the message into `screen` as `media` (#859): a text as a text; the same media its
+  // caption; another media the media itself, with the caption (methodOf names it for the log).
+  async function send(entry: WaitTarget, screen: DemoScreen, media: WaitMedia): Promise<void> {
+    const { api, chatId, messageId } = entry;
+    const extra = { reply_markup: screen.keyboard };
+    if (media === 'text') {
+      await editMessageTextByIdHtml(api, chatId, messageId, screen.text, extra);
+      return;
+    }
+    if (media === entry.media) {
+      await editMessageCaptionByIdHtml(api, chatId, messageId, screen.text, extra);
+      return;
+    }
+    const files = attached().media;
+    const file = files.file(media);
+    const result =
+      media === 'animation'
+        ? await editMessageAnimationByIdHtml(api, chatId, messageId, file, screen.text, extra)
+        : await editMessagePhotoByIdHtml(api, chatId, messageId, file, screen.text, extra);
+    files.remember(media, result);
+  }
+
+  // A media edit refused for the file (not gone, shown, a 403 or a 429: a bad file, a stale
+  // file_id) forgets the id and draws the same screen without changing the media, once (#859).
+  async function edit(entry: Entry, screen: DemoScreen, media: WaitMedia): Promise<EditOutcome> {
+    const key = renderKey(screen, media);
     if (key === entry.rendered) return 'drawn';
     await pace();
     if (!live(entry)) return 'ended';
+    let drawnAs = media;
     try {
-      await editMessageTextByIdHtml(entry.api, entry.chatId, entry.messageId, screen.text, {
-        reply_markup: screen.keyboard,
-      });
+      try {
+        await send(entry, screen, media);
+      } catch (error) {
+        if (media === 'text' || !mediaRefused(entry, media, error)) throw error;
+        attached().media.forget(media);
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error), ...entryFields(entry) },
+          'the scan media was refused, editing the caption',
+        );
+        drawnAs = entry.media;
+        await send(entry, screen, drawnAs);
+      }
     } catch (error) {
-      const outcome = refused(entry, error, 'editMessageText');
-      if (outcome === 'drawn') entry.rendered = key;
+      const outcome = refused(entry, error, methodOf(entry, drawnAs));
+      if (outcome === 'drawn') markDrawn(entry, renderKey(screen, drawnAs), drawnAs);
       if (outcome === 'ended') end(entry);
       return outcome;
     }
-    entry.rendered = key;
+    markDrawn(entry, renderKey(screen, drawnAs), drawnAs);
     entry.editFailures = 0;
     return 'drawn';
+  }
+
+  const mediaRefused = (entry: Entry, media: ScanMediaKind, error: unknown): boolean =>
+    media !== entry.media &&
+    error instanceof GrammyError &&
+    error.error_code !== 429 &&
+    error.error_code !== 403 &&
+    editRefusal(error) === undefined;
+
+  function markDrawn(entry: Entry, key: string, media: WaitMedia): void {
+    entry.rendered = key;
+    entry.media = media;
+    entry.captionAt = now();
   }
 
   // A refused edit, by what it means for the entry: already shown is drawn; a message gone or a
@@ -586,16 +751,15 @@ export function createSignalWaiter({
         runWithLanguage(entry.language, async () => {
           try {
             const screen = attached().expired();
-            if (renderKey(screen) === entry.rendered) return;
-            await editMessageTextByIdHtml(entry.api, entry.chatId, entry.messageId, screen.text, {
-              reply_markup: screen.keyboard,
-            });
+            const media = endMedia(entry);
+            if (renderKey(screen, media) === entry.rendered) return;
+            await send(entry, screen, media);
           } catch (error) {
             if (error instanceof GrammyError && error.error_code === 429) limited = true;
             logger.warn(
               {
                 ...errorLogFields(error),
-                ...telegramErrorFields(error, 'editMessageText'),
+                ...telegramErrorFields(error, methodOf(entry, endMedia(entry))),
                 kind: entry.kind,
               },
               'signal wait message not edited at the stop',
@@ -608,6 +772,41 @@ export function createSignalWaiter({
     await Promise.allSettled(launched);
   }
 
+  const methodOf = (entry: WaitTarget, media: WaitMedia): string =>
+    media === 'text'
+      ? 'editMessageText'
+      : media === entry.media
+        ? 'editMessageCaption'
+        : 'editMessageMedia';
+
+  // The user left a wait on screen (a button, a command): its animation would loop on in the chat
+  // with stale figures, so it becomes the still with the start of trading, one edit at the pace of
+  // the others, no retry (#859). A text or a still stays as it is.
+  async function freeze(entry: Entry): Promise<void> {
+    await pace();
+    await runWithLanguage(entry.language, async () => {
+      try {
+        await send(entry, attached().expired(), 'still');
+      } catch (error) {
+        const fields = {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'editMessageMedia'),
+          ...entryFields(entry),
+        };
+        if (error instanceof GrammyError) {
+          if (error.error_code === 429) {
+            pausedUntil = now() + (error.parameters.retry_after ?? 1) * 1000;
+          }
+          if (editRefusal(error) !== undefined || error.error_code === 403) {
+            logger.info(fields, 'signal wait message not frozen');
+            return;
+          }
+        }
+        logger.warn(fields, 'signal wait message not frozen');
+      }
+    });
+  }
+
   return {
     attach(next) {
       attachedScreens = next;
@@ -618,7 +817,7 @@ export function createSignalWaiter({
         kind: 'list',
         startedAt: now(),
         shownAt: request.shown ? now() : undefined,
-        ...common(request.drawn),
+        ...common(request),
       });
     },
     waitPair({ firstName, assetId, back, origin, base, alternatives, ...target }) {
@@ -632,14 +831,24 @@ export function createSignalWaiter({
           back,
           origin,
           base,
-          alternatives: alternatives === 'shown' ? { shownAt: now() } : alternatives,
+          alternatives:
+            typeof alternatives === 'object'
+              ? { shownAt: now(), shown: alternatives }
+              : alternatives,
         },
-        ...common(target.drawn),
+        ...common(target),
       });
     },
     leave(telegramUserId) {
       const entry = entries.get(telegramUserId);
-      if (entry !== undefined) end(entry);
+      if (entry === undefined) return;
+      end(entry);
+      if (entry.media !== 'animation' || stopped) return;
+      const frozen = freeze(entry).catch((error: unknown) => {
+        logger.error(errorLogFields(error), 'signal wait freeze failed');
+      });
+      freezes.add(frozen);
+      void frozen.finally(() => freezes.delete(frozen));
     },
     has: (telegramUserId) => entries.has(telegramUserId),
     size: () => entries.size,
@@ -650,7 +859,11 @@ export function createSignalWaiter({
       timer = undefined;
       const remaining = [...entries.values()];
       entries.clear();
-      await Promise.all([inflight, remaining.length > 0 ? drainEdits(remaining) : undefined]);
+      await Promise.all([
+        inflight,
+        remaining.length > 0 ? drainEdits(remaining) : undefined,
+        Promise.allSettled([...freezes]),
+      ]);
     },
   };
 }

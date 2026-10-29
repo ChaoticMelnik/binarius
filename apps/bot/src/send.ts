@@ -67,6 +67,14 @@ type PhotoByIdExtra = Omit<
 >;
 // the caption, its parse_mode and entities travel in the media, which the seam builds
 type MediaEditExtra = NonNullable<Parameters<Api['editMessageMedia']>[3]>;
+type AnimationExtra = Omit<
+  NonNullable<Parameters<Context['replyWithAnimation']>[1]>,
+  'parse_mode' | 'caption' | 'caption_entities'
+>;
+type CaptionByIdExtra = Omit<
+  NonNullable<Parameters<Api['editMessageCaption']>[2]>,
+  'parse_mode' | 'caption' | 'caption_entities'
+>;
 
 export const replyHtml = (ctx: Context, text: TelegramHtml, extra: WithNextStep<ReplyExtra>) =>
   ctx.reply(sent(text), { ...extra, parse_mode: 'HTML' });
@@ -162,6 +170,44 @@ export const editMessagePhotoByIdHtml = (
     { type: 'photo', media: photo, caption: caption.value, parse_mode: 'HTML' },
     extra,
   );
+
+// The wait for a signal (#859, Rule 58): its scanner animation as a new message, the message named
+// by id becoming the animation (from a text, a photo or an animation), and the caption of a
+// message that already is one. Each has a keyboard: every wait screen does.
+export const replyWithAnimationHtml = (
+  ctx: Context,
+  animation: string | InputFile,
+  caption: TelegramHtml,
+  extra: WithNextStep<AnimationExtra>,
+) => ctx.replyWithAnimation(animation, { ...extra, caption: caption.value, parse_mode: 'HTML' });
+
+export const editMessageAnimationByIdHtml = (
+  api: Pick<Api, 'editMessageMedia'>,
+  chatId: number,
+  messageId: number,
+  animation: string | InputFile,
+  caption: TelegramHtml,
+  extra: WithNextStep<MediaEditExtra>,
+) =>
+  api.editMessageMedia(
+    chatId,
+    messageId,
+    { type: 'animation', media: animation, caption: caption.value, parse_mode: 'HTML' },
+    extra,
+  );
+
+export const editMessageCaptionByIdHtml = (
+  api: Pick<Api, 'editMessageCaption'>,
+  chatId: number,
+  messageId: number,
+  caption: TelegramHtml,
+  extra: WithNextStep<CaptionByIdExtra>,
+) =>
+  api.editMessageCaption(chatId, messageId, {
+    ...extra,
+    caption: caption.value,
+    parse_mode: 'HTML',
+  });
 
 // The same without a keyboard: an edit without reply_markup removes the inline keyboard on
 // screen. `reason` as above.

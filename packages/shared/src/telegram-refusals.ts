@@ -15,13 +15,16 @@ export interface TelegramRefusal {
 // never logged: telegramErrorFields carries only the method and the code. Anything else is not
 // ours to interpret. "there is no text in the message to edit" is the answer for a message whose
 // text is a caption — a photo or a video, such as the session's summary card (#318): its screen
-// goes anew, as for a gone one. That wording is taken from public reports of the Bot API's 400,
-// not observed live here (docs/bot-session.md → The summary card).
+// goes anew, as for a gone one. "there is no caption in the message to edit" is its mirror for an
+// editMessageCaption on a text message (#859, the wait screen): the same meaning. Both wordings
+// are taken from public reports of the Bot API's 400, not observed live here (docs/bot-session.md
+// → The summary card).
 const EDIT_ALREADY_SHOWN = 'message is not modified';
 const EDIT_TARGET_GONE = [
   'message to edit not found',
   "message can't be edited",
   'there is no text in the message to edit',
+  'there is no caption in the message to edit',
 ] as const;
 
 export function editRefusal(error: TelegramRefusal): 'shown' | 'gone' | undefined {

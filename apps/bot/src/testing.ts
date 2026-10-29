@@ -53,6 +53,7 @@ import {
   type ShownSignalStart,
   type PendingLinkedAccountView,
   type ScanInterval,
+  type ScanSummary,
   type SignalDecision,
   type SignalFeatures,
   type SignalIndicators,
@@ -291,15 +292,19 @@ export const PAIR_15S_ONLY: PairView = {
 
 // GET /trading/signals (#382, #828): a list for every interval of SIGNAL_SCAN_INTERVALS, in the
 // route's order, with the given signals (none where an interval is not named); the times are the H1
-// scanner's, which the bot ignores
+// scanner's, which the bot ignores. `scanned` is the signals' count and the
+// scanner's summary is empty unless given (#859)
+export const EMPTY_SCAN_SUMMARY: ScanSummary = { streaming: true, scanning: null, closeness: [] };
 export const signalsResponse = (
   nowMs: number,
   signals: Partial<Record<ScanInterval, readonly (readonly [number, TradeAction])[]>> = {},
+  scan: { scanned?: number; summary?: ScanSummary } = {},
 ): TradingSignalsResponse => ({
   asOf: nowMs - 500,
   lists: SIGNAL_SCAN_INTERVALS.map((interval) => ({
     interval,
-    scanned: signals[interval]?.length ?? 0,
+    scanned: scan.scanned ?? signals[interval]?.length ?? 0,
+    summary: scan.summary ?? EMPTY_SCAN_SUMMARY,
     signals: (signals[interval] ?? []).map(([assetId, action]) => ({
       assetId,
       action,
@@ -743,6 +748,22 @@ export const photoCallbackUpdate = (data: string): Update => {
   return update as unknown as Update;
 };
 
+// A press under the wait's animation (#859): a message with a caption, as under a photo
+export const animationCallbackUpdate = (data: string): Update => {
+  const update = callbackUpdate(data) as unknown as {
+    callback_query: { message: Record<string, unknown> };
+  };
+  update.callback_query.message.animation = {
+    file_id: 'pressed-animation',
+    file_unique_id: 'pressed',
+    width: 640,
+    height: 320,
+    duration: 2,
+  };
+  update.callback_query.message.caption = 'scan';
+  return update as unknown as Update;
+};
+
 // An inline query (#321): no chat, only the type of the chat it is typed in, when the client says
 export const inlineQueryUpdate = (
   query: string,
@@ -957,6 +978,9 @@ export function failFromSecondCall(
 // which message was pinned.
 export const CARD_MESSAGE_ID = 501;
 export const TEXT_CARD_MESSAGE_ID = 502;
+// the wait's animation sent as a new message (#859)
+export const SCAN_MESSAGE_ID = 503;
+export const SCAN_FILE_ID = 'scan-file-id';
 
 // A sendPhoto's result with its sizes, smallest first as Telegram lists them: the summary card
 // reads the last one's file_id for «📤 Поделиться» (#321).
@@ -972,6 +996,22 @@ export const photoAnswer =
       width: 100 * (index + 1),
       height: 100 * (index + 1),
     })),
+  });
+
+// A sendAnimation's or an animation editMessageMedia's result: the wait reads its file_id (#859)
+export const animationAnswer =
+  (message_id: number, file_id: string): ApiAnswer =>
+  () => ({
+    message_id,
+    date: 1,
+    chat: { id: USER.id, type: 'private', first_name: USER.first_name },
+    animation: {
+      file_id,
+      file_unique_id: 'unique-animation',
+      width: 640,
+      height: 320,
+      duration: 2,
+    },
   });
 
 // The result of a send: grammY passes it through unchecked, and the bot reads only message_id.

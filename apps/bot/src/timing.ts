@@ -83,20 +83,23 @@ export const HANDLER_CALLS = {
   // command
   commandRetry: { backend: 1, telegram: 2 },
   // the status card's button (#685): the signals list as a new message, answerCallbackQuery ∥
-  // readSignals ∥ readPairs — the reads counted as sequential, as in confirm — then sendMessage
-  demo: { backend: 2, telegram: 2 },
+  // readSignals ∥ readPairs — the reads counted as sequential, as in confirm — then sendMessage;
+  // without a pair the scanner's sendAnimation, refused for its file → sendMessage (#859)
+  demo: { backend: 2, telegram: 3 },
   // the list in place (#320, #685: `demo:sig`, and `demo:sig:<sec>` of an old button): the same
-  // reads, then editMessageText refused as gone → sendMessage; under the summary card (a photo)
-  // no edit is tried, shorter (#761)
-  demoSignals: { backend: 2, telegram: 3 },
+  // reads, then editMessageText refused as gone → sendMessage; without a pair (#859) the text
+  // becomes the animation (editMessageMedia), refused for its file → the text path, 4 calls;
+  // under the summary card (a photo) or an animation no edit is tried, shorter (#761)
+  demoSignals: { backend: 2, telegram: 4 },
   // a pair of the list (#320) and the analysis card's door (#476): answerCallbackQuery ∥ readPairs
   // ∥ readTradingAccess — counted the same way; no signals list since #828 — then editMessageText
   // refused as gone → sendMessage; the session row under the analysis card (a photo, #761) sends
   // at once, shorter
   demoLaunch: { backend: 2, telegram: 3 },
   // the door drawn without a signal (`n`: «🔁 Ещё сессия», the offer under a single trade, #476):
-  // the reads of demoLaunch ∥ readSignals (the H1 list, #664, #828), then sendMessage at once
-  demoLaunchCheck: { backend: 3, telegram: 2 },
+  // the reads of demoLaunch ∥ readSignals (the H1 list, #664, #828), then sendMessage at once; the
+  // wait's sendAnimation, refused for its file → sendMessage (#859)
+  demoLaunchCheck: { backend: 3, telegram: 3 },
   // each demo screen edited in place (#125: «↩️ Типы», a type's page, a pair's summary, also by
   // `demo:d:<id>:5` of an old button): answerCallbackQuery ∥ readPairs, then editMessageText
   // refused as gone → sendMessage; under the analysis card (a photo) no edit is tried, shorter
@@ -106,8 +109,9 @@ export const HANDLER_CALLS = {
   demoAsset: { backend: 1, telegram: 3 },
   // a button with a duration the demo no longer offers (15 s until #685, the set before #313) or
   // a launch screen's from before #382 (no duration): the signals list as a new message,
-  // answerCallbackQuery ∥ readSignals ∥ readPairs — counted as sequential — then sendMessage
-  legacyDuration: { backend: 2, telegram: 2 },
+  // answerCallbackQuery ∥ readSignals ∥ readPairs — counted as sequential — then sendMessage, or
+  // without a pair as demo (#859)
+  legacyDuration: { backend: 2, telegram: 3 },
   // a mode-less picker button from before #326, a launch screen's picker from before #382:
   // answerCallbackQuery, then editMessageReplyMarkup
   legacyKeyboard: { backend: 0, telegram: 2 },
@@ -116,9 +120,10 @@ export const HANDLER_CALLS = {
   // amounts depend on (#121, #482) — then «⏳», evaluateSignal and the result. The longest paths
   // (#482): «⏳» edited (or sent at once under a photo), the card's sendPhoto, «⏳»'s deleteMessage;
   // «⏳» edited, the photo refused, «⏳» edited into the text card; «⏳» sent under a photo, the
-  // text result's edit refused as gone → sendMessage. A gone «⏳» is not sent anew, which would
-  // make the card's path 3 / 5 = 55 s. All are 3 / 4, 47 s: the longest handler, with sessionStart
-  // (#418), under SHUTDOWN_BUDGET_MS.
+  // text result's edit refused as gone → sendMessage; without a signal (#859) «⏳» edited, its
+  // editMessageMedia into the animation refused as gone → sendAnimation, or for its file → «⏳»'s
+  // editMessageText. A gone «⏳» is not sent anew, which would make the card's path 3 / 5 = 55 s.
+  // All are 3 / 4, 47 s: the longest handler, with sessionStart (#418), under SHUTDOWN_BUDGET_MS.
   demoAnalysis: { backend: 3, telegram: 4 },
   // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
   // confirm — then editMessageReplyMarkup; a refused edit sends nothing more
@@ -365,6 +370,12 @@ export const SIGNAL_WAIT_EDITS_PER_SECOND = 5;
 export const SIGNAL_WAIT_EDIT_GAP_MS = 1000 / SIGNAL_WAIT_EDITS_PER_SECOND;
 // a transport failure or another refusal of an entry's edit, retried on the next ticks
 export const SIGNAL_WAIT_EDIT_FAILURES_MAX = 3;
+// The scanner's caption under the wait's animation (#859, Rule 58): an entry's caption is redrawn
+// at most once in this (the owner's «не чаще раза в 3-5 с»), after the edits that end waits, at
+// most this many a tick, so the captions never take the whole second's budget: with N waiting
+// users each caption moves once in max(4 s, N / 2 s).
+export const SIGNAL_WAIT_CAPTION_MS = 4_000;
+export const SIGNAL_WAIT_CAPTION_EDITS_PER_TICK = 2;
 // At the stop the waiting messages become the start of trading, one launched every
 // SIGNAL_WAIT_EDIT_GAP_MS inside this window (100 messages); each launched one is awaited, bounded
 // by TELEGRAM_API_TIMEOUT_MS.
@@ -384,6 +395,9 @@ export const signalWaitBoundsHold = ({
   maxMs = SIGNAL_WAIT_MAX_MS,
   inflightMs = SIGNAL_WAIT_INFLIGHT_MS,
   shutdownBudgetMs = SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
+  captionMs = SIGNAL_WAIT_CAPTION_MS,
+  captionEditsPerTick = SIGNAL_WAIT_CAPTION_EDITS_PER_TICK,
+  editsPerSecond = SIGNAL_WAIT_EDITS_PER_SECOND,
 }: {
   closeMarginMs?: number;
   maxAgeMs?: number;
@@ -393,6 +407,9 @@ export const signalWaitBoundsHold = ({
   maxMs?: number;
   inflightMs?: number;
   shutdownBudgetMs?: number;
+  captionMs?: number;
+  captionEditsPerTick?: number;
+  editsPerSecond?: number;
 } = {}): boolean =>
   0 < pollOffsetMs &&
   // the list read after the clock rule closed the second at the latest
@@ -405,7 +422,13 @@ export const signalWaitBoundsHold = ({
   maxMs < TELEGRAM_EDIT_WINDOW_MS &&
   inflightMs < SHUTDOWN_BUDGET_MS &&
   // the stop's last launched edit ends inside the bot's own budget
-  shutdownBudgetMs + TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS;
+  shutdownBudgetMs + TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
+  // the owner's 3-5 s between captions, counted in polls (#859)
+  3 * pollMs <= captionMs &&
+  captionMs <= 5 * pollMs &&
+  // a tick's captions fit its second at the edits' pace, and leave the second's budget room
+  captionEditsPerTick * (1000 / editsPerSecond) < pollMs &&
+  captionEditsPerTick < editsPerSecond;
 
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST

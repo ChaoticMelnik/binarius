@@ -175,6 +175,12 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   earnedTokens: '100',
   rewardTokens: '50',
   nudgeTokens: '50',
+  pairs: text,
+  checks: '6900',
+  quotes: text,
+  moves: text,
+  closest: text,
+  pct: text,
 });
 const contextOf = (key: string, text: string): Record<string, unknown> => {
   const inputs = inputsOf(text);

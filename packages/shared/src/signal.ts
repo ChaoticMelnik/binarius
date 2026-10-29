@@ -462,12 +462,32 @@ export type ScanInterval = (typeof SIGNAL_SCAN_INTERVALS)[number];
 // current and decided an H1 signal. `scanned` counts the pairs with a current decision. Times are
 // unix ms. A list's interval is any SignalInterval (#685): a backend and a bot of different
 // versions parse each other's answer, and the bot reads only the list of its own duration.
+// The scanner's summary beside the list (#859, Rule 58): whether the source streams, the pair the
+// scanner is on this second (a rotation over the current pairs by assetId, null without one) and,
+// for every current pair that decided below the threshold, how close its move came
+// (h1ClosenessPct), highest first, then by assetId. The bot's wait screen prints it.
+// the ceiling of a closeness percentage (h1ClosenessPct in h1.ts, which imports this module)
+export const H1_CLOSENESS_MAX_PCT = 99;
+
+export const scanSummarySchema = z.strictObject({
+  streaming: z.boolean(),
+  scanning: createTradeIntentRequestSchema.shape.assetId.nullable(),
+  closeness: z.array(
+    z.strictObject({
+      assetId: createTradeIntentRequestSchema.shape.assetId,
+      pct: z.int().min(0).max(H1_CLOSENESS_MAX_PCT),
+    }),
+  ),
+});
+export type ScanSummary = z.infer<typeof scanSummarySchema>;
+
 export const tradingSignalsResponseSchema = z.strictObject({
   asOf: z.int().nonnegative(),
   lists: z.array(
     z.strictObject({
       interval: signalIntervalSchema,
       scanned: z.int().nonnegative(),
+      summary: scanSummarySchema,
       signals: z.array(
         h1SignalWireSchema.extend({ assetId: createTradeIntentRequestSchema.shape.assetId }),
       ),

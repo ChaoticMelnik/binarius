@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { MAX_PAIR_DIGITS } from './broker';
-import { SignalKind } from './signal';
+import { H1_CLOSENESS_MAX_PCT, SignalKind } from './signal';
 import { TradeAction, tradeActionSchema } from './trading';
 
 // The wire shape of an H1 decision (#667, docs/signal-stand.md -> H1): a 5-second move against the
@@ -65,6 +65,13 @@ export const h1FeaturesSchema = z.strictObject({
   lastClose: z.number().min(H1_PRICE_RANGE.min).max(H1_PRICE_RANGE.max),
 });
 export type H1Features = z.infer<typeof h1FeaturesSchema>;
+
+// How close a below-threshold move is to a signal (#859, Rule 58): the share of the threshold its
+// z reached, floored, at most H1_CLOSENESS_MAX_PCT — z = threshold is still below (a signal is
+// z > threshold)
+export function h1ClosenessPct(z: number, threshold: number): number {
+  return Math.min(H1_CLOSENESS_MAX_PCT, Math.floor((z / threshold) * 100));
+}
 
 const version = z.literal(H1_VERSION);
 const noSignalHead = { kind: z.literal(SignalKind.NoSignal), version };

@@ -24,6 +24,7 @@ import {
   type ListWaitRequest,
   type PairWaitRequest,
   type SignalWaitScreens,
+  type WaitMedia,
 } from './signal-wait';
 import {
   accessView,
@@ -75,6 +76,13 @@ const NOT_MODIFIED = () =>
   refusal(400, 'Bad Request: message is not modified: specified new message content is the same');
 const TRANSPORT = () => new HttpError("Network request for 'editMessageText' failed!", new Error());
 
+const SHORT_SHOWN: ShownSignal = {
+  pair: PAIR_SHORT,
+  action: TradeAction.Up,
+  second: 1,
+  decidedAt: 1,
+};
+
 // the listed pairs the catalog has, with their signals' second and decision time (#829)
 const shownOf = (
   signals: TradingSignalsResponse['lists'][number]['signals'],
@@ -92,6 +100,8 @@ function setup(
     maxEntries?: number;
     pollMs?: number;
     pollOffsetMs?: number;
+    captionMs?: number;
+    captionEditsPerTick?: number;
   } = {},
 ) {
   let listed: (readonly [number, TradeAction])[] = [];
@@ -113,14 +123,16 @@ function setup(
       if (list === undefined) return undefined;
       const ids = list.signals.map((signal) => signal.assetId).join(',');
       return {
-        screen: screen(`list:${ids}`),
+        // without a pair the scanner's caption, which moves with every answer (#859)
+        screen: screen(ids === '' ? `scan:${String(signals.asOf)}` : `list:${ids}`),
         listed: list.signals.length,
         shown: shownOf(list.signals, catalog),
       };
     }),
     expired: () => screen('expired'),
-    waiting: (base: TelegramHtml, alternatives) =>
+    waiting: vi.fn((base: TelegramHtml, alternatives: readonly ShownSignal[]) =>
       screen(`${base.value}|${alternatives.map(({ pair }) => pair.id).join(',')}`),
+    ),
     alternatives: shownOf,
     nextStep: (step, pair, access) =>
       screen(`next:${pair.id}:${access?.tradingMode ?? 'none'}:${step.back}`),
@@ -134,6 +146,7 @@ function setup(
           }
         : undefined,
     photos: { photo: vi.fn(() => 'file-id'), remember: vi.fn(), forget: vi.fn() },
+    media: { file: vi.fn((kind: string) => `${kind}-id`), remember: vi.fn(), forget: vi.fn() },
   };
   const logger = fakeLogger();
   const shownSignals = stubShownSignals();
@@ -146,6 +159,9 @@ function setup(
     listTtlMs: TTL,
     maxMs: options.maxMs ?? 3_600_000,
     editGapMs: GAP,
+    // the captions' redraw (#859) stays out of the scenes that do not name it
+    captionMs: options.captionMs ?? 3_600_000,
+    captionEditsPerTick: options.captionEditsPerTick ?? 2,
     editFailuresMax: 3,
     shutdownBudgetMs: options.shutdownBudgetMs ?? 20_000,
     ...(options.maxEntries === undefined ? {} : { maxEntries: options.maxEntries }),
@@ -155,7 +171,14 @@ function setup(
   const editMessageMedia = vi.fn<(...args: unknown[]) => Promise<true>>(() =>
     Promise.resolve(true),
   );
-  const api = { editMessageText, editMessageMedia } as unknown as ListWaitRequest['api'];
+  const editMessageCaption = vi.fn<(...args: unknown[]) => Promise<true>>(() =>
+    Promise.resolve(true),
+  );
+  const api = {
+    editMessageText,
+    editMessageMedia,
+    editMessageCaption,
+  } as unknown as ListWaitRequest['api'];
   const target = (user = 7) => ({
     api,
     chatId: user,
@@ -163,6 +186,8 @@ function setup(
     telegramUserId: user,
     language: BotLanguage.Ru,
     drawn: screen('drawn'),
+    media: 'text' as WaitMedia,
+    scanned: true,
   });
   const list = (patch: Partial<ListWaitRequest> = {}): ListWaitRequest => ({
     ...target(),
@@ -191,6 +216,7 @@ function setup(
     languages,
     editMessageText,
     editMessageMedia,
+    editMessageCaption,
     target,
     list,
     pair,
@@ -219,8 +245,17 @@ describe('renderKey (#475)', () => {
         perRow: 2,
       }),
     });
-    expect(renderKey(pair(ButtonRole.Up))).not.toBe(renderKey(pair(ButtonRole.Down)));
-    expect(renderKey(pair(ButtonRole.Up))).toBe(renderKey(pair(ButtonRole.Up)));
+    expect(renderKey(pair(ButtonRole.Up), 'text')).not.toBe(
+      renderKey(pair(ButtonRole.Down), 'text'),
+    );
+    expect(renderKey(pair(ButtonRole.Up), 'text')).toBe(renderKey(pair(ButtonRole.Up), 'text'));
+  });
+
+  // #859: the end of a wait may change the media alone, its caption kept
+  it('W23 the same screen as the animation and as the still are two drawings', () => {
+    const drawn = screen('list');
+    expect(renderKey(drawn, 'animation')).not.toBe(renderKey(drawn, 'still'));
+    expect(renderKey(drawn, 'still')).not.toBe(renderKey(drawn, 'text'));
   });
 });
 
@@ -455,7 +490,7 @@ describe('the wait for a signal', () => {
 
   it('W7 takes the alternatives away 30 s after the door drew them, and keeps waiting', async () => {
     const { waiter, pair, at, texts } = setup();
-    waiter.waitPair(pair({ alternatives: 'shown' }));
+    waiter.waitPair(pair({ alternatives: [SHORT_SHOWN] }));
     await at(41_000);
     expect(texts()).toEqual([]);
     await at(46_000);
@@ -853,5 +888,224 @@ describe('the wait for a signal', () => {
         'signal wait message not edited at the stop',
       ],
     ]);
+  });
+});
+
+// #859: the wait is the scanner's animation; its caption is redrawn last, at most once in
+// captionMs and captionEditsPerTick a tick; whatever ends it shows the still. The production poll:
+// T0 = 12 345, ticks at 12 600, 13 600, …; CAPTION = 4 s after the registration is 16 345, so the
+// first caption goes at the tick of 16 600.
+const CAPTION = 4_000;
+const captionSetup = (options: { captionEditsPerTick?: number } = {}) =>
+  setup({
+    pollMs: SIGNAL_WAIT_POLL_MS,
+    pollOffsetMs: SIGNAL_WAIT_POLL_OFFSET_MS,
+    captionMs: CAPTION,
+    ...options,
+  });
+const animation = { media: 'animation' as WaitMedia };
+const chatsOf = (mock: { mock: { calls: unknown[][] } }) => mock.mock.calls.map((call) => call[0]);
+const captionOf = (call: unknown[] | undefined) => (call?.[2] as { caption?: string }).caption;
+
+describe('the live wait (#859)', () => {
+  it('W31 a list on the animation goes onto the still with the list as its caption, recorded once there', async () => {
+    const {
+      waiter,
+      list,
+      at,
+      setListed,
+      editMessageMedia,
+      editMessageText,
+      shownSignals,
+      screens,
+    } = setup();
+    waiter.waitList(list({ ...animation, drawn: screen(`list:${PAIR_EURUSD.id}`) }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK);
+    expect(editMessageMedia.mock.calls).toEqual([
+      [
+        7,
+        70,
+        {
+          type: 'photo',
+          media: 'still-id',
+          caption: `list:${PAIR_EURUSD.id}`,
+          parse_mode: 'HTML',
+        },
+        { reply_markup: screen('k').keyboard },
+      ],
+    ]);
+    expect(editMessageText).not.toHaveBeenCalled();
+    expect(screens.media.remember).toHaveBeenCalledWith('still', true);
+    expect(shownSignals.remember).toHaveBeenCalledTimes(1);
+    expect(waiter.has(7)).toBe(true);
+  });
+
+  it('W24 redraws a caption no sooner than captionMs after the screen was drawn', async () => {
+    const { waiter, list, at, editMessageCaption } = captionSetup();
+    waiter.waitList(list(animation));
+    await at(15_600);
+    expect(editMessageCaption).not.toHaveBeenCalled();
+    await at(16_600);
+    expect(editMessageCaption).toHaveBeenCalledTimes(1);
+    expect(captionOf(editMessageCaption.mock.calls[0])).toBe('scan:16100');
+    await at(19_600);
+    expect(editMessageCaption).toHaveBeenCalledTimes(1);
+    await at(20_600);
+    expect(editMessageCaption).toHaveBeenCalledTimes(2);
+  });
+
+  it('W25 redraws at most captionEditsPerTick captions a tick, the longest waiting first', async () => {
+    const { waiter, list, target, at, editMessageCaption } = captionSetup();
+    for (const user of [1, 2, 3]) {
+      waiter.waitList(list({ ...target(user), ...animation }));
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    await at(16_600 + 2 * GAP);
+    expect(chatsOf(editMessageCaption)).toEqual([1, 2]);
+    await at(17_600 + GAP);
+    expect(chatsOf(editMessageCaption)).toEqual([1, 2, 3]);
+  });
+
+  it('W26 draws what ends a wait before any caption of the same tick', async () => {
+    const { waiter, pair, target, at, editMessageCaption, editMessageMedia, setListed } =
+      captionSetup();
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    waiter.waitPair(pair({ ...target(1), ...animation, assetId: PAIR_SHORT.id }));
+    await at(16_000);
+    waiter.waitPair(pair({ ...target(2), ...animation }));
+    await at(16_600 + 2 * GAP);
+    expect(chatsOf(editMessageMedia)).toEqual([2]);
+    expect(chatsOf(editMessageCaption)).toEqual([1]);
+    expect(editMessageMedia.mock.invocationCallOrder[0]).toBeLessThan(
+      editMessageCaption.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('W27 a caption redraw edits the caption of a media message and the text of a text one', async () => {
+    const { waiter, list, target, at, editMessageCaption, editMessageText, editMessageMedia } =
+      captionSetup();
+    waiter.waitList(list({ ...target(1), ...animation }));
+    waiter.waitList(list(target(2)));
+    await at(16_600 + 2 * GAP);
+    expect(chatsOf(editMessageCaption)).toEqual([1]);
+    expect(chatsOf(editMessageText)).toEqual([2]);
+    expect(editMessageMedia).not.toHaveBeenCalled();
+  });
+
+  it('W28 leaving an animation turns it into the still with the start of trading, once; a text stays', async () => {
+    const { waiter, list, target, editMessageMedia, editMessageText, editMessageCaption } = setup();
+    waiter.waitList(list({ ...target(1), ...animation }));
+    waiter.waitList(list(target(2)));
+    waiter.leave(1);
+    waiter.leave(2);
+    waiter.leave(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(editMessageMedia.mock.calls).toEqual([
+      [
+        1,
+        10,
+        { type: 'photo', media: 'still-id', caption: 'expired', parse_mode: 'HTML' },
+        { reply_markup: screen('k').keyboard },
+      ],
+    ]);
+    expect(editMessageText).not.toHaveBeenCalled();
+    expect(editMessageCaption).not.toHaveBeenCalled();
+  });
+
+  it('W29 a refused media edit forgets the file and puts the same screen into the caption', async () => {
+    const { waiter, list, at, setListed, editMessageMedia, editMessageCaption, screens, logger } =
+      setup();
+    editMessageMedia.mockRejectedValueOnce(OTHER());
+    waiter.waitList(list(animation));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 1_000);
+    expect(screens.media.forget).toHaveBeenCalledWith('still');
+    expect(captionOf(editMessageCaption.mock.calls[0])).toBe(`list:${PAIR_EURUSD.id}`);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'the scan media was refused, editing the caption',
+    ]);
+    // the list stands on the animation: its expiry tries the still again, the file uploaded anew
+    await at(FIRST_TICK + TTL + POLL);
+    expect(captionOf(editMessageMedia.mock.calls[1])).toBe('expired');
+    expect(editMessageCaption).toHaveBeenCalledTimes(1);
+  });
+
+  it('W30 a 429 of the tick leaves the captions until its retry_after', async () => {
+    const { waiter, pair, target, at, editMessageCaption, editMessageMedia, setListed } =
+      captionSetup();
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    editMessageMedia.mockRejectedValueOnce(LIMITED(3));
+    waiter.waitPair(pair({ ...target(1), ...animation, assetId: PAIR_SHORT.id }));
+    await at(16_000);
+    waiter.waitPair(pair({ ...target(2), ...animation }));
+    await at(18_600 + GAP);
+    expect(editMessageCaption).not.toHaveBeenCalled();
+    await at(19_600 + 2 * GAP);
+    expect(chatsOf(editMessageMedia)).toEqual([2, 2]);
+    expect(chatsOf(editMessageCaption)).toEqual([1]);
+  });
+
+  it('W32 a list on the still expires into its caption', async () => {
+    const { waiter, list, at, editMessageCaption, editMessageMedia } = setup();
+    waiter.waitList(list({ media: 'still', shown: true }));
+    await at(46_000);
+    expect(captionOf(editMessageCaption.mock.calls[0])).toBe('expired');
+    expect(editMessageMedia).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(false);
+  });
+
+  it('W33 at the stop an animation becomes the still with the start of trading', async () => {
+    const { waiter, list, target, editMessageMedia, editMessageText } = setup();
+    waiter.waitList(list({ ...target(1), ...animation }));
+    waiter.waitList(list(target(2)));
+    const stopped = waiter.stop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await stopped;
+    expect(chatsOf(editMessageMedia)).toEqual([1]);
+    expect(captionOf(editMessageMedia.mock.calls[0])).toBe('expired');
+    expect(chatsOf(editMessageText)).toEqual([2]);
+  });
+
+  it('W34 the stop waits for a freeze in flight', async () => {
+    const { waiter, list, editMessageMedia } = setup();
+    let release!: (value: true) => void;
+    editMessageMedia.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+    );
+    waiter.waitList(list(animation));
+    waiter.leave(7);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    let done = false;
+    void waiter.stop().then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(done).toBe(false);
+    release(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(done).toBe(true);
+  });
+
+  it("W35 a screen drawn without the scanner's lines gets them on the first poll", async () => {
+    const { waiter, pair, at, editMessageCaption, screens } = captionSetup();
+    waiter.waitPair(pair({ ...animation, scanned: false, origin: 'analysis' }));
+    await at(12_600);
+    expect(editMessageCaption).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(screens.waiting).mock.calls[0]?.[2]).toMatchObject({
+      list: { interval: '5s' },
+      pair: { id: PAIR_EURUSD.id },
+    });
+  });
+
+  it('W36 a caption is not redrawn without a fresh read', async () => {
+    const { waiter, pair, at, editMessageCaption, backend } = captionSetup();
+    backend.readSignals.mockRejectedValue(new Error('down'));
+    waiter.waitPair(pair(animation));
+    await at(17_600);
+    expect(editMessageCaption).not.toHaveBeenCalled();
   });
 });

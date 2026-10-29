@@ -418,7 +418,7 @@ describe('contract coverage (issue #6)', () => {
   it('Trading signals list (issue #343, H1 since #828)', () => {
     expectTypeOf<keyof TradingSignalsResponse>().toEqualTypeOf<'asOf' | 'lists'>();
     expectTypeOf<keyof TradingSignalsResponse['lists'][number]>().toEqualTypeOf<
-      'interval' | 'scanned' | 'signals'
+      'interval' | 'scanned' | 'summary' | 'signals'
     >();
     expectTypeOf<keyof TradingSignalsResponse['lists'][number]['signals'][number]>().toEqualTypeOf<
       'assetId' | 'action' | 'second' | 'decidedAt' | 'ageMs'

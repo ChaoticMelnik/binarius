@@ -280,7 +280,15 @@ describe('GET /trading/signals contract', () => {
     decidedAt: 1_760_000_015_020,
     ageMs: 1_000,
   };
-  const list5 = { interval: '5s', scanned: 13, signals: [item] };
+  const summary = {
+    streaming: true,
+    scanning: 101,
+    closeness: [
+      { assetId: 7, pct: 82 },
+      { assetId: 3, pct: 0 },
+    ],
+  };
+  const list5 = { interval: '5s', scanned: 13, summary, signals: [item] };
   const answer = { asOf: 1_760_000_016_000, lists: [list5] };
 
   it('S6 scans 5s only (#685)', () => {
@@ -296,7 +304,10 @@ describe('GET /trading/signals contract', () => {
 
   // a backend and a bot of different versions parse each other's answer (#685)
   it('S6 accepts a list of an interval the scanner no longer serves (15s)', () => {
-    const response = { ...answer, lists: [{ interval: '15s', scanned: 4, signals: [] }, list5] };
+    const response = {
+      ...answer,
+      lists: [{ interval: '15s', scanned: 4, summary, signals: [] }, list5],
+    };
     expect(safeParseTradingSignalsResponse(response).data).toEqual(response);
   });
 
@@ -313,11 +324,34 @@ describe('GET /trading/signals contract', () => {
       lists: [{ ...list5, signals: [{ ...item, lastCandleTimestamp: item.second }] }],
     },
     { ...answer, lists: [{ ...list5, signals: [{ ...item, second: 1.5 }] }] },
-    { ...answer, lists: [{ interval: '5s', signals: [] }] },
+    { ...answer, lists: [{ interval: '5s', summary, signals: [] }] },
     { asOf: answer.asOf },
     { asOf: answer.asOf, interval: '5s', scanned: 25, signals: [item] },
   ])('S6 refuses the response %j', (response) => {
     expect(safeParseTradingSignalsResponse(response).success).toBe(false);
+  });
+
+  it('S10 accepts an empty summary: no pair scanned, nothing close (#859)', () => {
+    const response = {
+      ...answer,
+      lists: [{ ...list5, summary: { streaming: false, scanning: null, closeness: [] } }],
+    };
+    expect(safeParseTradingSignalsResponse(response).data).toEqual(response);
+  });
+
+  it.each([
+    { scanned: 13, signals: [] },
+    { summary: { ...summary, extra: 1 } },
+    { summary: { streaming: true, closeness: [] } },
+    { summary: { ...summary, scanning: 0 } },
+    { summary: { ...summary, closeness: [{ assetId: 7, pct: 100 }] } },
+    { summary: { ...summary, closeness: [{ assetId: 7, pct: 8.5 }] } },
+    { summary: { ...summary, closeness: [{ assetId: 7, pct: -1 }] } },
+    { summary: { ...summary, closeness: [{ assetId: 7, pct: 50, z: 0.5 }] } },
+  ])('S10 refuses the list %j (#859)', (patch) => {
+    const list = { ...list5, ...patch };
+    if (!('summary' in patch)) delete (list as { summary?: unknown }).summary;
+    expect(safeParseTradingSignalsResponse({ ...answer, lists: [list] }).success).toBe(false);
   });
 });
 
