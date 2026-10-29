@@ -7,12 +7,16 @@ import {
   type GateResult,
   type Repo,
   type Rule,
+  HISTORY_MARKERS,
+  LEGACY_RULES_MAX,
+  NEW_RULE_MAX_BYTES,
   NOT_DIRECTORY_NAMES,
   PATH_SHAPED_LITERALS,
   RulesError,
   SKILL_FILE,
   buildCorpus,
   checkIndex,
+  checkNewRules,
   checkNumbering,
   checkRules,
   citesPath,
@@ -315,6 +319,63 @@ describe('index', () => {
     expect(checkNumbering([rule(1, 'core', 'a'), rule(3, 'core', 'b')])).toEqual([
       'numbering: Rule 2 is missing',
     ]);
+  });
+});
+
+describe('new rules', () => {
+  // U18–U19 take the first rule the gate holds, so moving LEGACY_RULES_MAX reddens U20 alone
+  const first = LEGACY_RULES_MAX + 1;
+  const prefix = Buffer.byteLength(rule(first, 'core', '').body, 'utf8');
+
+  it('U18 the limit is 1 536 bytes of the body: 1 536 passes, 1 537 is refused with the size', () => {
+    expect(checkNewRules([rule(first, 'core', 'x'.repeat(1536 - prefix))])).toEqual([]);
+    expect(checkNewRules([rule(first, 'core', 'x'.repeat(1537 - prefix))])).toEqual([
+      `rules/core.md Rule ${first}: 1537 bytes, the limit is 1536`,
+    ]);
+  });
+
+  it('U18b the limit counts bytes, not characters', () => {
+    const errors = checkNewRules([rule(first, 'core', 'ю'.repeat(1000))]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(
+      new RegExp(`^rules/core\\.md Rule ${first}: \\d+ bytes, the limit is \\d+$`),
+    );
+  });
+
+  it.each([
+    ['с #N до #M', 'с #509 до #828: шаг 4c', 'с #509 до #828'],
+    ['удалён', 'колонка удалена миграцией 0078', 'удалена'],
+    ['удалён', 'код удалён', 'удалён'],
+    ['до #N —', 'порог до #631 — только при', 'до #631 —'],
+    ['дата', 'решение владельца 2026-10-17', '2026-10-17'],
+  ])('U19 a history marker is refused: %s', (name, text, match) => {
+    expect(checkNewRules([rule(first, 'trading', text)])).toEqual([
+      `rules/trading.md Rule ${first}: history «${match}» (${name}) belongs in audits.md`,
+    ]);
+  });
+
+  it.each([
+    'удаление чужих строк',
+    'удалённый каталог',
+    '1 до #815: оркестратор',
+    'с #830 пишется только v5',
+    'H1_EXPIRY_SEC 5 с',
+  ])('U19b not history: %s', (text) => {
+    expect(checkNewRules([rule(first, 'trading', text)])).toEqual([]);
+  });
+
+  const everything = `с #509 до #828: код удалён, порог до #631 — решение 2026-10-17. ${'x'.repeat(5000)}`;
+
+  it('U20a Rule 55 is exempt', () => {
+    expect(checkNewRules([rule(55, 'core', everything)])).toEqual([]);
+  });
+
+  it('U20b Rule 56 is held to the template: the size and every marker', () => {
+    const errors = checkNewRules([rule(56, 'core', everything)]);
+    expect(errors).toHaveLength(1 + HISTORY_MARKERS.length);
+    expect(errors[0]).toMatch(/^rules\/core\.md Rule 56: \d+ bytes, the limit is \d+$/);
+    for (const { name } of HISTORY_MARKERS)
+      expect(errors.filter((e) => e.endsWith(`(${name}) belongs in audits.md`))).toHaveLength(1);
   });
 });
 
@@ -761,6 +822,14 @@ describe('the rules in this repository', () => {
     expect(writer).toEqual(expect.arrayContaining([18, 20, 43, 51]));
     expect(shared).toEqual(expect.arrayContaining([18, 51]));
     expect(payments).toContain(33);
+  });
+
+  it('G10 every rule after LEGACY_RULES_MAX fits the template, and the gate is live', () => {
+    expect(checkNewRules(rules)).toEqual([]);
+    const next = LEGACY_RULES_MAX + 1;
+    const errors = checkNewRules([...rules, rule(next, 'core', 'x'.repeat(NEW_RULE_MAX_BYTES))]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(new RegExp(`^rules/core\\.md Rule ${next}: \\d+ bytes`));
   });
 
   it('G4 rule numbers run 1..max without a gap', () => {
