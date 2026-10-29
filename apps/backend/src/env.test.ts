@@ -217,7 +217,7 @@ describe('parseEnv', () => {
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '201', 'must be between 25 and 200'],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '', 'must not be empty'],
     ['H1_SUBMIT_BUDGET_MS', '99', 'must be between 100 and 1000'],
-    // #836: the budget runs after the entry's hold and stays inside the +2 s window
+    // #836: the budget runs after the entry's hold and is at most the entry window's width
     ['H1_SUBMIT_BUDGET_MS', '1001', 'must be between 100 and 1000'],
     ['H1_SUBMIT_BUDGET_MS', '700.5', 'must be an integer'],
     ['H1_SUBMIT_BUDGET_MS', '', 'must not be empty'],
