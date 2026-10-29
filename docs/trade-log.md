@@ -132,7 +132,7 @@ export prints it as stored, the stand reports `unsupported_version`.
 
 | # | Path (`apps/backend/src/h1/driver.ts`) | Ending | Row: `outcome` / `detail` | Test |
 |---|---|---|---|---|
-| D1 | `created: true` | the intent, `submit_not_before_at = closedAtMs + entryDelaySec` and `submit_deadline_at = max(submit_not_before_at, the creation) + H1_SUBMIT_BUDGET_MS` (#836); a wake | `intent` / NULL, in the intent's transaction | H1-DR1, H1-DB1 |
+| D1 | `created: true` | the intent, `submit_not_before_at = closedAtMs + entryDelaySec` and `submit_deadline_at = max(submit_not_before_at, taken_at_ms) + H1_SUBMIT_BUDGET_MS` (#836); a wake | `intent` / NULL, in the intent's transaction | H1-DR1, H1-DB1 |
 | D2 | `created: true` with the decision's INSERT refused | the intent without the link; `warn` `insert_refused` | none | H1-DR13 |
 | D3 | `created: false` (a replay) | the cadence held | none | H1-DR12 |
 | D4 | a stop refusal of `SESSION_INTENT_REFUSALS` | `stopTradingSession` with its reason, the session forgotten | `refused` / the code, after the stop, best-effort (`warn` `h1 driver decision not recorded`) | H1-DR10 |
