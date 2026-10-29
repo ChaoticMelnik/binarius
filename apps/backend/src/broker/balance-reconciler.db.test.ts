@@ -87,12 +87,10 @@ async function linked(
   const token = `balance-token-${mockId}`;
   broker.users.register({ id: mockId, accessToken: token });
   const user = await seedUser(db);
-  const accountId = await seedBrokerAccount(db, user.userId, {
-    brokerUserId: String(mockId),
-    ...patch,
-  });
-  tokenAnswers.set(accountId, { ok: true, accessToken: token });
-  return { ...user, accountId, mockId, token };
+  const brokerUserId = patch.brokerUserId ?? String(mockId);
+  const accountId = await seedBrokerAccount(db, user.userId, { ...patch, brokerUserId });
+  tokenAnswers.set(accountId, { ok: true, accessToken: token, brokerUserId });
+  return { ...user, accountId, mockId, token, brokerUserId };
 }
 
 async function rowOf(accountId: string, db: Db = tmp.db) {
@@ -258,7 +256,7 @@ describe('refresh', () => {
       },
       accessToken: async (accountId, options) => {
         tokenCalls.push({ accountId, options });
-        return { ok: true, accessToken: account.token };
+        return { ok: true, accessToken: account.token, brokerUserId: account.brokerUserId };
       },
       logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
       config: { intervalMs: 60_000, maxPerMinute: 200 },
@@ -277,7 +275,9 @@ describe('refresh', () => {
     let calls = 0;
     tokenAnswers.set(account.accountId, async () => {
       calls += 1;
-      if (calls === 1) return { ok: true, accessToken: account.token };
+      if (calls === 1) {
+        return { ok: true, accessToken: account.token, brokerUserId: account.brokerUserId };
+      }
       throw new Error('report broke');
     });
     lines = [];

@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import * as z from 'zod';
 import {
+  ACCESS_SKEW_MS,
   SESSION_SHARE_SUFFIX,
   SESSION_STATUS_MESSAGE_LOST_SUFFIX,
   SESSION_STATUS_MESSAGE_SUFFIX,
@@ -59,7 +60,6 @@ import {
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import { internalBearerAuth } from '../auth/internal';
-import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
 import {
   H1ReadingUnavailable,

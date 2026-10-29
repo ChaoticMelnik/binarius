@@ -486,7 +486,8 @@ const TIMING_CHAIN_HOLDS =
   // the cache holds a pacer refusal as long as its retryAfterSec
   SIGNAL_PACER_RETRY_SEC * 1000 <= SIGNAL_CACHE_MAX_TTL_MS &&
   // the worker's token route (#90): its longest path is one exchange under the account's row
-  // lock, and the worker waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
+  // lock, or the wait for another caller's flight of the same length (#868), and the worker
+  // waits ACCESS_TOKEN_ROUTE_BUDGET_MS for it
   BROKER_HTTP_TIMEOUT_MS < ACCESS_TOKEN_ROUTE_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the cashier's widget session (#11): an exchange, then the broker call, inside the contract

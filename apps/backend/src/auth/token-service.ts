@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import {
+  ACCESS_SKEW_MS,
   AuthRevokedReason,
   BrokerAccountStatus,
   UserStatus,
@@ -12,11 +13,13 @@ import {
   hashToken,
   lockAccountForRefresh,
   markAccessTokenExpired,
+  readAccountForToken,
   readUserStatus,
   revokeAccount,
   revokeAccountIfUnchanged,
   TokenCipherError,
   type Db,
+  type BrokerAccountRow,
   type TokenCipher,
   type Tx,
 } from '@binarius/db';
@@ -30,11 +33,10 @@ import {
 // refresh tokens live 90 days; past that the broker would refuse the exchange anyway, and
 // asking would burn the token we still hold
 const REFRESH_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
-// renew a little before expiry, so a token handed out now is still valid when it is used
-export const ACCESS_SKEW_MS = 60_000;
 
 export type AccessTokenResult =
-  | { ok: true; accessToken: string }
+  // brokerUserId: the account row's, read with the token (#868)
+  | { ok: true; accessToken: string; brokerUserId: string }
   | { ok: false; reason: 'account_not_found' }
   // blocked under the lock: nothing decrypted, exchanged or revoked; blocked by the time the
   // exchange answered: the rotated pair is stored (the old one is spent), no token handed out,
@@ -72,7 +74,8 @@ interface ExchangedPair {
 export interface AccessTokenOptions {
   // false: never exchange the refresh token here, and never revoke for its age either — a caller
   // nobody is waiting on (the background balance refresh) must not change the account. Decided
-  // under the row lock, by the same clock and comparison as the exchange itself.
+  // on the fast read and under the row lock, by the same clock and comparison as the exchange
+  // itself.
   mayRefresh?: boolean;
   // sha256 (hashToken) of an access token the broker refused. Compared with the stored token
   // under the row lock: a match marks it expired and the decision goes on as for an expired
@@ -80,24 +83,125 @@ export interface AccessTokenOptions {
   // (#281)
   refusedToken?: string | undefined;
   // Both read only when mayRefresh is not false (#391, docs/service-accounts.md).
-  // serviceOnly: the row must be a service account (service_since set), checked under the row
-  // lock; any other row is refused with not_service before anything is decrypted. This is what
+  // serviceOnly: the row must be a service account (service_since set), checked on the fast read
+  // and under the row lock; any other row is refused with not_service before anything is decrypted. This is what
   // keeps a timer's exchange to the service accounts alone (Rule 12's exception).
   serviceOnly?: true;
   // how long before its expiry a token is exchanged, in place of ACCESS_SKEW_MS
   renewAheadMs?: number;
 }
 
-// Returns a usable access token for the account, refreshing it when needed.
+// Returns a usable access token for the account, refreshing it when needed (docs/binodex-oauth.md
+// -> Refresh, The fast path and the flights).
 //
-// The whole decision runs under one row lock, which makes the refresh single-flight per
-// account: a second caller waits and then finds a fresh token instead of exchanging a token
-// the first caller has already consumed. Revocation is committed by the transaction and only
-// then reported — throwing inside it would roll the revocation back.
+// A valid token with nothing to write is served by one statement, without a transaction or a
+// lock. Anything else is decided under the account's row lock, which makes an exchange
+// single-flight across processes; within this process one caller per account at a time goes
+// there (its flight), and a caller that finds a flight waits for it and then decides again on
+// its own read, never taking the flight's result: the policies differ, and after an exchange its
+// own read finds the fresh token without the lock. Revocation is committed by the transaction and
+// only then reported — throwing inside it would roll the revocation back.
 export async function ensureFreshAccessToken(
   deps: TokenServiceDeps,
   accountId: string,
   options: AccessTokenOptions = {},
+): Promise<AccessTokenResult> {
+  for (;;) {
+    // a refused token always goes under the lock: it may mark the stored one expired
+    const fast =
+      options.refusedToken === undefined
+        ? await readStoredToken(deps, accountId, options)
+        : undefined;
+    if (fast !== undefined) return fast;
+    const flight = flights.get(accountId);
+    if (flight === undefined) return runFlight(deps, accountId, options);
+    await flight;
+  }
+}
+
+// One entry per account while its flight runs. The stored promise never rejects: a throw reaches
+// the flight's own caller, and the callers waiting on it decide again.
+const flights = new Map<string, Promise<void>>();
+const noop = (): void => {};
+
+async function runFlight(
+  deps: TokenServiceDeps,
+  accountId: string,
+  options: AccessTokenOptions,
+): Promise<AccessTokenResult> {
+  const run = decideUnderLock(deps, accountId, options);
+  flights.set(accountId, run.then(noop, noop));
+  try {
+    return await run;
+  } finally {
+    flights.delete(accountId);
+  }
+}
+
+// The same checks in the same order as refreshUnderLock, up to the first that needs a write or
+// the lock; undefined is a miss, and the path under the lock gives the answer. Only a valid token
+// is answered here, so every refusal and every write stays under the lock.
+async function readStoredToken(
+  deps: TokenServiceDeps,
+  accountId: string,
+  options: AccessTokenOptions,
+): Promise<AccessTokenResult | undefined> {
+  const { cipher } = deps;
+  const account = await readAccountForToken(deps.db, accountId);
+  if (
+    account === undefined ||
+    account.userStatus === UserStatus.Blocked ||
+    account.status !== BrokerAccountStatus.Active ||
+    notService(account, options) ||
+    account.tokenKeyId !== cipher.keyId ||
+    // a row linked before the hash column existed gets it filled in under the lock
+    account.refreshTokenHash === null
+  ) {
+    return undefined;
+  }
+  // a ciphertext that fails to decrypt is revoked under the lock, which also logs it
+  const refreshToken = decryptOrUndefined(cipher, account, TokenField.Refresh);
+  if (refreshToken === undefined || hashToken(refreshToken) !== account.refreshTokenHash) {
+    return undefined;
+  }
+  if (account.accessTokenExpiresAt.getTime() <= Date.now() + renewAheadOf(options)) {
+    return undefined;
+  }
+  const accessToken = decryptOrUndefined(cipher, account, TokenField.Access);
+  if (accessToken === undefined) return undefined;
+  return { ok: true, accessToken, brokerUserId: account.brokerUserId };
+}
+
+function decryptOrUndefined(
+  cipher: TokenCipher,
+  account: BrokerAccountRow,
+  field: TokenField,
+): string | undefined {
+  try {
+    return cipher.decrypt(
+      field === TokenField.Refresh ? account.refreshTokenEnc : account.accessTokenEnc,
+      { accountId: account.id, field },
+    );
+  } catch (error) {
+    if (!(error instanceof TokenCipherError)) throw error;
+    return undefined;
+  }
+}
+
+function notService(account: BrokerAccountRow, options: AccessTokenOptions): boolean {
+  return (
+    options.mayRefresh !== false && options.serviceOnly === true && account.serviceSince === null
+  );
+}
+
+function renewAheadOf(options: AccessTokenOptions): number {
+  return options.mayRefresh === false ? ACCESS_SKEW_MS : (options.renewAheadMs ?? ACCESS_SKEW_MS);
+}
+
+async function decideUnderLock(
+  deps: TokenServiceDeps,
+  accountId: string,
+  options: AccessTokenOptions,
 ): Promise<AccessTokenResult> {
   // set inside the transaction, read after it: the exchange is the point of no return, and a
   // failure raised by the COMMIT itself is never visible to code running inside the callback
@@ -132,13 +236,7 @@ async function refreshUnderLock(
   if (account.status !== BrokerAccountStatus.Active) {
     return { ok: false, reason: 'account_revoked', revokedReason: account.authRevokedReason };
   }
-  if (
-    options.mayRefresh !== false &&
-    options.serviceOnly === true &&
-    account.serviceSince === null
-  ) {
-    return { ok: false, reason: 'not_service' };
-  }
+  if (notService(account, options)) return { ok: false, reason: 'not_service' };
 
   // Another key id means another process owns this row — during a key rollout both run at
   // once. Declining to serve it is the only safe answer: revoking here would let a process
@@ -174,9 +272,7 @@ async function refreshUnderLock(
     return revoked(tx, account.id, AuthRevokedReason.StorageInconsistent);
   }
 
-  const renewAheadMs =
-    options.mayRefresh === false ? ACCESS_SKEW_MS : (options.renewAheadMs ?? ACCESS_SKEW_MS);
-  if (account.accessTokenExpiresAt.getTime() > Date.now() + renewAheadMs) {
+  if (account.accessTokenExpiresAt.getTime() > Date.now() + renewAheadOf(options)) {
     // decrypted only on the branch that returns it: a refresh must not depend on the access
     // ciphertext, which it is about to replace anyway
     let accessToken: string;
@@ -208,7 +304,7 @@ async function refreshUnderLock(
       if (account.refreshTokenHash === null) {
         await backfillRefreshTokenHash(tx, account.id, hashToken(refreshToken));
       }
-      return { ok: true, accessToken };
+      return { ok: true, accessToken, brokerUserId: account.brokerUserId };
     }
   }
 
@@ -255,7 +351,7 @@ async function refreshUnderLock(
   if ((await readUserStatus(tx, account.userId)) === UserStatus.Blocked) {
     return { ok: false, reason: 'user_blocked' };
   }
-  return { ok: true, accessToken: tokens.accessToken };
+  return { ok: true, accessToken: tokens.accessToken, brokerUserId: account.brokerUserId };
 }
 
 // Second transaction, because the first one is gone: it rolled back holding the only copy of a

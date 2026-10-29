@@ -3,7 +3,12 @@ import { Queue } from 'bullmq';
 import type { Redis } from 'ioredis';
 import type { Pool } from 'pg';
 import type pino from 'pino';
-import { closeAll, TRADING_INTENTS_DEAD_LETTER_QUEUE } from '@binarius/shared';
+import {
+  ACCESS_TOKEN_CACHE_MAX_ENTRIES,
+  ACCESS_TOKEN_CACHE_TTL_MS,
+  closeAll,
+  TRADING_INTENTS_DEAD_LETTER_QUEUE,
+} from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
 import {
   acquireSessionLease,
@@ -22,7 +27,11 @@ import {
   type Db,
 } from '@binarius/db';
 import type { BrokerSocketTiming } from '@binarius/broker-socket';
-import { createBackendAccessTokenSource, type AccessTokenSource } from './broker/access-token';
+import {
+  createBackendAccessTokenSource,
+  createCachedAccessTokenSource,
+  type AccessTokenSource,
+} from './broker/access-token';
 import { SESSION_MANAGER_CONFIG, type SessionManagerConfig } from './broker/session-config';
 import { createBrokerSessionManager } from './broker/session-manager';
 import { noTradeSessions } from './broker/trade-session';
@@ -176,15 +185,19 @@ export function createWorker({
   const prefix = testing.queuePrefix === undefined ? {} : { prefix: testing.queuePrefix };
 
   // The broker's REST API for the trade lists and the REST open, and the backend's token route for
-  // the token: the worker holds no broker credentials of its own (#90)
+  // the token: the worker holds no broker credentials of its own (#90). The route's ok answers are
+  // cached for a short while (#868); a test's source is not wrapped, it counts its own calls.
   const brokerRest = createBrokerRestClient({ baseUrl: env.brokerApiBaseUrl, logger });
   const tokens =
     testing.tokens ??
-    createBackendAccessTokenSource({
-      baseUrl: env.backendUrl,
-      token: env.internalApiToken,
-      logger,
-    });
+    createCachedAccessTokenSource(
+      createBackendAccessTokenSource({
+        baseUrl: env.backendUrl,
+        token: env.internalApiToken,
+        logger,
+      }),
+      { ttlMs: ACCESS_TOKEN_CACHE_TTL_MS, maxEntries: ACCESS_TOKEN_CACHE_MAX_ENTRIES },
+    );
 
   // the trading sessions (docs/trading-session.md): their pairs catalog comes from the backend.
   // Built ahead of the writers below: every write here that ends an intent or halts its account

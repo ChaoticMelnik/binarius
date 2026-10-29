@@ -1,7 +1,7 @@
-import { eq } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 import { BrokerRestError, type BrokerRestClient } from '@binarius/broker-rest';
 import {
+  ACCESS_SKEW_MS,
   AccessTokenRefusal,
   BALANCE_WATCH_WINDOW_MS,
   BROKER_BALANCE_SLA_SEC,
@@ -11,7 +11,6 @@ import {
 } from '@binarius/shared';
 import {
   BalanceRefreshError,
-  brokerAccounts,
   hashToken,
   listBalanceRefreshCandidates,
   recordBalanceRefreshFailure,
@@ -19,11 +18,7 @@ import {
   upsertBalanceSnapshot,
   type Db,
 } from '@binarius/db';
-import {
-  ACCESS_SKEW_MS,
-  type AccessTokenOptions,
-  type AccessTokenResult,
-} from '../auth/token-service';
+import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { BALANCE_POLL_CONCURRENCY, BALANCE_STALLED_RETRY_MS } from '../timing';
 
 // The REST side of the broker balance snapshot (docs/broker-balance.md): one refresh per account
@@ -124,7 +119,8 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
   // budget is shorter than an exchange; the user's next call exchanges it. The answer changes
   // nothing here, and a throw must not turn the recorded 401 into a throw. ensureFreshAccessToken
   // takes no signal: an attempt already stopped (stop(), the route's budget) skips the report, and
-  // one under way waits at most for another caller's exchange on the row lock.
+  // one under way waits at most for another caller's exchange, on the row lock or on that
+  // caller's flight.
   async function reportRefused(
     accountId: string,
     accessToken: string,
@@ -179,12 +175,6 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
           return assertExhausted(token, 'access token refusal');
       }
     }
-    // before the GET: a missing account must not spend a call counted against the rate limit
-    const [account] = await db
-      .select({ brokerUserId: brokerAccounts.brokerUserId })
-      .from(brokerAccounts)
-      .where(eq(brokerAccounts.id, accountId));
-    if (account === undefined) return { outcome: 'account_not_found', marked: false };
     if (signal.aborted) return { outcome: 'aborted', marked: false };
 
     let user;
@@ -209,9 +199,9 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
       return fail(accountId, BROKER_FAILURE[error.code]);
     }
 
-    if (account.brokerUserId !== user.id) {
+    if (token.brokerUserId !== user.id) {
       logger.warn(
-        { accountId, expected: account.brokerUserId, received: user.id },
+        { accountId, expected: token.brokerUserId, received: user.id },
         'broker answered for another user, balance not stored',
       );
       return fail(accountId, BalanceRefreshError.AccountMismatch);

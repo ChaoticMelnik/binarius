@@ -333,7 +333,11 @@ function harness(
       calls.push({ accountId, options: tokenOptions });
       const answer = answers.get(accountId);
       if (answer !== undefined) return answer(tokenOptions);
-      return Promise.resolve({ ok: true, accessToken: TOKENS[accountId] ?? 'SECRET-unknown' });
+      return Promise.resolve({
+        ok: true,
+        accessToken: TOKENS[accountId] ?? 'SECRET-unknown',
+        brokerUserId: 'broker-user',
+      });
     },
     catalog: { read: () => catalog.view },
     openClient: options.openClient ?? openReal,
@@ -805,7 +809,9 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
       const fakes = fakeClients(by({ [ACC2.id]: Authenticating }));
       const h = harness({ accounts: [...accounts], openClient: fakes.openClient });
       await h.manager.tick();
-      h.answers.set(ACC1.id, () => Promise.resolve({ ok: true, accessToken: 'SECRET-token-1b' }));
+      h.answers.set(ACC1.id, () =>
+        Promise.resolve({ ok: true, accessToken: 'SECRET-token-1b', brokerUserId: 'broker-user' }),
+      );
       fakes.made[0]?.fire(state);
       expect(fakes.made[0]?.stops).toBe(1);
       once(h, 'failover', { from: ACC1.id, reason: state, heldBack: false });
@@ -832,7 +838,7 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     h.answers.set(ACC1.id, (options) =>
       Promise.resolve(
         options.refusedToken === undefined
-          ? { ok: true, accessToken: 'SECRET-token-1c' }
+          ? { ok: true, accessToken: 'SECRET-token-1c', brokerUserId: 'broker-user' }
           : { ok: false, reason: 'not_service' },
       ),
     );
@@ -865,7 +871,7 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
         { accountId: ACC1.id, options: reporting(TOKEN_1) },
       ]);
 
-      answer.resolve({ ok: true, accessToken: 'SECRET-token-1b' });
+      answer.resolve({ ok: true, accessToken: 'SECRET-token-1b', brokerUserId: 'broker-user' });
       await settled();
       expect(fakes.made[2]?.starts).toEqual(['SECRET-token-1b']);
       expect(fakes.made[2]?.subscribeCalls).toEqual([]);
@@ -890,7 +896,9 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     const h = harness({ openClient: fakes.openClient });
     await h.manager.tick();
     const [active, reserve] = fakes.made;
-    h.answers.set(ACC2.id, () => Promise.resolve({ ok: true, accessToken: 'SECRET-token-2b' }));
+    h.answers.set(ACC2.id, () =>
+      Promise.resolve({ ok: true, accessToken: 'SECRET-token-2b', brokerUserId: 'broker-user' }),
+    );
     reserve?.fire(TokenExpired);
     once(h, 'reserve stopped', { accountId: ACC2.id, reason: TokenExpired, heldBack: false });
     expect(h.calls.at(-1)).toEqual({ accountId: ACC2.id, options: reporting(TOKEN_2) });
@@ -916,7 +924,11 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     await h.manager.tick();
     const tokens = ['SECRET-token-1b', 'SECRET-token-1c'];
     h.answers.set(ACC1.id, () =>
-      Promise.resolve({ ok: true, accessToken: tokens.shift() ?? 'SECRET-token-1d' }),
+      Promise.resolve({
+        ok: true,
+        accessToken: tokens.shift() ?? 'SECRET-token-1d',
+        brokerUserId: 'broker-user',
+      }),
     );
     fakes.made[0]?.fire(TokenExpired);
     await settled();
@@ -950,7 +962,7 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
       await settled();
       const stopped = h.manager.stop();
       list.resolve([ACC1]);
-      answer.resolve({ ok: true, accessToken: TOKEN_1 });
+      answer.resolve({ ok: true, accessToken: TOKEN_1, brokerUserId: 'broker-user' });
       await stopped;
       await settled();
       expect(fakes.made).toEqual([]);
@@ -1054,7 +1066,9 @@ describe('the market data manager and a refused token (#404, decision 7a)', () =
     const fakes = fakeClients();
     const h = harness({ accounts: [ACC1], openClient: fakes.openClient });
     await h.manager.tick();
-    h.answers.set(ACC1.id, () => Promise.resolve({ ok: true, accessToken: 'SECRET-token-1b' }));
+    h.answers.set(ACC1.id, () =>
+      Promise.resolve({ ok: true, accessToken: 'SECRET-token-1b', brokerUserId: 'broker-user' }),
+    );
     fakes.made[0]?.fire(TokenExpired);
     await settled();
     expect(fakes.made[1]?.starts).toEqual(['SECRET-token-1b']);
@@ -1156,7 +1170,7 @@ describe('the market data manager against the account list (#404, R1)', () => {
       'not_working',
     ]);
     expect(subscribed(fakes.made[1])).toEqual([IDS]);
-    answer.resolve({ ok: true, accessToken: 'SECRET-token-1b' });
+    answer.resolve({ ok: true, accessToken: 'SECRET-token-1b', brokerUserId: 'broker-user' });
     await settled();
     expect(fakes.made).toHaveLength(2);
     expect(h.line()).toMatchObject({ active: { accountId: ACC2.id }, reserve: null });
@@ -1249,7 +1263,7 @@ describe('the market data manager and a slot out of ready (#404, R2, R3)', () =>
       await until('the promotion', () => h.logs('market data reserve promoted').length === 1);
       once(h, 'failover', { from: ACC1.id, reason: 'not_ready', heldBack: false });
       expect(subscribed(reserve)).toEqual([IDS]);
-      answer.resolve({ ok: true, accessToken: TOKEN_1 });
+      answer.resolve({ ok: true, accessToken: TOKEN_1, brokerUserId: 'broker-user' });
       await until('the reserve on account 1', () => readyOn(h.line().reserve, ACC1));
       const old = fakes.made.filter((client) => client.label === ACC1.id);
       // a start in flight opens no client of its own: its answer goes to the new reserve only

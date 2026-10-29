@@ -7,7 +7,11 @@ import {
   composeServiceValue,
 } from '@binarius/shared/testing';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
-import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
+import {
+  ACCESS_SKEW_MS,
+  ACCESS_TOKEN_CACHE_TTL_MS,
+  ACCESS_TOKEN_ROUTE_BUDGET_MS,
+} from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
   BROKER_SOCKET_COMMAND_TIMEOUT_MS,
@@ -129,6 +133,11 @@ describe('timing constants', () => {
       BALANCE_CHECK_TIMEOUT_MS,
     );
     expect(BALANCE_CHECK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
+  it("keeps the worker's token cache inside the backend's renew-ahead skew (#868)", () => {
+    expect(ACCESS_TOKEN_CACHE_TTL_MS).toBeLessThan(ACCESS_SKEW_MS);
+    expect(isTimerMs(ACCESS_TOKEN_CACHE_TTL_MS)).toBe(true);
   });
 
   // #313: a 5 s trade with no close event settles by grace + one tick, not minutes later

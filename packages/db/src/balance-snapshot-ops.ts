@@ -306,7 +306,8 @@ export interface BalanceRefreshCandidatesOptions {
   watchWindowMs: number;
   // only accounts whose access token outlives now() + this: the background refresh never needs
   // a token exchange; ensureFreshAccessToken with mayRefresh: false still refuses one under the
-  // row lock (apps/backend/src/auth/token-service.ts)
+  // row lock (apps/backend/src/auth/token-service.ts; the fast path never hands out one either:
+  // the same comparison)
   accessSkewMs: number;
   limit: number;
   // accounts the caller holds back for now (the reconciler's attempts that left no row to mark)

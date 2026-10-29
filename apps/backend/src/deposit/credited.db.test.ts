@@ -83,8 +83,8 @@ const lines: string[] = [];
 const extraApps: FastifyInstance[] = [];
 // every refresh the main app asked the real reconciler for, with its options
 const refreshCalls: { accountId: string; options: BalanceRefreshOptions | undefined }[] = [];
-// the access token per account, as ensureFreshAccessToken would hand it out
-const tokens = new Map<string, string>();
+// the access token and the broker user per account, as ensureFreshAccessToken would hand them out
+const tokens = new Map<string, { accessToken: string; brokerUserId: string }>();
 
 let mockSeq = 0;
 // a user with one active account the mock broker knows, holding `real` on its real balance
@@ -93,7 +93,7 @@ async function payer(real = '1234.50', status: UserStatus = UserStatus.Active) {
   broker.users.register({ id: mockId, accessToken: `token-${mockId}`, real: { available: real } });
   const user = await seedUser(tmp.db, { status });
   const accountId = await seedBrokerAccount(tmp.db, user.userId, { brokerUserId: String(mockId) });
-  tokens.set(accountId, `token-${mockId}`);
+  tokens.set(accountId, { accessToken: `token-${mockId}`, brokerUserId: String(mockId) });
   return { ...user, accountId };
 }
 
@@ -233,7 +233,7 @@ beforeAll(async () => {
       return Promise.resolve(
         token === undefined
           ? { ok: false, reason: 'account_not_found' as const }
-          : { ok: true, accessToken: token },
+          : { ok: true, ...token },
       );
     },
     logger: Fastify({ logger: false }).log,

@@ -106,6 +106,7 @@ function fakeAccessToken(
   ) => AccessTokenResult | Promise<AccessTokenResult> = () => ({
     ok: true,
     accessToken: TOKEN,
+    brokerUserId: 'broker-user',
   }),
 ) {
   const calls: Call[] = [];
@@ -192,7 +193,9 @@ describe('the keeper renews the due service tokens', () => {
     const a = await serviceAccount({ expiresInHours: 1 });
     await serviceAccount({ expiresInHours: 2 });
     const token = fakeAccessToken((_id, call) =>
-      call === 1 ? { ok: false, reason: 'refresh_rate_limited' } : { ok: true, accessToken: TOKEN },
+      call === 1
+        ? { ok: false, reason: 'refresh_rate_limited' }
+        : { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' },
     );
     const { instance } = keeper({ accessToken: token });
     await instance.tick();
@@ -205,7 +208,9 @@ describe('the keeper renews the due service tokens', () => {
     const a = await serviceAccount({ expiresInHours: 1 });
     const b = await serviceAccount({ expiresInHours: 2 });
     const token = fakeAccessToken((id) =>
-      id === a ? { ok: false, reason: 'key_unavailable' } : { ok: true, accessToken: TOKEN },
+      id === a
+        ? { ok: false, reason: 'key_unavailable' }
+        : { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' },
     );
     const { instance } = keeper({ accessToken: token });
     await instance.tick();
@@ -227,7 +232,7 @@ describe('the keeper renews the due service tokens', () => {
     const failure = Object.assign(new Error('relation "secret" does not exist'), { code: '42P01' });
     const token = fakeAccessToken((id) => {
       if (id === a) throw failure;
-      return { ok: true, accessToken: TOKEN };
+      return { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' };
     });
     const { instance, logger } = keeper({ accessToken: token });
     await instance.tick();
@@ -385,7 +390,7 @@ describe('the keeper as a loop', () => {
     const token = fakeAccessToken(async () => {
       entered?.();
       await held;
-      return { ok: true, accessToken: TOKEN };
+      return { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' };
     });
     const { instance, notify } = keeper({ accessToken: token });
     const ticking = instance.tick();
@@ -436,7 +441,7 @@ describe('the keeper as a loop', () => {
     });
     const token = fakeAccessToken(async () => {
       await held;
-      return { ok: true, accessToken: TOKEN };
+      return { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' };
     });
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const { instance } = keeper({ accessToken: token });

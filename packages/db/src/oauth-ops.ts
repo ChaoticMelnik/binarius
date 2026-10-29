@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, getTableColumns, isNull, sql } from 'drizzle-orm';
 import {
   addressOrNull,
   AuthRevokedReason,
@@ -290,6 +290,22 @@ async function upsertUser(tx: Tx, telegramUserId: bigint): Promise<{ id: string 
     .for('no key update');
   if (raced === undefined) throw new Error('user vanished between insert and re-read');
   return raced.status === UserStatus.Blocked ? undefined : { id: raced.id };
+}
+
+// The token service's fast path (#868): the account and its user's status in one statement, no
+// transaction and no lock. Joining users here is sound where it is not for lockAccountForRefresh
+// below: nothing is waited for, so the statement's snapshot is the current committed state (#239
+// is about a lock wait between the snapshot and the grant).
+export async function readAccountForToken(
+  db: Db,
+  accountId: string,
+): Promise<(BrokerAccountRow & { userStatus: UserStatus }) | undefined> {
+  const [row] = await db
+    .select({ ...getTableColumns(brokerAccounts), userStatus: users.status })
+    .from(brokerAccounts)
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(eq(brokerAccounts.id, accountId));
+  return row;
 }
 
 // users is read, not locked: locking it here would invert users → broker_accounts (Rule 5), and

@@ -1,16 +1,20 @@
 import { randomBytes } from 'node:crypto';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { eq, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
+import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   brokerAccounts,
   users,
   confirmBrokerAccount,
+  createDb,
   createTokenCipher,
   hashToken,
   linkBrokerAccount,
   TokenField,
   type BrokerAccountRow,
+  type Db,
 } from '@binarius/db';
 import {
   brokerAccountRow,
@@ -239,6 +243,34 @@ const expireAccessToken = (id: string) =>
     .set({ accessTokenExpiresAt: sql`now() - interval '1 minute'` })
     .where(eq(brokerAccounts.id, id));
 
+// an expired account whose tokens came from a stub of its own, so its exchange can be held
+// there while the account row stays locked
+async function slowExpiredAccount(slow: OAuthStub) {
+  const patient = createBrokerOAuthClient({
+    baseUrl: slow.url,
+    clientId: CLIENT_ID,
+    clientSecret: CLIENT_SECRET,
+    timeoutMs: 5_000,
+  });
+  const n = ++seq;
+  const tokens = await patient.exchangeCode({
+    code: slow.issueCode({ brokerUserId: `svc-broker-${n}` }),
+    redirectUri: REDIRECT_URI,
+  });
+  const linked = await linkBrokerAccount(tmp.db, {
+    telegramUserId: BigInt(900_000 + n),
+    tokens,
+    cipher,
+    activate: true,
+  });
+  if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
+  await expireAccessToken(linked.account.id);
+  return { patient, account: linked.account };
+}
+
+const startSlowStub = () =>
+  startOAuthStub({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, redirectUri: REDIRECT_URI });
+
 describe('ensureFreshAccessToken', () => {
   it('returns the stored token while it is still valid, without calling the broker', async () => {
     const account = await linkedAccount();
@@ -250,6 +282,7 @@ describe('ensureFreshAccessToken', () => {
         accountId: account.id,
         field: TokenField.Access,
       }),
+      brokerUserId: account.brokerUserId,
     });
     expect(stub.tokenRequests).toBe(before);
   });
@@ -734,34 +767,6 @@ describe('ensureFreshAccessToken for a blocked user', () => {
     await untouched(account);
   });
 
-  // an expired account whose tokens came from a stub of its own, so its exchange can be held
-  // there while the account row stays locked
-  async function slowExpiredAccount(slow: OAuthStub) {
-    const patient = createBrokerOAuthClient({
-      baseUrl: slow.url,
-      clientId: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      timeoutMs: 5_000,
-    });
-    const n = ++seq;
-    const tokens = await patient.exchangeCode({
-      code: slow.issueCode({ brokerUserId: `svc-broker-${n}` }),
-      redirectUri: REDIRECT_URI,
-    });
-    const linked = await linkBrokerAccount(tmp.db, {
-      telegramUserId: BigInt(900_000 + n),
-      tokens,
-      cipher,
-      activate: true,
-    });
-    if (!linked.ok) throw new Error(`link failed: ${linked.reason}`);
-    await expireAccessToken(linked.account.id);
-    return { patient, account: linked.account };
-  }
-
-  const startSlowStub = () =>
-    startOAuthStub({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, redirectUri: REDIRECT_URI });
-
   it('does not lock the users row while it holds the account', async () => {
     const slow = await startSlowStub();
     let refreshing: Promise<unknown> | undefined;
@@ -786,9 +791,10 @@ describe('ensureFreshAccessToken for a blocked user', () => {
   });
 
   // #239: a statement that joins users while it waits for the account lock keeps the users row
-  // of its own snapshot, so the block committed during the wait would go unseen
+  // of its own snapshot, so the block committed during the wait would go unseen. Expired: a valid
+  // token is served by the fast path without waiting for the lock (#868, F1)
   it('B1 sees a block committed while it waited for the account lock', async () => {
-    const account = await linkedAccount();
+    const account = await expiredAccount();
     const before = stub.tokenRequests;
     const holder = await tmp.pool.connect();
     let refreshing: Promise<unknown> | undefined;
@@ -931,7 +937,7 @@ describe('ensureFreshAccessToken with a refused token (#281)', () => {
           mayRefresh,
           refusedToken: hashToken('another-token'),
         }),
-      ).toEqual({ ok: true, accessToken: storedOf(account) });
+      ).toEqual({ ok: true, accessToken: storedOf(account), brokerUserId: account.brokerUserId });
       const row = await rowOf(account.id);
       expect(row.accessTokenExpiresAt).toEqual(account.accessTokenExpiresAt);
       expect(row.updatedAt).toEqual(account.updatedAt);
@@ -1087,7 +1093,11 @@ describe('ensureFreshAccessToken for the service-account keeper (#391)', () => {
 
     requests = stub.tokenRequests;
     const kept = await ensureFreshAccessToken(deps(), outside.id, options);
-    expect(kept).toEqual({ ok: true, accessToken: accessOf(outside) });
+    expect(kept).toEqual({
+      ok: true,
+      accessToken: accessOf(outside),
+      brokerUserId: outside.brokerUserId,
+    });
     expect(stub.tokenRequests).toBe(requests);
     expect((await rowOf(outside.id)).accessTokenEnc).toEqual(outside.accessTokenEnc);
   });
@@ -1128,7 +1138,230 @@ describe('ensureFreshAccessToken for the service-account keeper (#391)', () => {
         serviceOnly: true,
         renewAheadMs: RENEW_AHEAD_MS,
       }),
-    ).toEqual({ ok: true, accessToken: accessOf(account) });
+    ).toEqual({ ok: true, accessToken: accessOf(account), brokerUserId: account.brokerUserId });
     expect(stub.tokenRequests).toBe(requests);
+  });
+});
+
+// #868 (docs/binodex-oauth.md -> The fast path and the flights)
+describe('the fast path and the flights (#868)', () => {
+  const accessOf = (row: BrokerAccountRow) =>
+    cipher.decrypt(row.accessTokenEnc, { accountId: row.id, field: TokenField.Access });
+  const granted = (row: BrokerAccountRow) => ({
+    ok: true,
+    accessToken: accessOf(row),
+    brokerUserId: row.brokerUserId,
+  });
+
+  // the statements a db sends, in order; drizzle logs begin and commit as statements too
+  const logged = (pool: Pool, queries: string[]): Db =>
+    createDb(pool, { logger: { logQuery: (query) => void queries.push(query) } });
+  const begins = (queries: string[]) => queries.filter((query) => query === 'begin').length;
+
+  // a joiner's own pool of one client: idle again only once the joiner's read has returned, so a
+  // test knows it is waiting on the flight and not still reading
+  const pools: Pool[] = [];
+  function joiner(queries: string[]) {
+    const pool = new Pool({ connectionString: tmp.url, max: 1 });
+    pools.push(pool);
+    const sent = queries.length;
+    return {
+      db: logged(pool, queries),
+      readDone: () => queries.length > sent && pool.totalCount === 1 && pool.idleCount === 1,
+    };
+  }
+  afterAll(async () => {
+    await Promise.all(pools.map((pool) => pool.end()));
+  });
+
+  async function holdRow(accountId: string) {
+    const holder = await tmp.pool.connect();
+    await holder.query('begin');
+    await holder.query('select 1 from broker_accounts where id = $1 for no key update', [
+      accountId,
+    ]);
+    return {
+      commit: () => holder.query('commit'),
+      release: async () => {
+        await holder.query('rollback').catch(() => undefined);
+        holder.release();
+      },
+    };
+  }
+
+  const blockedAfter = <T>(call: Promise<T>, ms: number) =>
+    Promise.race([call, sleep(ms).then(() => 'blocked' as const)]);
+
+  it('F1 serves a valid token by one statement, without a transaction, while another connection holds the row', async () => {
+    const account = await linkedAccount();
+    const queries: string[] = [];
+    const before = stub.tokenRequests;
+    const holder = await holdRow(account.id);
+    let call: Promise<unknown> | undefined;
+    try {
+      call = ensureFreshAccessToken(deps({ db: logged(tmp.pool, queries) }), account.id);
+      expect(await blockedAfter(call, 1_000)).toEqual(granted(account));
+      expect(queries).toHaveLength(1);
+      expect(queries[0]).toMatch(/^select /);
+      expect(queries[0]).not.toContain('for no key update');
+      expect(stub.tokenRequests).toBe(before);
+    } finally {
+      await holder.release();
+      await call?.catch(() => undefined);
+    }
+  });
+
+  it('F2 sends a token inside ACCESS_SKEW_MS under the lock', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ accessTokenExpiresAt: sql`now() + interval '30 seconds'` })
+      .where(eq(brokerAccounts.id, account.id));
+    const queries: string[] = [];
+    expect(
+      await ensureFreshAccessToken(deps({ db: logged(tmp.pool, queries) }), account.id, {
+        mayRefresh: false,
+      }),
+    ).toEqual({ ok: false, reason: 'refresh_needed' });
+    expect(queries.some((query) => query.includes('for no key update'))).toBe(true);
+  });
+
+  it('K2 answers key_unavailable for a valid token under another key, nothing written', async () => {
+    const account = await linkedAccount();
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ tokenKeyId: 'rotated-key' })
+      .where(eq(brokerAccounts.id, account.id));
+    const before = await rowOf(account.id);
+    const requests = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toEqual({
+      ok: false,
+      reason: 'key_unavailable',
+    });
+    expect(await rowOf(account.id)).toEqual(before);
+    expect(stub.tokenRequests).toBe(requests);
+  });
+
+  it('V7 answers not_service for an unmarked row with a valid token, nothing decrypted', async () => {
+    const decrypt = vi.fn(cipher.decrypt);
+    const account = await linkedAccount();
+    const before = await rowOf(account.id);
+    const requests = stub.tokenRequests;
+    expect(
+      await ensureFreshAccessToken(deps({ cipher: { ...cipher, decrypt } }), account.id, {
+        mayRefresh: true,
+        serviceOnly: true,
+      }),
+    ).toEqual({ ok: false, reason: 'not_service' });
+    expect(decrypt).not.toHaveBeenCalled();
+    expect(await rowOf(account.id)).toEqual(before);
+    expect(stub.tokenRequests).toBe(requests);
+  });
+
+  it('S1 two callers on an expired token: one exchange, one transaction, the joiner holds no lock', async () => {
+    const slow = await startSlowStub();
+    const queries: string[] = [];
+    let first: Promise<unknown> | undefined;
+    let second: Promise<unknown> | undefined;
+    try {
+      const { patient, account } = await slowExpiredAccount(slow);
+      const before = slow.tokenRequests;
+      slow.hang = true;
+      first = ensureFreshAccessToken(
+        deps({ db: logged(tmp.pool, queries), broker: patient }),
+        account.id,
+      );
+      await until('the exchange to reach the stub', () => slow.pendingHangs === 1);
+      const late = joiner(queries);
+      second = ensureFreshAccessToken(deps({ db: late.db, broker: patient }), account.id);
+      await until("the joiner's read to return", late.readDone);
+      expect(await lockWaiters(tmp.db)).toBe(0);
+      slow.hang = false;
+      slow.release();
+      const [a, b] = (await Promise.all([first, second])) as [
+        { ok: boolean; accessToken?: string },
+        { ok: boolean; accessToken?: string },
+      ];
+      expect(a.ok && b.ok).toBe(true);
+      expect(b.accessToken).toBe(a.accessToken);
+      expect(slow.tokenRequests).toBe(before + 1);
+      expect(begins(queries)).toBe(1);
+    } finally {
+      await slow.close();
+      await first?.catch(() => undefined);
+      await second?.catch(() => undefined);
+    }
+  });
+
+  it('S2 a joiner decides for itself: after a mayRefresh: false flight the caller that may refresh exchanges', async () => {
+    const account = await expiredAccount();
+    const requests = stub.tokenRequests;
+    const holder = await holdRow(account.id);
+    let first: Promise<unknown> | undefined;
+    let second: Promise<unknown> | undefined;
+    try {
+      first = ensureFreshAccessToken(deps(), account.id, { mayRefresh: false });
+      await until('the flight to wait for the lock', async () => (await lockWaiters(tmp.db)) === 1);
+      const late = joiner([]);
+      second = ensureFreshAccessToken(deps({ db: late.db }), account.id, { mayRefresh: true });
+      await until("the joiner's read to return", late.readDone);
+      await holder.commit();
+      expect(await first).toEqual({ ok: false, reason: 'refresh_needed' });
+      expect(await second).toMatchObject({ ok: true, brokerUserId: account.brokerUserId });
+      expect(stub.tokenRequests).toBe(requests + 1);
+    } finally {
+      await holder.release();
+      await first?.catch(() => undefined);
+      await second?.catch(() => undefined);
+    }
+  });
+
+  it('S3 a flight that throws leaves the joiner to its own decision', async () => {
+    const account = await expiredAccount();
+    const requests = stub.tokenRequests;
+    let thrown = false;
+    // the first transaction waits for the row like a flight does, then throws
+    const failing = new Proxy(tmp.db, {
+      get(target, key, receiver) {
+        if (key !== 'transaction' || thrown) return Reflect.get(target, key, receiver);
+        thrown = true;
+        return () =>
+          target.transaction(async (tx) => {
+            await tx.execute(
+              sql`select 1 from broker_accounts where id = ${account.id} for no key update`,
+            );
+            throw new Error('boom');
+          });
+      },
+    });
+    const holder = await holdRow(account.id);
+    let first: Promise<unknown> | undefined;
+    let second: Promise<unknown> | undefined;
+    try {
+      first = ensureFreshAccessToken(deps({ db: failing }), account.id);
+      await until('the flight to wait for the lock', async () => (await lockWaiters(tmp.db)) === 1);
+      const late = joiner([]);
+      second = ensureFreshAccessToken(deps({ db: late.db }), account.id);
+      await until("the joiner's read to return", late.readDone);
+      await holder.commit();
+      await expect(first).rejects.toThrow('boom');
+      expect(await second).toMatchObject({ ok: true, brokerUserId: account.brokerUserId });
+      expect(stub.tokenRequests).toBe(requests + 1);
+    } finally {
+      await holder.release();
+      await first?.catch(() => undefined);
+      await second?.catch(() => undefined);
+    }
+  });
+
+  it('S4 a finished flight leaves nothing behind', async () => {
+    const account = await expiredAccount();
+    const requests = stub.tokenRequests;
+    expect(await ensureFreshAccessToken(deps(), account.id)).toMatchObject({ ok: true });
+    await expireAccessToken(account.id);
+    expect(await blockedAfter(ensureFreshAccessToken(deps(), account.id), 2_000)).toMatchObject({
+      ok: true,
+    });
+    expect(stub.tokenRequests).toBe(requests + 2);
   });
 });
