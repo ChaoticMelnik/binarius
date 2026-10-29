@@ -3953,6 +3953,47 @@ describe("the waiting message's caption (#860)", () => {
     }
   });
 
+  it('WC3b a pass that yields at its second session begins the next pass with it', async () => {
+    const clock = { now: 0 };
+    const { targets, run, hook } = await waitingRun(2, {}, clock, 'debug');
+    const chats = () =>
+      captionsTo(run.captured.calls).map((call) =>
+        targets.findIndex((target) => target.seed.telegramUserId === call.payload.chat_id),
+      );
+    clock.now = 10_000;
+    scan.list = listOf(71);
+    hook.at = () => {
+      if (captionsTo(run.captured.calls).length === 1) {
+        hook.at = undefined;
+        run.notices.wake();
+      }
+    };
+    await run.notices.captions();
+    expect(chats()).toEqual([0]);
+    const ticks = () => run.logs().filter((line) => line.msg === 'session notice tick');
+    await until('the woken tick', () => ticks().length === 2);
+    scan.list = listOf(72);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1]);
+    scan.list = listOf(73);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 0, 1]);
+  });
+
+  it('WC3c a page that ended at the last id begins the round again in the same pass', async () => {
+    const { targets, run } = await waitingRun(3, { config: { captionEditsPerPass: 3 } });
+    const chats = () =>
+      captionsTo(run.captured.calls).map((call) =>
+        targets.findIndex((target) => target.seed.telegramUserId === call.payload.chat_id),
+      );
+    scan.list = listOf(71);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 2]);
+    scan.list = listOf(72);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 2, 0, 1, 2]);
+  });
+
   it('WC4 a wake in the pace before an edit ends the pass; the woken tick follows at once', async () => {
     const clock = { now: 0 };
     const { run, hook } = await waitingRun(3, {}, clock, 'debug');
@@ -3990,9 +4031,30 @@ describe("the waiting message's caption (#860)", () => {
     expect(sleeps() - before).toBe(1);
   });
 
-  it('WC5 a 429 on an edit pauses the pass: none until the retry, then the edits', async () => {
+  it('WC4c the interval’s tick during a pass does not end it; the tick runs right after it', async () => {
+    const clock = { now: 0 };
+    const { run, hook } = await waitingRun(3, {}, clock, 'debug');
+    clock.now = 10_000;
+    scan.list = listOf(71);
+    hook.at = () => {
+      if (captionsTo(run.captured.calls).length === 1) {
+        hook.at = undefined;
+        void run.notices.tick();
+      }
+    };
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(3);
+    expect(run.logs().find((line) => line.msg === 'session waiting captions')).toMatchObject({
+      edited: 3,
+      yielded: false,
+    });
+    const ticks = () => run.logs().filter((line) => line.msg === 'session notice tick');
+    await until('the tick after the pass', () => ticks().length === 2);
+  });
+
+  it('WC5 a 429 on an edit pauses the pass: none until the retry, then the next sessions, and the paused one in the next round', async () => {
     const clock = { now: 10_000 };
-    const { run } = await waitingRun(3, {}, clock, 'debug');
+    const { targets, run } = await waitingRun(3, {}, clock, 'debug');
     scan.list = listOf(71);
     failNext(run.captured, { editMessageCaption: [telegramError(429, 5)] });
     await run.notices.captions();
@@ -4004,8 +4066,15 @@ describe("the waiting message's caption (#860)", () => {
     expect(captionsTo(run.captured.calls)).toHaveLength(1);
     expect(passes()).toHaveLength(1);
     clock.now += 1_000;
+    const chats = () =>
+      captionsTo(run.captured.calls).map((call) =>
+        targets.findIndex((target) => target.seed.telegramUserId === call.payload.chat_id),
+      );
     await run.notices.captions();
-    expect(captionsTo(run.captured.calls)).toHaveLength(4);
+    expect(chats()).toEqual([0, 1, 2]);
+    scan.list = listOf(72);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 2, 0, 1, 2]);
   });
 
   it('WC6 an edit refused as gone (a text waiting message of the backend before #860): deleted, its id dropped, the animation on the next tick', async () => {
@@ -4203,5 +4272,18 @@ describe("the waiting message's caption (#860)", () => {
         '🛰 <b>Scanning EUR/USD</b> · movement at 64 % of the signal threshold\n' +
         '✅ Quotes  ✅ Price movement  ⏳ Signal selection',
     );
+  });
+
+  it('WC16 the captions shown are kept at most captionMemo: above it the round evicts the entries it needs, each edited again', async () => {
+    const { targets, run } = await waitingRun(3, { config: { captionMemo: 2 } });
+    const chats = () =>
+      captionsTo(run.captured.calls).map((call) =>
+        targets.findIndex((target) => target.seed.telegramUserId === call.payload.chat_id),
+      );
+    scan.list = listOf(71);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 2]);
+    await run.notices.captions();
+    expect(chats()).toEqual([0, 1, 2, 0, 1, 2]);
   });
 });

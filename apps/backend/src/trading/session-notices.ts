@@ -8,6 +8,7 @@ import {
   fileRefusal,
   safeParseTradingSessionSettings,
   SESSION_SUMMARY_FALLBACK_MS,
+  TRACKED_SESSIONS_MAX,
   TradingSessionStatus,
   TradingSessionStopReason,
   type BotKeyboard,
@@ -103,9 +104,10 @@ import { readFinishedSessionView } from './session-view';
 // scan from the H1 scanner's memory; a pass of its own, captions(), edits the caption to newer
 // figures every captionMs, serial with the ticks (one `ticking`) and inside the same pace and
 // 429 pause: at most captionEditsPerPass sessions a pass, round by id, a caption equal to the one
-// shown not sent, a cooling chat skipped, and the pass ends at a wake() or a pause, so a trade's
-// message waits for no more than the edit in flight. Which caption each message shows is memory
-// only: a restart costs one edit per message, answered «not modified».
+// shown not sent, a cooling chat skipped, and the pass ends at a wake() or a pause, and the next
+// pass begins with the message it yielded at, so a trade's message waits for no more than the
+// edit in flight and no message is skipped. Which caption each message shows is memory only: a
+// restart costs one edit per message, answered «not modified».
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -123,6 +125,8 @@ export interface SessionNoticeConfig {
   // the waiting message's caption pass (#860): its period and the sessions it edits at most
   captionMs: number;
   captionEditsPerPass: number;
+  // the captions shown kept at most (#860)
+  captionMemo: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -136,6 +140,7 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   wakeGapMs: SESSION_NOTICE_WAKE_GAP_MS,
   captionMs: SESSION_WAIT_CAPTION_MS,
   captionEditsPerPass: SESSION_WAIT_CAPTION_EDITS_PER_PASS,
+  captionMemo: TRACKED_SESSIONS_MAX,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -216,12 +221,13 @@ type WaitingSession = Pick<
   | 'waitingForSignal'
 >;
 
-// the caption a waiting message shows (#860): its message's id and text, or frozen after its
-// edits ran out of attempts, so the pass leaves it until the next waiting message
+// the caption a waiting message shows (#860): its message's id and text, and the definite
+// refusals of its edits; once they reach maxAttempts the pass leaves it until the next waiting
+// message
 interface ShownCaption {
   messageId: number;
-  caption: string;
-  frozen: boolean;
+  caption: string | undefined;
+  refusals: number;
 }
 
 const waitingMayGo = (session: PendingSessionNotice): boolean =>
@@ -260,9 +266,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   let coolingAt = Infinity;
   let lastCoolingFiredAt = -Infinity;
   let coolingUntil: number | undefined;
-  // the caption pass (#860): it runs, the next pass starts after this session id, its timer, and
-  // the caption each live waiting message shows, at most config.scan of them
+  // the caption pass (#860): it runs, an interval's tick waits for its end, the next pass starts
+  // after the last session this pass skipped or called, its timer, and the caption each live
+  // waiting message shows, at most config.captionMemo of them
   let passing = false;
+  let tickDue = false;
   let captionCursor: string | undefined;
   let captionTimer: NodeJS.Timeout | undefined;
   const shownCaptions = new Map<string, ShownCaption>();
@@ -270,7 +278,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     shownCaptions.delete(sessionId);
     shownCaptions.set(sessionId, caption);
     const oldest = shownCaptions.keys().next();
-    if (shownCaptions.size > config.scan && oldest.done !== true) {
+    if (shownCaptions.size > config.captionMemo && oldest.done !== true) {
       shownCaptions.delete(oldest.value);
     }
   };
@@ -702,7 +710,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       messageId,
     });
     if (recorded) {
-      showCaption(session.sessionId, { messageId, caption: message.text.value, frozen: false });
+      showCaption(session.sessionId, { messageId, caption: message.text.value, refusals: 0 });
       return 'next';
     }
     await pace();
@@ -745,7 +753,6 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   ): Promise<Step> {
     const { sessionId, telegramUserId, waitingMessageId: messageId } = row;
     const fields = { sessionId };
-    const key = `${sessionId}:caption:${String(messageId)}`;
     const caption = message.text.value;
     try {
       await push.editSessionWaitingCaption(
@@ -754,18 +761,15 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         message.text,
         message.reply_markup,
       );
-      attempts.delete(key);
-      showCaption(sessionId, { messageId, caption, frozen: false });
+      showCaption(sessionId, { messageId, caption, refusals: 0 });
       return 'next';
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') {
-        attempts.delete(key);
-        showCaption(sessionId, { messageId, caption, frozen: false });
+        showCaption(sessionId, { messageId, caption, refusals: 0 });
         return 'next';
       }
       if (refusal === 'gone') {
-        attempts.delete(key);
         shownCaptions.delete(sessionId);
         logger.info(fields, 'session waiting caption not edited: the message is gone');
         await pace();
@@ -798,14 +802,19 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
           return 'next';
         case 'wait':
           return pauseFor(failure.ms);
-        case 'refused':
-          if (mayRetry(key)) {
-            logger.warn(logged, 'session waiting caption not edited');
-            return 'next';
-          }
-          logger.warn(logged, 'session waiting caption dropped');
-          showCaption(sessionId, { messageId, caption, frozen: true });
+        case 'refused': {
+          const known = shownCaptions.get(sessionId);
+          const same = known?.messageId === messageId ? known : undefined;
+          const refusals = (same?.refusals ?? 0) + 1;
+          showCaption(sessionId, { messageId, caption: same?.caption, refusals });
+          logger.warn(
+            logged,
+            refusals < config.maxAttempts
+              ? 'session waiting caption not edited'
+              : 'session waiting caption dropped',
+          );
           return 'next';
+        }
         case 'unknown':
           logger.warn(logged, 'session waiting caption edit outcome unknown');
           return 'next';
@@ -817,12 +826,17 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
 
   // The caption pass (#860): the next page of live waiting messages by id, each caption that
   // changed edited after its pace, the waiting message's id re-read right before the edit, as the
-  // delete does (#587 round 1). It yields to a wake() and a pause before and after each pace.
+  // delete does (#587 round 1). It yields to a wake() and a pause before and after each pace, and
+  // the cursor stays before the message it yielded at.
   async function runCaptions(): Promise<void> {
     if (now() < pausedUntil) return;
     const limit = config.captionEditsPerPass;
-    const rows = await listSessionWaitingCaptions(db, { after: captionCursor, limit });
-    captionCursor = rows.length < limit ? undefined : rows.at(-1)?.sessionId;
+    let rows = await listSessionWaitingCaptions(db, { after: captionCursor, limit });
+    // a page that ended exactly at the last id: the round begins again in the same pass
+    if (rows.length === 0 && captionCursor !== undefined) {
+      captionCursor = undefined;
+      rows = await listSessionWaitingCaptions(db, { after: undefined, limit });
+    }
     let edited = 0;
     let skipped = 0;
     let yielded = false;
@@ -832,12 +846,14 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       const known = shownCaptions.get(sessionId);
       if (
         known?.messageId === messageId &&
-        (known.frozen || known.caption === message.text.value)
+        (known.refusals >= config.maxAttempts || known.caption === message.text.value)
       ) {
+        captionCursor = sessionId;
         skipped += 1;
         continue;
       }
       if (chatCooling(row.telegramUserId)) {
+        captionCursor = sessionId;
         skipped += 1;
         continue;
       }
@@ -851,6 +867,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         yielded = true;
         break;
       }
+      // committed: past this row whatever its outcome
+      captionCursor = sessionId;
       const live = await readSessionWaitingMessage(db, { sessionId });
       if (live?.waitingMessageId !== messageId) {
         shownCaptions.delete(sessionId);
@@ -863,6 +881,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         break;
       }
     }
+    if (!yielded && rows.length < limit) captionCursor = undefined;
     logger.debug({ listed: rows.length, edited, skipped, yielded }, 'session waiting captions');
   }
 
@@ -1067,11 +1086,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   }
 
   // a tick longer than its interval makes the next one a no-op; one that comes during a caption
-  // pass runs right after it, as a wake (#860)
+  // pass runs right after it without ending it (#860)
   function tick(): Promise<void> {
     if (stopped) return Promise.resolve();
     if (passing) {
-      wake();
+      tickDue = true;
       return ticking ?? Promise.resolve();
     }
     ticking ??= runTick()
@@ -1096,7 +1115,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       .finally(() => {
         passing = false;
         ticking = undefined;
-        if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
+        if (tickDue) {
+          tickDue = false;
+          void tick();
+        } else if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
       });
     return ticking;
   }

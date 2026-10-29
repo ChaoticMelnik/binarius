@@ -1165,11 +1165,13 @@ so its edits pause on a 429 for its `retry_after`
 budget first). The waiting message's caption is edited by a pass of its own, `captions()`, every
 `SESSION_WAIT_CAPTION_MS` (4 000 ms, the middle of the owner's 3–5 s), inside the same pacer of 9
 a second and the same 429 pause as the tick, and serial with it under one `ticking`: a pass does
-not start while a tick runs, and a tick due during a pass (the interval's or a `wake()`) runs right
-after it. A pass edits at most `SESSION_WAIT_CAPTION_EDITS_PER_PASS` (9) sessions, round by id
-(`listSessionWaitingCaptions` from the last id of the previous page), so at N waiting sessions
-each caption is refreshed every `4 s × ceil(N / 9)`: 9 → 4 s, 45 → 20 s, 450 → 200 s, 2 000 →
-about 15 min. Where it yields, in order: a tick in flight (the pass is skipped), a `wake()` (the
+not start while a tick runs; a `wake()` during a pass ends it after the edit in flight, and the
+interval's tick due during a pass waits for its end without ending it, then runs right after it.
+A pass edits at most `SESSION_WAIT_CAPTION_EDITS_PER_PASS` (9) sessions, round by id
+(`listSessionWaitingCaptions` from the last message the previous pass reached; a page that ended
+at the last id begins the round again in the same pass), so at N waiting sessions each caption is
+refreshed every `4 s × ceil(N / 9)` without yields: 9 → 4 s, 45 → 20 s, 450 → 200 s, 2 000 →
+about 15 min; a yield delays the round by a pass and skips no one. Where it yields, in order: a tick in flight (the pass is skipped), a `wake()` (the
 pass ends after the edit in flight, so a trade's message waits for at most one edit: a pace of
 111 ms and Telegram's answer), the 429 pause (no pass starts, a pass in it ends), a cooling chat
 (#660: the session skipped to a later pass, no timer), the count a pass, and a caption equal to the
@@ -1263,10 +1265,11 @@ not logged (Rule 8).
 
 **The caption pass** ([Rate and timing](#rate-and-timing)) lists the live waiting messages
 (`listSessionWaitingCaptions`: an active session that waits for a signal, its waiting message on
-its current slot, notices not closed, a reachable user; by id, from the previous page's last id),
-builds each caption as a send would, and edits only a caption other than the one the message shows
-(in memory: the message's id and its caption, at most `SESSION_NOTICE_SCAN` of them, the oldest
-dropped first — a dropped one costs one edit, answered «not modified»). Each edit takes its pace;
+its current slot, notices not closed, a reachable user; by id, from the last message the previous
+pass reached), builds each caption as a send would, and edits only a caption other than the one the
+message shows (in memory: the message's id, its caption and the refusals of its edits, at most
+`TRACKED_SESSIONS_MAX` (2 000) of them, the oldest dropped first — a dropped one costs one edit,
+answered «not modified», [risk 113](#accepted-risks)). Each edit takes its pace;
 the id is re-read right before it (`readSessionWaitingMessage`, as the delete, #587 round 1), and
 `editSessionWaitingCaption` carries the same «⏹» — an edit without a keyboard would take it off
 (Rule 31). An edit marks its chat (#660). Two backends would each edit the same caption: «not
@@ -1279,13 +1282,15 @@ modified», or figures a second older ([risk 111](#accepted-risks)).
 | 400 gone — the user deleted it, past 48 h, or a text waiting message of the backend before #860 («there is no caption in the message to edit») | the caption forgotten; the delete after its own pace and a check of `stop()`, by the delete's table above | `info` `session waiting caption not edited: the message is gone`; deleted → the id dropped → due → the animation on the next tick |
 | 403 | the caption forgotten; the user marked unreachable | `warn` `… refused: the user is unreachable`; the session is listed no more |
 | 429 | as it was | the whole sender pauses for `retry_after`; the pass ends |
-| another 4xx | an attempt counted in memory; at the third the caption left as it is until the next waiting message | `warn` `… not edited`, then `… dropped` |
+| another 4xx | an attempt counted in the caption's memory; at the third the caption left as it is until the next waiting message | `warn` `… not edited`, then `… dropped` |
 | 5xx, a timeout, the transport | as it was (the edit may have gone: the next pass gets «not modified») | `warn` `… edit outcome unknown`; edited again on the next pass |
 | the id re-read is another or NULL (the stop route took it over) | the caption forgotten | `info` `… taken over: not edited` |
 | the caption equal to the one shown, or the chat cooling | — | no call |
 | a `wake()`, the pause or `stop()` before or after the pace | — | the pass ends (`yielded` in its `debug` line) |
 
-No outcome holds the pass on one message: the page moves by id whatever the outcome. A pass whose
+No outcome holds the pass on one message: the pass moves past each message it skipped or called,
+whatever the answer (a 429 and a thrown statement included); a pass that yields before a call
+leaves the cursor before that message, and the next pass begins with it. A pass whose
 statement throws ends with `error` `session waiting captions failed`; the next one starts after
 `captionMs`.
 
@@ -1295,7 +1300,9 @@ place as before (#587), on the media: a stop's reply ends the wait on the scanne
 path; a still refused for its file is forgotten, `warn` `the scan media was refused, editing the
 caption`, and the reply goes as the caption under the animation); a stop whose outcome is unknown
 or a missing session edits the caption alone (`editMessageCaption`, «⏹» again or the menu), the
-wait going on; gone — a new message, as before. The stop body, the hand-over and the sender's
+wait going on; gone — a new message, as before. A stop's failure (`unavailable`, «⏹» again) under
+the animation of a session that still waits stays its caption until the scanner's figures change;
+then the pass draws the scan back with the same «⏹» ([risk 114](#accepted-risks)). The stop body, the hand-over and the sender's
 delete do not change. A caption edit in flight when the bot's reply lands can draw the wait over
 the reply for one round-trip ([risk 110](#accepted-risks)).
 
@@ -1446,7 +1453,7 @@ deletes it first — never a second «⏹» beside it.
   caption: Telegram answers «there is no caption in the message to edit» → gone → the delete →
   the id dropped → the next tick sends the animation; each old message is replaced within a pass
   and a tick (≈ 4 s + 3 s), 9 a pass at most, two calls each inside the 9 a second (2 000 → about
-  15 min), the trades' messages first (the pass yields). Backend and bot are one image (deploy.md):
+  15 min), the trades' messages first (the pass yields, and a yield skips no message). Backend and bot are one image (deploy.md):
   `docker compose stop bot && binarius-deploy <ref>` stops the old bot before the new backend
   sends an animation, and both start from the same build, so an old bot never answers a «⏹» under
   the animation (it would edit its text, be told gone and reply as a new message, the radar left
@@ -2208,8 +2215,14 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     a signal is in the scanner's `signals`, not in its `closeness`, so the caption says it waits for
     a move for the second or two before the intent deletes the message. Nothing is made up: the
     formula is the bot's wait's (#859).
-113. **The captions shown are bounded memory** (#860): at most `SESSION_NOTICE_SCAN` messages; a
-    dropped one, or a restart, costs one more edit, which Telegram answers «not modified».
+113. **The captions shown are bounded memory** (#860): at most `TRACKED_SESSIONS_MAX` (2 000)
+    messages, the scale of risk 42: above it the round evicts entries it will need — each costs an
+    edit answered «not modified», and an evicted `dropped` mark gives its message three attempts
+    again; a restart costs one more edit each.
+114. **A stop's failure under a live wait is drawn over** (#860): the bot writes `unavailable` as
+    the caption under the animation of a session that still waits; the sender's memory keeps the
+    caption it drew, so the next pass whose figures differ puts the scan back, with the same «⏹».
+    The press failed and the wait goes on: a press of «⏹» stops it or answers again.
 
 ## Running it locally
 
