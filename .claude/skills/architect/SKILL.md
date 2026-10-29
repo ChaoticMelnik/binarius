@@ -273,6 +273,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `.env.example` | trading 27 |
 | `.github` | core 14, 16 |
 | `Dockerfile` | core 52 |
+| `README.md` | core 16 |
 | `apps` | core 52 |
 | `apps/backend` | signal-h1 20, 43 |
 | `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 49; payments 35 |
@@ -318,15 +319,15 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/bot-texts.md` | bot-ui 18, 30 |
 | `docs/broker-balance.md` | trading 21 |
 | `docs/broker-rest.md` | trading 24 |
-| `docs/broker-session.md` | trading 27, 32 |
+| `docs/broker-session.md` | trading 22, 27, 32 |
 | `docs/broker-socket.md` | trading 15, 27 |
 | `docs/deposit.md` | payments 37, 38 |
-| `docs/h1.md` | signal-h1 44, 48, 55 |
+| `docs/h1.md` | signal-h1 42, 44, 48, 55 |
 | `docs/kill-switch.md` | trading 22 |
 | `docs/mailing.md` | bot-ui 19 |
 | `docs/market-data.md` | signal-h1 41 |
 | `docs/postbacks.md` | payments 35; auth 13 |
-| `docs/referrals.md` | core 5; payments 34 |
+| `docs/referrals.md` | core 5; payments 34, 40 |
 | `docs/runbook-broker-outage.md` | trading 22 |
 | `docs/service-accounts.md` | auth 12 |
 | `docs/signal-stand.md` | signal-h1 20, 43 |
@@ -336,6 +337,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/trade-executor.md` | trading 15 |
 | `docs/trade-intent-transport.md` | trading 50, 54; auth 13 |
 | `docs/trade-log.md` | signal-h1 42, 45 |
+| `docs/trading-access.md` | bot-ui 29 |
 | `docs/trading-mode.md` | trading 36 |
 | `docs/trading-session.md` | trading 28; signal-h1 48; auth 13 |
 | `docs/worker-capacity.md` | trading 53 |
