@@ -543,7 +543,8 @@ const TIMING_CHAIN_HOLDS =
   sessionNoticeWakeBoundsHold() &&
   sessionWaitCaptionBoundsHold() &&
   // the fallback summary's balance refresh is not waited for (#870): one started in a tick has
-  // answered, or its signal aborted it, before the tick after next starts
+  // normally answered, or its signal aborted it, before the tick after next starts: the budget
+  // starts after the account's read, and a later tick may reach the session sooner in its run
   TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS &&
   // a trade's step of a cycle (#551) may make three calls (#536): the edit of the cycle message,
   // and when Telegram answers it is gone, the delete of the waiting message and the new message,

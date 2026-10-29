@@ -1035,13 +1035,15 @@ by the database's clock — oldest mark first, `SESSION_NOTICE_SCAN` rows, on
 view that needs the balance after its last trade (finished, a settled trade, the snapshot not
 current: `finishedViewNeedsBalance` in `session-view.ts`) starts `refreshFinishedBalance` without
 waiting for it (#870) — the one broker GET of the finished view, `mayRefresh: false`, inside
-`TRADING_ACCESS_REFRESH_BUDGET_MS` — and skips the session: no pace, no claim. Once that refresh has
-answered, a later tick reads the view again — with the snapshot it wrote on `'ok'`, the stored one
-and its age otherwise — and builds the text, takes its pace and claims by `claimSummaryFallback` —
+`TRADING_ACCESS_REFRESH_BUDGET_MS` — and skips the session: no pace, no claim. A later tick that
+finds that refresh over before it reads the view — the entry is read first, so a snapshot the
+refresh committed is in the view — reads it with the snapshot written on `'ok'`, the stored one
+and its age otherwise, and builds the text, takes its pace and claims by `claimSummaryFallback` —
 the same `summary_sent_at is null` CAS the bot's claim takes, so of the two one sends — and sends
 it with sound. The refresh starts once per session and process: the sender's memory keeps one
 entry per session (`balanceRefreshes`, at most `SESSION_NOTICE_SCAN`, the oldest dropped), removed
 once the summary went or its claim lost, kept over a 429, a throw or a cooling chat; a refresh that
+answers during that view's read leaves the session to the next tick; a refresh that
 rejects is a `warn` `session summary balance refresh failed` and the summary goes with the stored
 snapshot ([risk 119](#accepted-risks)). A summary that cannot
 be built (no asset) closes the step with `error` `session summary not built`; a user who blocked
@@ -1140,11 +1142,12 @@ message.
 | a statement throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error` with `holdMs`; the session is held out of both lists for `SESSION_NOTICE_HOLD_MS` (60 s, in memory, #660), then tried again; a restart tries it at once ([risk 84](#accepted-risks)) |
 | the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick), or sooner: the tick arms a timer that wakes the sender at the end of the earliest such gap (#723) |
 | the fallback summary's view needs the balance and no refresh was started for it (#870) | nothing claimed, no pace taken; `refreshFinishedBalance` started, not waited for | the session's turn ends; a later tick reads the view again |
-| the fallback summary: its refresh still in flight | nothing claimed | the turn ends; the next tick looks again — the refresh is over by the tick after next (`TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS`) |
+| the fallback summary: its refresh still in flight | nothing claimed | the turn ends; the next tick looks again — the refresh is normally over by the tick after next (`TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS`) |
+| the fallback summary: its refresh answered while the view was read | nothing claimed | the turn ends; the next tick sends it with the snapshot the refresh wrote |
 | the fallback summary: its refresh answered `'ok'` | the view read with the new snapshot | the summary in that tick, without the age line |
 | the fallback summary: its refresh answered anything else, or the account is gone | the stored snapshot | the summary in that tick, with its age |
 | the fallback summary: its refresh rejected | nothing claimed, no hold | `warn` `session summary balance refresh failed` (`errorLogFields`); the next tick sends the summary with the stored snapshot |
-| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start; a fallback's refresh in flight is not waited for — the reconciler's own `stop()` aborts it, and the next start asks again |
+| `stop()` mid-tick | the call in flight ends or times out — both calls of a gone edit under phase 1 | nothing is claimed after it; a final mark or a fallback summary does not start (no balance read) and goes after the next start; a fallback's refresh in flight is not waited for — the reconciler's own `stop()` aborts it, and the next start asks again; a stop during the view's read starts no refresh |
 
 Every ending after a claim moves the cursor, so no sent trade holds a session's place. A cooling
 chat ends the turn before any claim, for one tick at most. A thrown statement (the row
@@ -1182,8 +1185,10 @@ so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)). The fallback summary's balance refresh is
 not waited for (#870, [The fallback](#the-fallback)): the link
 `TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS` (`TIMING_CHAIN_HOLDS`) puts a refresh
-started in one tick over — answered, or `'aborted'` by its signal — before the tick after next, so
-the summary is one tick later with a quick broker, two with one at the budget; the link that
+started in one tick over — answered, or `'aborted'` by its signal — normally before the tick after
+next (the budget starts after the account's read, and a later tick may reach the session sooner
+in its run), so the summary is usually one tick later with a quick broker, two with one at the
+budget (one more when it answers during the view's read); no tick waits for it; the link that
 counted the refresh into `stop()` is gone.
 
 **The caption pass** (#860, the owner's decision 2026-10-29: the captions are rare and yield the
@@ -2324,8 +2329,11 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 119. **The refreshes kept are per process and bounded** (#870): a restart, a second process
     ([risk 35](#accepted-risks)) or a session dropped from the `SESSION_NOTICE_SCAN` entries costs
     one more broker GET for that session — no more than before #870, when every read of the view
-    asked once. A summary that needs a refresh goes one tick later, two with a broker at the
-    budget. Falsifiable: two GETs of one account within a tick from one process.
+    asked once. A summary that needs a refresh goes usually one tick later, two or more with a
+    broker at the budget or one that answers while the view is read. A refresh that joined
+    another's flight and was `'aborted'` while that flight wrote later sends the stored snapshot
+    with its age, as the routes' `readFinishedSessionView` does. Falsifiable: two GETs of one
+    account within a tick from one process.
 120. **More than `SESSION_NOTICE_SCAN` woken sessions is a whole tick** (#870): a storm of
     notifications between two ticks, or a payload that is no session id, reads both lists whole,
     as every wake did before #870. Falsifiable: `sessions: 'all'` in most woken ticks' lines.

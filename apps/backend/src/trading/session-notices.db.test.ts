@@ -32,6 +32,7 @@ import { closedTradeFor, openTradeFor, until, botTextSourcesWith } from '@binari
 import { createH1Detector } from '@binarius/signal';
 import {
   claimSessionTradeNotice,
+  claimSummaryFallback,
   clearSessionWaitingMessage,
   createSessionIntent,
   markIntentAccepted,
@@ -40,6 +41,7 @@ import {
   recordSessionCycleMessage,
   recordSessionStatusMessage,
   recordSignalDecision,
+  releaseSummaryFallback,
   settleIntent,
   stopTradingSession,
   takeIntent,
@@ -282,7 +284,7 @@ const snapshot = (target: Target) =>
   });
 
 function sender(
-  patch: Partial<Omit<SessionNoticeSenderDeps, 'db' | 'logger' | 'push'>> & {
+  patch: Partial<Omit<SessionNoticeSenderDeps, 'logger' | 'push'>> & {
     config?: Partial<SessionNoticeConfig>;
   } = {},
   clock = { now: 0 },
@@ -1759,6 +1761,112 @@ describe('the final mark and the fallback summary (#537)', () => {
     ]);
     expect(summaryOf(captured.calls, first)).toMatch(AGED);
     expect(summaryOf(captured.calls, second)).toMatch(AGED);
+  });
+
+  // The sender's db with a hook on the target's view read: `onView` runs once the view's SQL has
+  // returned and before the sender sees the view, while `armed`; then every microtask runs, so
+  // the refresh's `done` is set before the sender goes on. `after` - what the sender took from
+  // its db once the hook fired
+  function viewHook(target: Target, onView: () => Promise<void> | void) {
+    const hook = { armed: false, fired: false, after: [] as string[] };
+    const transaction: TempDatabase['db']['transaction'] = async (fn, config) => {
+      const result = await tmp.db.transaction(fn, config);
+      if (
+        hook.armed &&
+        typeof result === 'object' &&
+        result !== null &&
+        'trades' in result &&
+        'id' in result &&
+        result.id === target.session.id
+      ) {
+        hook.armed = false;
+        hook.fired = true;
+        await onView();
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+      return result;
+    };
+    const db = new Proxy(tmp.db, {
+      get: (object, key, receiver) => {
+        if (hook.fired) hook.after.push(String(key));
+        return key === 'transaction'
+          ? transaction
+          : (Reflect.get(object, key, receiver) as unknown);
+      },
+    });
+    return { db, hook };
+  }
+
+  it("F20 a refresh that answers 'ok' during the view's read: no summary that tick, the next without an age", async () => {
+    const target = await needsBalance();
+    const held = heldBalance();
+    const { db, hook } = viewHook(target, async () => {
+      await upsertBalanceSnapshot(tmp.db, {
+        brokerAccountId: target.seed.brokerAccountId,
+        user: brokerUser,
+        requested: false,
+      });
+      held.release('ok');
+    });
+    const { notices, captured } = sender({ db, balance: held.balance });
+    await notices.tick();
+    await until('the refresh', () => held.calls.length === 1);
+    hook.armed = true;
+    await notices.tick();
+    expect(hook.fired).toBe(true);
+    expect(summaryOf(captured.calls, target)).toBeUndefined();
+    expect((await rowOf(target)).summarySentAt).toBeNull();
+    await notices.tick();
+    const summary = summaryOf(captured.calls, target);
+    expect(summary).toMatch(/🧪 Демобаланс: /);
+    expect(summary).not.toContain('🕒');
+    expect(held.calls).toHaveLength(1);
+  });
+
+  it('F21 a claim lost after the refresh: its entry gone, a summary given back asks again', async () => {
+    const target = await needsBalance();
+    const held = heldBalance();
+    let foreign: { claimedAt: string } | undefined;
+    const { db, hook } = viewHook(target, async () => {
+      foreign = await claimSummaryFallback(tmp.db, { sessionId: target.session.id });
+    });
+    const { notices, captured } = sender({ db, balance: held.balance });
+    await notices.tick();
+    await until('the refresh', () => held.calls.length === 1);
+    held.release('unavailable');
+    hook.armed = true;
+    await notices.tick();
+    expect(hook.fired).toBe(true);
+    expect(foreign).toBeDefined();
+    expect(summaryOf(captured.calls, target)).toBeUndefined();
+    await releaseSummaryFallback(tmp.db, {
+      sessionId: target.session.id,
+      claimedAt: foreign!.claimedAt,
+    });
+    await notices.tick();
+    await until('the refresh again', () => held.calls.length === 2);
+    expect(summaryOf(captured.calls, target)).toBeUndefined();
+    held.release('unavailable');
+    await untilSummary(target, () => notices.tick());
+    expect(summaryOf(captured.calls, target)).toMatch(AGED);
+  });
+
+  // a refresh's GET follows its account's read: the db read it starts with shows it at once
+  it("F22 stop() during the view's read: no refresh starts, nothing is claimed", async () => {
+    const target = await needsBalance();
+    const held = heldBalance();
+    const { db, hook } = viewHook(target, () => {
+      // not awaited: stop() waits for the tick this hook runs in
+      void notices.stop();
+    });
+    const { notices, captured } = sender({ db, balance: held.balance });
+    hook.armed = true;
+    await notices.tick();
+    expect(hook.fired).toBe(true);
+    expect(hook.after).toEqual([]);
+    expect(held.calls).toEqual([]);
+    expect(summaryOf(captured.calls, target)).toBeUndefined();
+    expect((await rowOf(target)).summarySentAt).toBeNull();
   });
 });
 
