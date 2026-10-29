@@ -83,10 +83,10 @@ back, see the tick), and a joined second bot request falls back to the stored sn
 signal starts no flight. The steps:
 
 1. The access token: `ensureFreshAccessToken(…, { mayRefresh })`
-   ([binodex-oauth.md](binodex-oauth.md) → Refresh). It reads the user's status in its own
-   statement right after the account lock, and again after a token exchange; a blocked user gets
-   no token.
-2. The account's `broker_user_id`; a missing account spends no call.
+   ([binodex-oauth.md](binodex-oauth.md) → Refresh). It reads the account and the user's status
+   in one statement on the fast path, or in its own statement right after the account lock, and
+   again after a token exchange; a blocked user gets no token, a missing account no call.
+2. The account's `broker_user_id`, from the token result (`brokerUserId`, #868).
 3. `GET /v1/broker/user`, with the caller's signal and `stop()`'s.
 4. The owner check: the answer's `id` must be the account's `broker_user_id`.
 5. `upsertBalanceSnapshot`, and its domain check.
@@ -117,7 +117,7 @@ is marked expired, and the account leaves the tick's candidates until the user's
 exchanges it (Rule 12). Nothing revokes on it. The report changes nothing in the attempt, and a
 throw out of it is logged, not raised. `ensureFreshAccessToken` takes no signal: an attempt
 already stopped (`stop()`, the route's budget) skips the report, and one under way waits at most
-for another caller's exchange on the row lock
+for another caller's exchange, on the row lock or on that caller's flight
 ([binodex-oauth.md → A refused token](binodex-oauth.md#a-refused-token-is-an-expired-token-281)).
 
 ### Callers
@@ -164,7 +164,8 @@ Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
    budget), four at a time. A `rate_limited` answer stops new calls for the
    rest of the tick. A tick still running when the next interval fires makes that one a no-op.
 5. **Never a token exchange.** Each call passes `mayRefresh: false`. `ensureFreshAccessToken`
-   decides under the row lock, with the same clock and comparison as the exchange. A token that
+   decides on its one read or under the row lock, with the same clock and comparison as the
+   exchange. A token that
    would need one comes back as `refresh_needed`, with nothing exchanged or revoked, the 90-day
    rule included. A failed exchange can revoke the account (Rule 12), and a timer must not do that
    to an account nobody is using.

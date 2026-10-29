@@ -23,7 +23,7 @@ TEST_DATABASE_URL=postgres://binarius@127.0.0.1:5434/binarius \
 | Lease | `broker_session_leases` (migration 0031), `packages/db/src/session-lease-ops.ts` (#93) | which process may hold an account's socket: acquire, renew, release ([The lease](#the-lease-93)) |
 | Writers | `upsertBalanceSnapshot`, `applyBalanceEvent` (same file), `settleClosedTrades` (`trade-intent-ops.ts`) | what a session hears, written once its connection proved whose it is |
 | Client | `BrokerSocketClient` ([broker-socket.md](broker-socket.md)) | one per session; the taint after an aborted command |
-| Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281) |
+| Token | `AccessTokenSource` (`broker/access-token.ts`) | `POST /trading/accounts/:id/access-token` on the backend, through the worker's token cache (#868), always `mayRefresh: false`; after `token_expired`/`auth_failed` with the refused token's fingerprint (#281), which drops the cached entry |
 | Composition | `apps/trading-worker/src/worker.ts` (`createWorker`, #95) | built only when `env.brokerWsUrl` is set; otherwise `noTradeSessions` |
 | Probe | `apps/trading-worker/src/cli/socket-probe.ts`, `socket-probe-run.ts`, `socket-probe-verdict.ts` (#285) | the two-socket check of the rollout, safe on the pilot 2026-10-08; exit 0 only on its safe verdict ([broker-socket.md → Observed live](broker-socket.md#observed-live)) |
 
@@ -481,7 +481,7 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
   pass under several processes and the N-replica deploy, #347 intent routing (shipped,
   [trade-intent-transport.md](trade-intent-transport.md) → Routing to the owner), #95 the deploy's overlap (shipped,
   [worker-deploy.md](worker-deploy.md); single-flight refresh across processes is the backend's
-  row lock, Rule 12), #96 the emergency stop.
+  row lock on the exchange, Rule 12; in one process its flights, #868), #96 the emergency stop.
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
   (docs/trade-intent-transport.md). #274 shipped (`not_found` on a proven absence, demo). #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)

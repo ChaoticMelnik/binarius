@@ -478,8 +478,11 @@ warn line. The first live email login after a deploy is what checks it.
 
 ## Refresh
 
-`ensureFreshAccessToken(accountId, { mayRefresh? })` runs the whole decision inside one
-transaction holding the account row, which makes it single-flight per account. Its callers are
+`ensureFreshAccessToken(accountId, { mayRefresh? })` serves a valid token by one statement without
+a transaction or a lock, and decides everything else — every refusal, every exchange and every
+write — inside one transaction holding the account row, which makes the exchange single-flight per
+account across processes; within one process one caller per account goes there at a time
+([The fast path and the flights](#the-fast-path-and-the-flights-868)). Its callers are
 the broker balance refresh (`apps/backend/src/broker/balance-reconciler.ts`): `POST
 /trading/access` with the default `mayRefresh: true`, and the background tick with
 `mayRefresh: false`; the cashier's `POST /deposit/widget-session` (#11) with `mayRefresh: true`, a
@@ -496,6 +499,7 @@ handed out is not taken back by a later block; how long each caller goes on usin
 
 | Step                                                        | Outcome                                                                                                           |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| no `refusedToken`, an active account of an active user, the `serviceOnly` mark when asked for, the process's key id, a stored hash that matches the refresh ciphertext, an access token still valid (the skew below) | `ok` by one `SELECT` joined with `users.status`, no transaction and no lock (#868); anything else goes on to the rows below under the row lock |
 | account missing                                             | `account_not_found`                                                                                               |
 | user `blocked`                                              | `user_blocked`: nothing decrypted, exchanged or revoked. `users.status` is read in its own statement right after the account row is locked — a block committed while the lock was waited for is seen (#239) — without locking `users` (lock order, Rule 5) |
 | `status = pending`                                          | `account_pending` — nobody has confirmed it, so it may not act on the user's behalf                               |
@@ -518,15 +522,16 @@ broker outage. So the tick passes `mayRefresh: false`, and so does the worker's 
 catch-up. The one exception is reconciling an intent whose outcome is unknown (owner's decision
 2026-10-06): the worker's REST reconciler passes `mayRefresh: true`, accepting that a broker
 failure on the exchange revokes the account — only accounts with an open reconciliation, which
-are blocked by their active intent anyway. Whether `false` holds is decided here, under the row
-lock, with the same clock and comparison as the exchange (`token-service.db.test.ts`, including
-a process clock ahead of the database's). Its SQL selection of accounts with a valid token is an
+are blocked by their active intent anyway. Whether `false` holds is decided here, on the fast read
+and under the row lock, with the same clock and comparison as the exchange
+(`token-service.db.test.ts`, including a process clock ahead of the database's). Its SQL selection of accounts with a valid token is an
 optimisation, not the guarantee.
 
 One more exception (#391): the service-account keeper of the backend exchanges by a timer, but
 only for rows whose `service_since` is set. It passes `serviceOnly: true`, and the mark is checked
-here, under the row lock — any other row is answered `not_service` with nothing exchanged
-(`token-service.db.test.ts` V1, V6, `service-accounts.db.test.ts` K2). The failure rules are the
+here, on the fast read and under the row lock — any other row is answered `not_service` with
+nothing decrypted or exchanged (`token-service.db.test.ts` V1, V6, V7, `service-accounts.db.test.ts`
+K2). The failure rules are the
 ones above: one attempt, a 429 keeps the pair, the rest revoke. See
 [docs/service-accounts.md](service-accounts.md).
 
@@ -586,15 +591,74 @@ refuse, the failure is logged, and `ensureFreshAccessToken` **throws** rather th
 result — callers such as ARCH-01 (#40) see an exception, not an `AccessTokenResult`. The next
 refresh gets a 401 and revokes it there with `refresh_invalid_grant`.
 
+### The fast path and the flights (#868)
+
+**The fast path.** `readAccountForToken` (`packages/db/src/oauth-ops.ts`) reads the account row
+and its user's `status` in one statement, without a transaction or a lock. It hands out the token
+only when every one of these holds, in the order of the table above; any other case is a miss, and
+the path under the row lock gives the answer, so every refusal and every write stays there:
+
+1. no `refusedToken` (checked before the read: a fingerprint may mark the token expired);
+2. the row exists, the user is not `blocked`, the account is `active`;
+3. not `serviceOnly` on an unmarked row (with `mayRefresh` not `false`) — the same function as
+   under the lock;
+4. `token_key_id` is the process's key id;
+5. `refresh_token_hash` is set (a legacy row gets it filled in under the lock);
+6. the refresh ciphertext decrypts and its hash is the stored one (a mismatch or a failed
+   decryption is revoked under the lock);
+7. `access_token_expires_at` is past now plus the skew (`ACCESS_SKEW_MS`, or `renewAheadMs`) —
+   the same function as under the lock;
+8. the access ciphertext decrypts.
+
+Nothing is decrypted before 2–5 (V4, V7). The answer carries `brokerUserId` from the same row; the
+balance reconciler compares the broker's user with it instead of reading the row again. The
+worker's route answers `{ accessToken }` as before.
+
+**The flights.** A miss goes under the row lock as one flight per account in the process (a map of
+`token-service.ts`). A caller that finds a flight waits for it and then decides again on its own
+read: usually the fast path, after another caller's exchange; or it becomes the next flight —
+after a `mayRefresh: false` flight answered `refresh_needed`, a caller that may refresh exchanges
+itself. It never takes the flight's result, whose policy may differ, and a flight that throws
+throws to its own caller only. Across processes the row lock is the single flight, as before.
+Waiting for a flight lasts as long as waiting for the lock did: one exchange (`BROKER_HTTP_TIMEOUT_MS`)
+and its statements, plus, rarely, the second transaction of a lost pair.
+
+| Caller (`mayRefresh`) | the fast path hits | another flight is running | it is the flight |
+| --- | --- | --- | --- |
+| the worker's route: executor REST fallback (`true`) and its 401 report (`true` + `refusedToken`); REST reconciler (`true`), catch-up (`false`), balance check (`false`), session start (`false`), session restart (`false` + `refusedToken`) | one `SELECT`; the worker caches the answer | waits for it inside `ACCESS_TOKEN_ROUTE_BUDGET_MS` as it waited for the lock, then its own read; a report after another caller's exchange finds another token, returned with nothing written | as before |
+| balance reconciler: `POST /trading/access`, the session routes (`true`); the tick and `reportRefused` (`false`) | no lock; a tick over valid tokens takes no lock at all | waits (no signal, as before), then the fast path or, for a report, the mark under the lock | as before |
+| cashier: mint (`true`), `reportRefused` (`false`) | no lock | waits inside `DEPOSIT_WIDGET_SESSION_BUDGET_MS` | as before |
+| service-account keeper (`true`, `serviceOnly`, `renewAheadMs` 24 h) | only when the candidate was already renewed by someone else | waits, then the fast path; a 429 of the other flight is not its own: its own path meets the 429 and ends the tick, as before | one exchange, up to `SERVICE_RENEWALS_PER_TICK` a tick |
+| candle source `market-data/manager.ts` (`true`, `serviceOnly`) | no lock | waits, then the fast path | as before |
+| CLI `deposit-probe`, `rate-limit-probe` (`false`) | no lock | waits | `refresh_needed` |
+| another backend process | — | does not see the flight: it waits on the row lock, as before | — |
+
+**The worker's cache.** The worker wraps its route source in `createCachedAccessTokenSource`
+(`apps/trading-worker/src/broker/access-token.ts`): an `ok` answer is reused for
+`ACCESS_TOKEN_CACHE_TTL_MS` (30 s), held below `ACCESS_SKEW_MS` at import
+(`intents/config.ts`), so a cached token still has at least 30 s left by its stored expiry when it
+goes out. A request with `refusedToken` drops the entry and goes to the route; an answer to a
+request that started before the drop is not stored. Refusals and failures are never stored; an
+already aborted signal is not served from the entry; at most `ACCESS_TOKEN_CACHE_MAX_ENTRIES`
+entries, the oldest dropped first. Every worker caller goes through it, the session manager's
+token included; the CLI probes build their own source without it (`access-token.test.ts` C1–C7,
+`trade-command-executor.test.ts` R8). A pair rotated by another caller inside the TTL costs at
+most one REST order a rotation, if the broker revokes the old access token: its 401 is reported,
+the entry dropped, and the next order goes out with the new token.
+
 ### The window after the last read (#239)
 
-`users.status` is read twice at most: in its own statement right after the account lock — a
-statement that joined `users` while it waited would keep the row of its own snapshot — and, on the
-exchange path, again after the rotated pair is stored, because the exchange holds the lock for up
+`users.status` is read twice at most: on the fast path in the same statement as the account
+(nothing is waited for, so the statement's snapshot is the committed state of that moment); under
+the lock in its own statement right after the account lock — a statement that joined `users` while
+it waited would keep the row of its own snapshot — and, on the exchange path, again after the
+rotated pair is stored, because the exchange holds the lock for up
 to `BROKER_HTTP_TIMEOUT_MS` (`token-service.db.test.ts` B1, B2). No caller gets a new token for a
-blocked user. A token already handed out is not taken back: a block committed after the last read
-does not stop what the caller does with it (stated). The window, from the last read to the last
-broker call made with that token:
+blocked user. A token already handed out is not taken back: a block (or a revocation) committed
+after the last read — on the fast path, also one not committed yet when the statement ran — does
+not stop what the caller does with it (stated). The window, from the last read to the last broker
+call made with that token; a worker caller's token may also come from the worker's cache, up to
+`ACCESS_TOKEN_CACHE_TTL_MS` after the backend's read:
 
 | Caller | `mayRefresh` | Window after the token is handed out |
 | --- | --- | --- |
@@ -676,6 +740,8 @@ A 429, a 5xx, `unavailable`, `contract_violation` and an abort report nothing.
   outcomes. Every reader of "token valid" already reads that column, so no flag and no migration.
 - **Another token is ignored.** The pair was rotated between the refusal and the report; the
   stored token is returned.
+- **The worker's cache** drops the account's entry when the report is sent, and stores the
+  report's `ok` answer (#868, [The fast path and the flights](#the-fast-path-and-the-flights-868)).
 - **Why not revoke, and why a timer does not exchange.** A refusal may be passing (`auth_failed`
   for another reason), and revoking would cost the user a login; a timer exchanging on its report
   is the mass `refresh_outcome_unknown` risk Rule 12 forbids. A wrong report costs one exchange on

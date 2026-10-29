@@ -268,6 +268,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 57. **Подлинность постбэка** — секрет в пути (`POSTBACK_URL_SECRET`, на ротацию `POSTBACK_URL_SECRET_PREVIOUS`) — единственный механизм, чужой — 404 без строки; `postback_deliveries.secret_key_id` и `deposit_events.verification` — предикат побочных эффектов → `rules/payments.md`
 58. **Живое ожидание сигнала** — экран ожидания — анимация с подписью из сводки сканера, правки подписи последней очередью → `rules/bot-ui.md`
 59. **Живое ожидание сигнала в сессии** — сообщение ожидания — анимация с подписью пары из сводки сканера, правки подписи — отдельный проход внутри темпа отправителя → `rules/bot-ui.md`
+60. **Токен брокера на пути сделки** — валидный токен одним SELECT без блокировки, flight на аккаунт в процессе, кэш worker'а с TTL → `rules/auth.md`
 
 ### Map: path → rules
 
@@ -282,7 +283,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/backend` | signal-h1 20, 43 |
 | `apps/backend/src` | core 9, 10, 14, 16, 51, 52; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48, 55, 56; bot-ui 18, 19, 31, 46, 47, 49, 58, 59; payments 35, 57 |
 | `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 44, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 58, 59; payments 39; auth 12, 13 |
-| `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49, 59; payments 35, 57; auth 12, 13 |
+| `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49, 59; payments 35, 57; auth 12, 13, 60 |
 | `apps/backend/src/bot-texts` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
 | `apps/backend/src/cli` | core 26; trading 23, 28, 33, 50; signal-h1 42, 44, 45, 48; bot-ui 30; payments 39, 40 |
@@ -295,17 +296,17 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37, 57; auth 12, 13 |
 | `apps/backend/src/signal` | signal-h1 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 17, 26, 52; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 58, 59; auth 12, 13 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26, 52; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 58, 59; auth 12, 13, 60 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
 | `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54; signal-h1 44, 45; bot-ui 18 |
-| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12 |
+| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12, 60 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 27 |
 | `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53, 54; signal-h1 43 |
-| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48, 56; auth 12 |
+| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48, 56; auth 12, 60 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28; signal-h1 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
 | `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 58, 59; payments 38 |
@@ -314,7 +315,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/web/src/oauth` | core 26; payments 38 |
 | `compose.prod.yaml` | core 52 |
 | `compose.yaml` | core 16, 52; trading 27; bot-ui 47 |
-| `docs/binodex-oauth.md` | auth 12 |
+| `docs/binodex-oauth.md` | auth 12, 60 |
 | `docs/bonus-rules.md` | payments 40 |
 | `docs/bot-demo-trade.md` | bot-ui 29 |
 | `docs/bot-demo.md` | bot-ui 46, 58 |
@@ -351,14 +352,14 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/broker-socket/src` | core 10, 14, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/db` | core 52 |
 | `packages/db/drizzle` | core 3, 51 |
-| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50, 53; signal-h1 41, 42, 44, 45, 48, 56; bot-ui 18, 19, 29, 30, 47, 59; payments 34, 35, 39, 40, 57; auth 11, 12, 13 |
+| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50, 53; signal-h1 41, 42, 44, 45, 48, 56; bot-ui 18, 19, 29, 30, 47, 59; payments 34, 35, 39, 40, 57; auth 11, 12, 13, 60 |
 | `packages/db/src/cli` | core 16 |
 | `packages/db/src/schema` | core 1, 2, 10, 51; trading 22, 27, 28, 33, 50; signal-h1 42, 44, 45; auth 11, 12 |
 | `packages/e2e/src` | core 51; trading 28; bot-ui 18 |
 | `packages/e2e/src/harness` | core 10; trading 22, 28; bot-ui 29, 46 |
 | `packages/mock-broker/src` | core 2, 10, 51; trading 15, 23, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/shared` | core 10, 52; trading 27; bot-ui 30, 58, 59 |
-| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59; payments 39, 40; auth 12 |
+| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59; payments 39, 40; auth 12, 60 |
 | `packages/signal` | signal-h1 43 |
 | `packages/signal-stand` | signal-h1 20 |
 | `packages/signal-stand/src` | core 10, 51; trading 25, 28; signal-h1 20, 41, 42, 43; bot-ui 18 |
