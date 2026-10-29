@@ -527,8 +527,7 @@ const TIMING_CHAIN_HOLDS =
   ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS <
     ANALYSIS_UNUSED_UNTIL_MS &&
   // the session notices (#464): with the mailings under Telegram's rate for one bot; stop() waits
-  // for the send in flight - the pace's gap, then a fallback summary's balance refresh and its
-  // one send (#537)
+  // for the step in flight (the three-call link below)
   MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND < TELEGRAM_BOT_SENDS_PER_SECOND &&
   // the switch after a deposit (#686): a thrown candidate is skipped for whole ticks; the pass's
   // tick is no longer than the sender's, so a deposit's message comes within the two ticks
@@ -543,10 +542,9 @@ const TIMING_CHAIN_HOLDS =
   SESSION_NOTICE_TICK_MS < SESSION_NOTICE_HOLD_MS &&
   sessionNoticeWakeBoundsHold() &&
   sessionWaitCaptionBoundsHold() &&
-  1000 / SESSION_NOTICE_SEND_PER_SECOND +
-    TRADING_ACCESS_REFRESH_BUDGET_MS +
-    CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <
-    SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the fallback summary's balance refresh is not waited for (#870): one started in a tick has
+  // answered, or its signal aborted it, before the tick after next starts
+  TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS &&
   // a trade's step of a cycle (#551) may make three calls (#536): the edit of the cycle message,
   // and when Telegram answers it is gone, the delete of the waiting message and the new message,
   // each after its own pace; then the next trade's pace. The waiting message's own steps and the

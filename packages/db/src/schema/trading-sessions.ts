@@ -33,7 +33,8 @@ const openNoticeIntentTarget = (): [AnyPgColumn, AnyPgColumn] => [
 
 // The pg_notify channel that wakes the backend's session notice sender (#723): transitionIntent
 // notifies it with the session's id when a session's intent becomes accepted or settled, and the
-// backend's listener LISTENs on it. One source for both sides; the payload is not read.
+// backend's listener LISTENs on it; the sender's woken tick reads the payload's session (#870). One
+// source for both sides.
 export const SESSION_NOTICE_CHANNEL = 'session_notices';
 
 // The session orchestrator's table (#130; the orchestrator is #287; docs/trading-session.md). `settings` is typed for the

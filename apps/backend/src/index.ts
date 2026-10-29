@@ -554,7 +554,7 @@ const sessionNoticeListener = createSessionNoticeListener({
   pool,
   channel: SESSION_NOTICE_CHANNEL,
   onNotification: (sessionId) => {
-    sessionNotices.wake();
+    sessionNotices.wake(sessionId);
     marketData?.h1Driver.notice(sessionId);
   },
   logger: app.log,
