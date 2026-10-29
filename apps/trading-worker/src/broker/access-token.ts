@@ -207,3 +207,68 @@ export function createBackendAccessTokenSource({
     },
   };
 }
+
+export interface CachedAccessTokenSourceOptions {
+  ttlMs: number;
+  maxEntries: number;
+  now?: () => number;
+}
+
+// The worker's token cache (#868, docs/trade-executor.md): an ok answer is reused for ttlMs, which
+// is held below the backend's ACCESS_SKEW_MS (intents/config.ts), so a cached token still has time
+// left when it goes out. A report of a refused token drops the entry before it asks, and an answer
+// to a request that started before the drop is not stored: it may carry the refused token.
+// Refusals and failures are never stored. An already aborted signal is not served from the entry,
+// so such a caller gets backend_unreachable from inner as it did without the cache.
+export function createCachedAccessTokenSource(
+  inner: AccessTokenSource,
+  { ttlMs, maxEntries, now = Date.now }: CachedAccessTokenSourceOptions,
+): AccessTokenSource {
+  const entries = new Map<string, { accessToken: string; expiresAt: number }>();
+  // per account while it has requests at inner: a drop moves the generation on
+  const inFlight = new Map<string, { requests: number; generation: number }>();
+
+  // an entry is stored at the end, so the first one expires first: dropping it is also dropping
+  // the expired ones before any live one
+  function store(brokerAccountId: string, accessToken: string): void {
+    entries.delete(brokerAccountId);
+    if (entries.size >= maxEntries) {
+      const oldest = entries.keys().next();
+      if (oldest.done !== true) entries.delete(oldest.value);
+    }
+    entries.set(brokerAccountId, { accessToken, expiresAt: now() + ttlMs });
+  }
+
+  return {
+    async accessToken(brokerAccountId, options = {}) {
+      const refused = options.refusedToken !== undefined;
+      if (!refused && options.signal?.aborted !== true) {
+        const entry = entries.get(brokerAccountId);
+        if (entry !== undefined && entry.expiresAt > now()) {
+          return { ok: true, accessToken: entry.accessToken };
+        }
+      }
+      let flight = inFlight.get(brokerAccountId);
+      if (flight === undefined) {
+        flight = { requests: 0, generation: 0 };
+        inFlight.set(brokerAccountId, flight);
+      }
+      if (refused) {
+        entries.delete(brokerAccountId);
+        flight.generation += 1;
+      }
+      const generation = flight.generation;
+      flight.requests += 1;
+      try {
+        const answer = await inner.accessToken(brokerAccountId, options);
+        if (answer.ok && flight.generation === generation) {
+          store(brokerAccountId, answer.accessToken);
+        }
+        return answer;
+      } finally {
+        flight.requests -= 1;
+        if (flight.requests === 0) inFlight.delete(brokerAccountId);
+      }
+    },
+  };
+}

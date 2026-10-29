@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify';
 import {
+  ACCESS_SKEW_MS,
   BrokerBalanceUnavailableReason,
   BrokerAccountStatus,
   TradeIntentErrorCode,
@@ -23,7 +24,6 @@ import {
   touchBalanceRequested,
   type Db,
 } from '@binarius/db';
-import { ACCESS_SKEW_MS } from '../auth/token-service';
 import type { BalanceReconciler, BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
 

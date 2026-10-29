@@ -76,7 +76,7 @@ afterEach(async () => {
 });
 
 describe('POST /trading/accounts/:id/access-token (#90)', () => {
-  const granted: AccessTokenResult = { ok: true, accessToken: SECRET };
+  const granted: AccessTokenResult = { ok: true, accessToken: SECRET, brokerUserId: 'broker-user' };
 
   it.each([null, 'wrong-token'])('refuses bearer %s with 401 before the lookup', async (token) => {
     const response = await post(appWith(granted), { mayRefresh: true }, { token });

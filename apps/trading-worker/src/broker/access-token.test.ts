@@ -12,10 +12,12 @@ import pino from 'pino';
 import { logOptions } from '@binarius/shared';
 import {
   createBackendAccessTokenSource,
+  createCachedAccessTokenSource,
   isAccessTokenRefusal,
   MAX_BACKEND_BODY_BYTES,
   notConfiguredAccessTokenSource,
   reportRefusedToken,
+  type AccessTokenOptions,
   type AccessTokenOutcome,
   type AccessTokenSource,
 } from './access-token';
@@ -365,5 +367,143 @@ describe('body size (#234)', () => {
       expect(parse(sample).success).toBe(true);
       expect(Buffer.byteLength(JSON.stringify(sample))).toBeLessThan(MAX_BACKEND_BODY_BYTES / 4);
     }
+  });
+});
+
+describe('createCachedAccessTokenSource (#868)', () => {
+  const TTL_MS = 30_000;
+  const REFUSED = hashToken('the-token-the-broker-refused');
+
+  // inner answers from a queue per call (the default: T<n> for the n-th call); now is a hand clock
+  function harness(maxEntries = 10) {
+    const calls: { id: string; options: AccessTokenOptions | undefined }[] = [];
+    const answers: (() => Promise<AccessTokenOutcome>)[] = [];
+    const inner: AccessTokenSource = {
+      accessToken: (id, options) => {
+        calls.push({ id, options });
+        const next = answers.shift();
+        return next === undefined
+          ? Promise.resolve({ ok: true, accessToken: `T${calls.length}` })
+          : next();
+      },
+    };
+    const clock = { at: 1_000_000 };
+    const tokens = createCachedAccessTokenSource(inner, {
+      ttlMs: TTL_MS,
+      maxEntries,
+      now: () => clock.at,
+    });
+    return { calls, answers, clock, tokens };
+  }
+
+  function deferred() {
+    let resolve!: (outcome: AccessTokenOutcome) => void;
+    const promise = new Promise<AccessTokenOutcome>((done) => {
+      resolve = done;
+    });
+    return { promise, resolve };
+  }
+
+  it('C1 serves a second request inside the TTL without asking again', async () => {
+    const h = harness();
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T1' });
+    h.clock.at += TTL_MS - 1;
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T1' });
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it('C2 asks again once the TTL is over', async () => {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT);
+    h.clock.at += TTL_MS;
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it.each<AccessTokenOutcome>([
+    { ok: false, reason: 'account_revoked' },
+    { ok: false, reason: 'backend_unreachable' },
+  ])('C3 never stores a refusal or a failure: $reason', async (refusal) => {
+    const h = harness();
+    h.answers.push(() => Promise.resolve(refusal));
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual(refusal);
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('C4 a refused token drops the entry and asks with it; its answer is stored', async () => {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT);
+    expect(
+      await h.tokens.accessToken(ACCOUNT, { mayRefresh: true, refusedToken: REFUSED }),
+    ).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls[1]?.options).toEqual({ mayRefresh: true, refusedToken: REFUSED });
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('C4b a refused token whose report is refused leaves no entry behind', async () => {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT);
+    h.answers.push(() => Promise.resolve({ ok: false, reason: 'refresh_needed' }));
+    expect(
+      await h.tokens.accessToken(ACCOUNT, { mayRefresh: false, refusedToken: REFUSED }),
+    ).toEqual({ ok: false, reason: 'refresh_needed' });
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T3' });
+    expect(h.calls).toHaveLength(3);
+  });
+
+  it('C5 a late answer to a request started before the drop is not stored', async () => {
+    const h = harness();
+    const old = deferred();
+    h.answers.push(() => old.promise);
+    h.answers.push(() => Promise.resolve({ ok: true, accessToken: 'T2' }));
+    const plain = h.tokens.accessToken(ACCOUNT);
+    expect(await h.tokens.accessToken(ACCOUNT, { refusedToken: REFUSED })).toEqual({
+      ok: true,
+      accessToken: 'T2',
+    });
+    old.resolve({ ok: true, accessToken: 'T1' });
+    expect(await plain).toEqual({ ok: true, accessToken: 'T1' });
+    expect(await h.tokens.accessToken(ACCOUNT)).toEqual({ ok: true, accessToken: 'T2' });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('C6 an entry serves either exchange policy', async () => {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT, { mayRefresh: true });
+    expect(await h.tokens.accessToken(ACCOUNT, { mayRefresh: false })).toEqual({
+      ok: true,
+      accessToken: 'T1',
+    });
+    const other = '7d1c4e2a-0b3f-4c5d-8e6f-9a0b1c2d3e4f';
+    await h.tokens.accessToken(other, { mayRefresh: false });
+    expect(await h.tokens.accessToken(other, { mayRefresh: true })).toEqual({
+      ok: true,
+      accessToken: 'T2',
+    });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('C6b an already aborted signal goes to inner, not to the entry', async () => {
+    const h = harness();
+    await h.tokens.accessToken(ACCOUNT);
+    h.answers.push(() => Promise.resolve({ ok: false, reason: 'backend_unreachable' }));
+    expect(await h.tokens.accessToken(ACCOUNT, { signal: AbortSignal.abort() })).toEqual({
+      ok: false,
+      reason: 'backend_unreachable',
+    });
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it('C7 holds maxEntries: a new entry drops the oldest', async () => {
+    const h = harness(2);
+    await h.tokens.accessToken('a');
+    await h.tokens.accessToken('b');
+    await h.tokens.accessToken('c');
+    expect(await h.tokens.accessToken('b')).toEqual({ ok: true, accessToken: 'T2' });
+    expect(await h.tokens.accessToken('c')).toEqual({ ok: true, accessToken: 'T3' });
+    expect(h.calls).toHaveLength(3);
+    expect(await h.tokens.accessToken('a')).toEqual({ ok: true, accessToken: 'T4' });
   });
 });

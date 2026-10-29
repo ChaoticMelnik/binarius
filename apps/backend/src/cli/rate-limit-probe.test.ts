@@ -49,7 +49,9 @@ describe('rate-limit-probe', () => {
   });
 
   it('R3 answers a broker that cannot be reached without the token or the host', async () => {
-    const result = await probe(() => Promise.resolve({ ok: true, accessToken: TOKEN }));
+    const result = await probe(() =>
+      Promise.resolve({ ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' }),
+    );
 
     expect(result.code).toBe(1);
     expect(result.out).toEqual([]);

@@ -51,7 +51,7 @@ beforeEach(() => {
   printed = [];
   logged = [];
   tokenCalls = [];
-  tokenAnswer = { ok: true, accessToken: TOKEN };
+  tokenAnswer = { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' };
   built = 0;
 });
 

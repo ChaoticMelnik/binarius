@@ -96,7 +96,8 @@ export const depositRoutes: FastifyPluginAsync<DepositRoutesDeps> = async (app, 
         default:
           return assertExhausted(resolved, 'balance account resolution');
       }
-      // ensureFreshAccessToken checks it again under the row lock; this one spares the lock
+      // ensureFreshAccessToken checks it again on its read or under the row lock; this one
+      // spares the call
       if (resolved.account.userStatus === UserStatus.Blocked) {
         return refuse(409, DepositErrorCode.UserBlocked);
       }

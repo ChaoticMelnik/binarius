@@ -6,7 +6,7 @@ import {
   type MockBroker,
   type MockScript,
 } from '@binarius/mock-broker';
-import { logOptions, TradeAction, TradeMode } from '@binarius/shared';
+import { ACCESS_TOKEN_CACHE_TTL_MS, logOptions, TradeAction, TradeMode } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
   BrokerEventType,
@@ -19,10 +19,11 @@ import {
 import pino from 'pino';
 import { io } from 'socket.io-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type {
-  AccessTokenOptions,
-  AccessTokenOutcome,
-  AccessTokenSource,
+import {
+  createCachedAccessTokenSource,
+  type AccessTokenOptions,
+  type AccessTokenOutcome,
+  type AccessTokenSource,
 } from '../broker/access-token';
 import type { TradeSessionSource } from '../broker/trade-session';
 import { observeExecutor } from '../circuit-breaker/observe-executor';
@@ -453,6 +454,40 @@ describe('REST only when nothing was emitted', () => {
       reason: 'broker_rejected',
     });
     expect(tokens.calls).toHaveLength(2);
+  });
+
+  it('R8 after a 401 the next REST order goes out with the rotated token, not the cached one (#868)', async () => {
+    // the broker knows TOKEN only: STALE is what a rotation by another caller left in the cache
+    const STALE = 'SECRET-TOKEN-rotated-away';
+    const calls: AccessTokenOptions[] = [];
+    const inner: AccessTokenSource = {
+      accessToken: async (_id, options = {}) => {
+        calls.push(options);
+        return {
+          ok: true,
+          accessToken: options.refusedToken === hashToken(STALE) ? TOKEN : STALE,
+        };
+      },
+    };
+    const tokens = createCachedAccessTokenSource(inner, {
+      ttlMs: ACCESS_TOKEN_CACHE_TTL_MS,
+      maxEntries: 10,
+    });
+    const run = executor(undefined, tokens);
+    expect(await run.submit(intentOf(), signal())).toMatchObject({
+      outcome: 'rejected',
+      reason: 'broker_rejected',
+    });
+    await until('the refused token to be reported', () => calls.length === 2);
+    expect(await run.submit(intentOf(), signal())).toMatchObject({
+      outcome: 'accepted',
+      transport: 'rest_fallback',
+    });
+    expect(restOpens()).toEqual([
+      expect.objectContaining({ bearer: 'unknown' }),
+      expect.objectContaining({ bearer: 'known' }),
+    ]);
+    expect(calls).toHaveLength(2);
   });
 
   it('R5 a token source that throws rejects the submit (the processor writes unknown)', async () => {

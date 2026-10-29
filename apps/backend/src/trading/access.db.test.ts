@@ -249,7 +249,7 @@ async function linkedUser(
       ? {}
       : { accessTokenExpiresAt: patch.accessTokenExpiresAt }),
   });
-  tokenAnswers.set(accountId, { ok: true, accessToken: token });
+  tokenAnswers.set(accountId, { ok: true, accessToken: token, brokerUserId: String(mockId) });
   return { ...user, accountId, mockId };
 }
 

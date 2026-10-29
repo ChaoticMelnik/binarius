@@ -71,7 +71,7 @@ async function accessToken(
   tokenCalls.push({ accountId, options });
   const answer = tokenAnswers.get(accountId);
   if (typeof answer === 'function') return answer();
-  return answer ?? { ok: true, accessToken: tokenOf(accountId) };
+  return answer ?? { ok: true, accessToken: tokenOf(accountId), brokerUserId: 'broker-user' };
 }
 
 let brokerUserSeq = 0;
@@ -381,7 +381,11 @@ describe('POST /deposit/widget-session', () => {
   it('D5 reports the token a broker 401 refused, without an exchange, and answers broker_unavailable', async () => {
     const user = await seedUserWithAccount(tmp.db);
     // the broker knows no user by this account's token
-    tokenAnswers.set(user.brokerAccountId, { ok: true, accessToken: 'TOKEN-THE-BROKER-REFUSES' });
+    tokenAnswers.set(user.brokerAccountId, {
+      ok: true,
+      accessToken: 'TOKEN-THE-BROKER-REFUSES',
+      brokerUserId: 'broker-user',
+    });
     lines.length = 0;
     expectRefusal(await mintFor(user.telegramUserId), 502, DepositErrorCode.BrokerUnavailable);
     expect(callsFor(user.brokerAccountId)).toEqual([
@@ -400,7 +404,12 @@ describe('POST /deposit/widget-session', () => {
     let call = 0;
     tokenAnswers.set(user.brokerAccountId, () => {
       call += 1;
-      if (call === 1) return Promise.resolve({ ok: true, accessToken: 'TOKEN-REFUSED-AGAIN' });
+      if (call === 1)
+        return Promise.resolve({
+          ok: true,
+          accessToken: 'TOKEN-REFUSED-AGAIN',
+          brokerUserId: 'broker-user',
+        });
       return Promise.reject(new Error('lock timeout'));
     });
     lines.length = 0;

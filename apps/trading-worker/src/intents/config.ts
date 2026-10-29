@@ -1,6 +1,10 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { H1_ENTRY_WINDOW_SEC } from '@binarius/shared';
-import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
+import {
+  ACCESS_SKEW_MS,
+  ACCESS_TOKEN_CACHE_TTL_MS,
+  ACCESS_TOKEN_ROUTE_BUDGET_MS,
+} from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
   BROKER_SOCKET_COMMAND_TIMEOUT_MS,
@@ -63,6 +67,10 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     token, the one GET and, on a 401, the report of the refused token (#281) fit a check
 //   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS - phase 1 waits for pass.stop(); no
 //     check starts after stop(), so it waits for the attempt or the check in flight, never both
+// The token cache (#868, broker/access-token.ts) adds one:
+//   ACCESS_TOKEN_CACHE_TTL_MS < ACCESS_SKEW_MS - the backend hands out a token only with more than
+//     ACCESS_SKEW_MS left, so a cached one still has ACCESS_SKEW_MS - ACCESS_TOKEN_CACHE_TTL_MS left
+//     by its stored expiry when it goes out
 // The session manager (#101, broker/session-config.ts) adds these:
 //   INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS
 //     + WORKER_HEARTBEAT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — the manager stops after the intents consumer drained, and the
@@ -214,6 +222,8 @@ const TIMING_CHAIN_HOLDS =
   WORKER_HEARTBEAT_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_POLL_MS <
     INTENT_ROUTER_DRAIN_TAIL_MS &&
   INTENT_ROUTER_DRAIN_POLL_MS < INTENT_ROUTER_STOP_BUDGET_MS &&
+  ACCESS_TOKEN_CACHE_TTL_MS < ACCESS_SKEW_MS &&
+  isTimerMs(ACCESS_TOKEN_CACHE_TTL_MS) &&
   isTimerMs(INTENT_RECOVERY_DELAY_MS) &&
   isTimerMs(INTENT_ROUTER_STOP_BUDGET_MS) &&
   isTimerMs(INTENT_ROUTER_DRAIN_POLL_MS) &&

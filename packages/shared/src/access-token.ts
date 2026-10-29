@@ -9,9 +9,22 @@ export const accessTokenPath = (accountId: string): string =>
   `/trading/accounts/${encodeURIComponent(accountId)}/access-token`;
 
 // The route's longest path is one token exchange under the account's row lock (the backend's
-// BROKER_HTTP_TIMEOUT_MS, 5 s) plus database latency. The worker uses it as its request timeout,
+// BROKER_HTTP_TIMEOUT_MS, 5 s), or the wait for another caller's exchange (#868), plus database
+// latency. The worker uses it as its request timeout,
 // and apps/backend/src/timing.ts holds the exchange inside it.
 export const ACCESS_TOKEN_ROUTE_BUDGET_MS = 7_000;
+
+// The backend renews a little before expiry, so a token handed out now is still valid when it is
+// used: it hands out a token only while more than this is left of it.
+export const ACCESS_SKEW_MS = 60_000;
+
+// The worker reuses an ok answer of the route for this long (#868). Held below ACCESS_SKEW_MS at
+// the worker's import (apps/trading-worker/src/intents/config.ts): a cached token still has at
+// least ACCESS_SKEW_MS - ACCESS_TOKEN_CACHE_TTL_MS left by its stored expiry when it goes out.
+export const ACCESS_TOKEN_CACHE_TTL_MS = 30_000;
+// one entry per account; no lower than the per-worker session ceiling, so the accounts one
+// process works on fit
+export const ACCESS_TOKEN_CACHE_MAX_ENTRIES = 10_000;
 
 // Why the backend refused to hand out a token: each holds until something changes (the user acts,
 // an operator acts, the key is deployed), never because of a passing failure — except
