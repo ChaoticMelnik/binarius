@@ -6,7 +6,8 @@ import path from 'node:path';
 // The Architecture Rules (#770): the index lives in .claude/skills/architect/SKILL.md, the rules
 // in .claude/skills/architect/rules/<area>.md, one `### Rule N` heading per rule. This prints the
 // rules a list of files touches (the flags are in USAGE); tooling/rules-for.test.ts is the gate
-// that holds the rules' citations to the repository.
+// that holds the rules' citations to the repository, and a rule after LEGACY_RULES_MAX to the
+// template of #776 (checkNewRules: size and no history).
 //
 // Input from a diff: `gh pr diff <N> --name-only | xargs node tooling/rules-for.ts`. A path may be
 // relative to the working directory or absolute; run from inside the repository.
@@ -148,6 +149,38 @@ export function checkNumbering(rules: readonly Rule[]): string[] {
   const errors: string[] = [];
   for (let n = 1; n <= max; n += 1)
     if (!numbers.has(n)) errors.push(`numbering: Rule ${n} is missing`);
+  return errors;
+}
+
+// --- new rules -----------------------------------------------------------------------------
+
+// Rules up to this number were written before the template of #776; the limit and the history
+// check hold for every later one (the owner's decision: 55, the max on main that day).
+export const LEGACY_RULES_MAX = 55;
+export const NEW_RULE_MAX_BYTES = 1536;
+// History lives in audits.md → «Architecture Rules — история», not in a rule (#776). The
+// Cyrillic look-behind keeps «удаление», «удалённый» and the like out.
+export const HISTORY_MARKERS: readonly { name: string; pattern: RegExp }[] = [
+  { name: 'с #N до #M', pattern: /(?<![а-яё])с #\d+ до #\d+/ },
+  { name: 'удалён', pattern: /(?<![а-яё])удал[её]н[аоы]?(?![а-яё])/ },
+  { name: 'до #N —', pattern: /(?<![а-яё])до #\d+ —/ },
+  { name: 'дата', pattern: /20\d\d-\d\d-\d\d/ },
+];
+
+export function checkNewRules(rules: readonly Rule[]): string[] {
+  const errors: string[] = [];
+  for (const rule of rules) {
+    if (rule.number <= LEGACY_RULES_MAX) continue;
+    const where = `rules/${rule.area}.md Rule ${rule.number}`;
+    const bytes = Buffer.byteLength(rule.body, 'utf8');
+    if (bytes > NEW_RULE_MAX_BYTES)
+      errors.push(`${where}: ${bytes} bytes, the limit is ${NEW_RULE_MAX_BYTES}`);
+    for (const { name, pattern } of HISTORY_MARKERS) {
+      const match = pattern.exec(rule.body);
+      if (match !== null)
+        errors.push(`${where}: history «${match[0]}» (${name}) belongs in audits.md`);
+    }
+  }
   return errors;
 }
 
