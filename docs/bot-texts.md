@@ -307,9 +307,12 @@ compile.
 | `tokenBalance` | `users.token_balance` after a Stars credit (#117) | `formatCount` | — |
 | `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 | `sessionEnd` | the session's `ended_at`, Unix seconds (#538, the promo card) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
+| `checks` | the scanner's checks a minute of the wait's caption, `scanned × 60` (#859) | `formatCount` | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `step`, `openPrice`,
-`closePrice`, `noSignalCandles`, `candleSec`, …) are a line's value the
+`closePrice`, `noSignalCandles`, `candleSec`, and the wait's scanner lines `pairs`, `quotes`, `moves`,
+`closest`, `pct` of #859 — `scan-summary.ts` builds them from `GET /trading/signals`' summary, the
+pair word by the language's plural rule, `scanPairOne/Few/Many` — …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
 names what they hold.
 
@@ -621,8 +624,10 @@ adaptive line, under a lost step 1 or above step 2 (#718) — the unit the backe
 between blocks, #551 — the summary as a text, `sessionSummary`, the backend's fallback through the
 shared builders of `packages/shared/src/session-texts.ts` (#464, #537), the same lines as the
 bot's caption under the card and its text, a caption of 1024 (#709); the
-analysis card, `analysisCard`, a caption of 1024, #482), and
-each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+analysis card, `analysisCard`, a caption of 1024, #482; the waits for a signal — `signalsScanning`,
+`pairWaiting`, `analysisWaiting`, `analysisWaitingData` with the scanner's lines — and the next
+step the wait draws, `demoLaunch` and `demoCycleStake`, captions of 1024 under the wait's media
+since #859), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its

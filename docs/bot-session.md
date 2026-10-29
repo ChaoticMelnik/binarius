@@ -1142,7 +1142,8 @@ token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and onl
 session's is an edit (#536, `mayDraw`) — up to 16 calls when each entry's summary is due (#537:
 a 429 adds one photo) ([risk
 47](#accepted-risks)). The wait for a signal (#664) adds up to 5 edits a second
-(`SIGNAL_WAIT_EDITS_PER_SECOND`): about 38 a second in the worst coincidence, above Telegram's ~30,
+(`SIGNAL_WAIT_EDITS_PER_SECOND`; its scanner captions, #859, are inside them, at most 2 a tick
+after the edits that end waits): about 38 a second in the worst coincidence, above Telegram's ~30,
 so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)).
 
@@ -1490,7 +1491,7 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   first three (#509). «📤 Поделиться» comes on top of these rows by
   an edit right after the send (#321), on the photo and on the text after a refused photo, not on
   a session without a trade (its share would answer nothing).
-  «📡 Сигналы» tries no edit under the card (#761, `pressedUnderPhoto`, `demo.ts`): the press
+  «📡 Сигналы» tries no edit under the card (#761, `pressedUnderMedia`, `demo.ts`): the press
   carries the photo, so the list comes as a new message at once, with no `warn` (until #761 the edit
   was tried, refused with «there is no text in the message to edit» and logged per press). «📊 Анализ» tries no edit (#482): the press carries the photo, so
   «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the

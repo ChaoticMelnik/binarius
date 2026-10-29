@@ -633,6 +633,8 @@ scanner's memory:
 { "asOf": 1760000012000,
   "lists": [
     { "interval": "5s", "scanned": 122,
+      "summary": { "streaming": true, "scanning": 23,
+                   "closeness": [{ "assetId": 23, "pct": 82 }, { "assetId": 5, "pct": 71 }] },
       "signals": [{ "assetId": 101, "action": "up", "second": 1760000011000,
                     "decidedAt": 1760000011320, "ageMs": 1000 }] } ] }
 ```
@@ -642,8 +644,11 @@ One list, keyed `intervalForDuration(H1_EXPIRY_SEC)` (`5s`): the list of the bot
 versions parse each other's answer, and the bot reads only the list of its own duration. A pair is
 served only when its newest decision is an H1 signal on a current second (`now − second ≤
 H1_START_SECOND_MAX_AGE_MS`, 1 600 ms); `scanned` counts the pairs with a current decision; a
-`no_signal` and a pair without one never appear (`signals-routes.test.ts` R2–R5). Without the data
-socket the list is empty (R6). Without the bearer the answer is 401 `{ error: 'unauthorized' }`.
+`no_signal` and a pair without one never appear (`signals-routes.test.ts` R2–R5). `summary`
+(#859, `scanSummarySchema`, required): whether the data socket streams, the pair the scanner is on
+this second (`scanning`, null without a current pair) and every current below-threshold pair's
+closeness to the H1 threshold in percent, 0–99 ([h1.md](h1.md)); the bot's wait prints it (R7).
+Without the data socket the list and the summary are empty (R6). Without the bearer the answer is 401 `{ error: 'unauthorized' }`.
 
 The consumers are the bot's signals screen (#320, `readSignals` in
 `apps/bot/src/backend-client.ts`), its door drawn without a signal (`n`, #664) and its wait for a
