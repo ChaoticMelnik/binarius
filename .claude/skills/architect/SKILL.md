@@ -110,7 +110,7 @@ Do not proceed to Step 6 while a question is unanswered.
 
 ### Validation checklist
 - [ ] All affected domain entities covered (not just issue-mentioned ones)
-- [ ] Every rule `node tooling/rules-for.ts <the plan's files>` prints (output quoted in the plan) that the change touches is named in the plan and preserved; a rule the change adds or alters goes to `.claude/skills/architect/rules/<area>.md` with its line in the index (next free number)
+- [ ] Every rule `node tooling/rules-for.ts <the plan's files>` prints (output quoted in the plan) that the change touches is named in the plan and preserved; a rule the change adds or alters goes to `.claude/skills/architect/rules/<area>.md` with its line in the index, by the template of this file → Architecture Rules (next free number, ≤ `NEW_RULE_MAX_BYTES`, no history — `tooling/rules-for.test.ts`)
 - [ ] No new build/type/lint/test failures (`pnpm check` passes)
 - [ ] Every mutating endpoint has authorization consistent with adjacent code
 - [ ] read→mutate patterns: atomic guard, or race condition explicitly accepted with reason
@@ -196,7 +196,16 @@ Implementer picks it up only once this comment exists.
 
 Модульные границы: `apps/bot`, `apps/backend`, `apps/web`, `apps/trading-worker`, `packages/db`, `packages/shared` (стек — `.claude/skills/tech-lead/SKILL.md` → Project Architecture Reference). Общий Drizzle-контракт и общие типы в `packages/shared` меняет только их владелец за волну (`.claude/CLAUDE.md` → Стек и домены).
 
-Инварианты ниже подтверждены кодом в `main` (2026-09-24). Полный список — этот индекс и файлы `rules/*.md` этого каталога; reviewer, Codex-промпт (`.claude/codex-review-prompt.md`) и `.claude/CLAUDE.md` ссылаются сюда. Как загружать: `node tooling/rules-for.ts <файлы плана>` печатает правила по путям; файл области читается Read целиком, когда план трогает её. Правило находится по любому слову своего текста, которое называет путь: в обратных кавычках, в команде или в прозе; каталог называется со `/` или путём из двух и более сегментов. Файлу под `apps/` или `packages/` скрипт добавляет постоянный набор `ALWAYS` (правила бывшей памятки `.claude/CLAUDE.md` и `auth.md`). Новое правило — следующий свободный номер, файл своей области, строка здесь; со ссылкой на место, где оно enforced, не шире этого места (шаблон и лимит — #776).
+Инварианты ниже подтверждены кодом в `main`: пути, идентификаторы и литералы в обратных кавычках и id тестов после цитаты тест-файла держит `tooling/rules-for.test.ts` (G1–G3). Полный список — этот индекс и файлы `rules/*.md` этого каталога; reviewer, Codex-промпт (`.claude/codex-review-prompt.md`) и `.claude/CLAUDE.md` ссылаются сюда. Как загружать: `node tooling/rules-for.ts <файлы плана>` печатает правила по путям; файл области читается Read целиком, когда план трогает её. Правило находится по любому слову своего текста, которое называет путь: в обратных кавычках, в команде или в прозе; каталог называется со `/` или путём из двух и более сегментов. Файлу под `apps/` или `packages/` скрипт добавляет постоянный набор `ALWAYS` (правила бывшей памятки `.claude/CLAUDE.md` и `auth.md`).
+
+**Новое правило** (#776) — следующий свободный номер, файл своей области, строка в индексе; не больше `NEW_RULE_MAX_BYTES` (1 536 байт тела) и без истории — `tooling/rules-for.test.ts` держит это для правил после `LEGACY_RULES_MAX` (`tooling/rules-for.ts`). Содержание — инвариант, enforcement, ссылка на doc; формулировка не шире места, где она enforced. Шаблон:
+
+```
+### Rule N
+N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → Раздел).** Инвариант — одна-две нормативные фразы. Enforced: `file.test.ts` A1–A3, CHECK `<table>_<col>_check` (`schema.db.test.ts` S1), ESLint `local/<rule>`; stated: что не держит ни один тест. Остальное — в docs/<domain>.md.
+```
+
+История правила (период «с #X до #Y», удалённое, порядок деплоя версий, датированное решение) — `audits.md` → «Architecture Rules — история»; в правиле — голый `(#N)`.
 
 ### Index
 
@@ -243,7 +252,7 @@ Implementer picks it up only once this comment exists.
 41. **Источник свечей из сокета** — только при `BROKER_WS_URL`, сокеты данных — на служебных аккаунтах в строю → `rules/signal-h1.md`
 42. **Журнал решений сессий** — каждое решение с исходом — строка `signal_decisions` одним INSERT, UPDATE нет → `rules/signal-h1.md`
 43. **Детектор H1** — чистая функция `decide({ closes, at })` от ряда закрытий секунд → `rules/signal-h1.md`
-44. **Серия секунд H1** — серия закрытий секунд из тиков активного сокета данных, закрытая секунда не меняется; читают сканер и драйвер, тень снята (#830) → `rules/signal-h1.md`
+44. **Серия секунд H1** — серия закрытий секунд из тиков активного сокета данных, закрытая секунда не меняется; читают сканер и драйвер, писателя строк `shadow` нет (#830) → `rules/signal-h1.md`
 45. **Тики вокруг решения и срок хранения** — строка `decision_ticks` одна на решение, пишется один раз после закрытия окна; срок хранения журнала → `rules/signal-h1.md`
 46. **Ожидание сигнала в боте** — после выбора пары бот не показывает «нет сигнала», а ждёт сигнал → `rules/bot-ui.md`
 47. **Итог сессии одним сообщением** — итог завершённой сессии — одно сообщение бота со звуком; запасной текст — у backend'а → `rules/bot-ui.md`

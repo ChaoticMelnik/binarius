@@ -189,6 +189,12 @@
 
 - 2026-10-07, #197 — a `\u00XX` escape in the local file came back in #197's plan as caret notation, which turned `[\s\x00-\x1f\x7f]` into a class that refused A-Z; only the implementer's clarify round caught it.
 
+## architect → Architecture Rules
+
+- 2026-10-23, #770 — решение владельца (В3): история правил — в `audits.md` → «Architecture Rules — история», не в правилах; перенос #770 дословный, редактура — #776.
+- 2026-10-23, #776 — решение владельца (В4): новое правило — не больше 1 536 байт и без строк истории, тест — `tooling/rules-for.test.ts`; правила до `LEGACY_RULES_MAX` — без лимита.
+- 2026-10-29, #776 — решение владельца: `LEGACY_RULES_MAX = 55` — Rules 52–55 появились после В4 (2,1–4,8 КБ) и редактируются как остальные; лимит — с Rule 56.
+
 ## implementer → Step 0
 
 - 2026-10-23, #769 — вопрос только на реальную развилку, без минимума (`.claude/CLAUDE.md → Фазы и вопросы владельцу`).

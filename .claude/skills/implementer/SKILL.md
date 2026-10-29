@@ -113,7 +113,7 @@ Run before committing. Every item traces to a review finding (`audits.md`):
 - [ ] Parallel/structurally similar code paths diffed against each other for a step one has and the other is missing
 - [ ] Every new mutation checked against other in-flight actions on the same entity for an inconsistent-state race
 - [ ] Money/token fields are `numeric(20,8)`/`bigint` in the DB and `DecimalString` in code, never a JS number — the two wire-boundary exceptions are in Rule 2
-- [ ] A rule the change adds or alters lives in `.claude/skills/architect/rules/<area>.md` with its line in the index (`architect/SKILL.md` → Architecture Rules, next free number) — never in SKILL.md's body; template and size limit — #776
+- [ ] A rule the change adds or alters lives in `.claude/skills/architect/rules/<area>.md` with its line in the index, by the template of `architect/SKILL.md` → Architecture Rules (next free number, ≤ `NEW_RULE_MAX_BYTES` bytes, no history — `tooling/rules-for.test.ts` holds it for rules after `LEGACY_RULES_MAX`, #776) — never in SKILL.md's body
 - [ ] Deposit/postback handlers dedupe by postback id and payment_id before crediting anything
 - [ ] **Class, not instance:** whenever a constraint, a rule or a fix changes, search the whole domain for the same construct (grep/codegraph — write the command down) and close every occurrence, not the one named. When the change removes a path (a route, a button, a flow), the search runs over the whole repo — docs, comments and tests included — for its names and the words that describe it, and every hit is edited or left with a reason (#314)
 - [ ] A framework default the code or a comment relies on (error bodies, redaction, retries, lock modes) was verified by running it
