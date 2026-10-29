@@ -127,8 +127,9 @@ for another caller's exchange, on the row lock or on that caller's flight
 - The background tick (below): `mayRefresh: false`.
 - **The session view** (#337): `GET /trading/sessions/:id` and the final read of
   `POST /trading/sessions/:id/stop` and of `POST /trading/sessions/stop` (#122, one per stopped
-  session, in parallel), and the session notices' summary (#464) (`readFinishedSessionView` in
-  `apps/backend/src/trading/session-view.ts`).
+  session, in parallel) (`readFinishedSessionView` in `apps/backend/src/trading/session-view.ts`),
+  and the session notices' fallback summary (#464), which starts the same refresh
+  (`refreshFinishedBalance`) without waiting for it and reads the view on a later tick (#870).
   Only for a finished session (`isTradingSessionFinished`) with `settled > 0` whose snapshot is
   not `current` — older than the session's last `settle` row of `token_ledger`, or missing
   (`readTradingSessionView`, `balance: null`).
