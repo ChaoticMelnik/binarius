@@ -853,6 +853,21 @@ shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a
 which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
 update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
 
+grammY retries some Bot API failures by itself and reports them only to the `debug` package, which
+writes nothing without `DEBUG` — and `DEBUG` stays unset, because its lines carry the error message,
+whose URL holds the token. Those are `getUpdates` in the polling loop (every failure but 401 and
+409) and `getMe` and `deleteWebhook` at start. Since #67 `createBot` installs
+`createTelegramRetryLog` (`packages/shared/src/telegram-retry-log.ts`) as an API transformer, and
+each such failure is one `warn` line `Bot API call failed, grammY retries it` with `method`, the
+error's name and code (`errorLogFields`), `telegramErrorCode` for a refusal or `transportError` for a
+transport failure (`FetchError` with `ECONNREFUSED` or `ECONNRESET`; `Error` without a code for the
+8 s client timeout, which `elapsedMs` gives away; `FetchError` without a code for a body that is not
+JSON), `retryAfterS` after a 429, `failures` in the series and `elapsedMs` of the attempt. The first
+success after a series is one `info` line `Bot API call succeeded after failures` with `downMs`.
+That is a line per attempt, at most one every 3 s for `getUpdates`. A 401 or 409 gets the same
+`warn`, then `long polling stopped with an error`, which now carries the method and the code too.
+The long poll `bot.stop()` aborts is not a failure and writes nothing.
+
 The profile registration ([Command menu](#command-menu), [Bot profile](#bot-profile)) is
 `STARTUP_CALLS` = 3 Bot API calls at startup, one after another, each bounded by the same 8 s
 client timeout, after the wait for the first texts load (the refresher's budget,

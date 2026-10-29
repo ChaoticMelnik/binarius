@@ -3,6 +3,7 @@ import type { UserFromGetMe } from 'grammy/types';
 import {
   ButtonRole,
   callbackButton,
+  createTelegramRetryLog,
   errorIdentity,
   errorLogFields,
   keyboardOf,
@@ -106,6 +107,10 @@ export function createAdminBot({
       timeoutSeconds: telegramApiTimeoutMs / 1000,
     },
   });
+  const retryLog = createTelegramRetryLog({ logger });
+  bot.api.config.use((prev, method, payload, signal) =>
+    retryLog.call(method, () => prev(method, payload, signal), signal),
+  );
 
   // One person per chat. A group would make "the account this update came from" ambiguous, and
   // this bot's whole authority argument rests on that being unambiguous.

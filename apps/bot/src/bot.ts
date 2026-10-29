@@ -40,6 +40,7 @@ import {
   RETRY_COMMANDS,
   type RetryCommand,
   telegramErrorFields,
+  createTelegramRetryLog,
 } from '@binarius/shared';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import {
@@ -195,6 +196,10 @@ export function createBot({
       timeoutSeconds: telegramApiTimeoutMs / 1000,
     },
   });
+  const retryLog = createTelegramRetryLog({ logger });
+  bot.api.config.use((prev, method, payload, signal) =>
+    retryLog.call(method, () => prev(method, payload, signal), signal),
+  );
 
   const welcomeKeyboard = () => keyboardOf(connectButtons());
 

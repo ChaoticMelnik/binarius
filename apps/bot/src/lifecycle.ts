@@ -154,7 +154,10 @@ export function runBot({
     // once a drain owns this promise, only closeAll decides the exit code — exiting here would
     // kill the middleware the drain is deliberately waiting for
     if (stopping) return;
-    logger.error(errorLogFields(error), 'long polling stopped with an error');
+    logger.error(
+      { ...errorLogFields(error), ...telegramErrorFields(error) },
+      'long polling stopped with an error',
+    );
     exit(1);
   });
 
