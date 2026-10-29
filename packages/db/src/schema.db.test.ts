@@ -320,6 +320,20 @@ describe('enum and uniqueness constraints', () => {
         ),
     ],
     [
+      'deposit_events_verification_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into deposit_events (source, broker_user_id, payment_id, amount, verification) values ('binodex', 't', 'x', 1, 'bogus')`,
+        ),
+    ],
+    [
+      'postback_deliveries_secret_key_id_check',
+      (tx: Tx) =>
+        tx.execute(
+          sql`insert into postback_deliveries (source, outcome, reject_reason, payload, secret_key_id) values ('binodex', 'rejected', 'missing_postback_id', '{}', 'ABCDEF12')`,
+        ),
+    ],
+    [
       'bonus_rules_validity_check',
       (tx: Tx) =>
         tx.execute(

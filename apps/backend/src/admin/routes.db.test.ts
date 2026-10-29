@@ -2520,6 +2520,7 @@ describe('the deposits page and the card section (#341)', () => {
         amount: '10.5',
         sub_id: PAYLOAD_MARKER,
       },
+      secretKeyId: '0123abcd',
     });
     if (recorded.outcome !== 'recorded') throw new Error('insertDeposit: postback not recorded');
     await tmp.db

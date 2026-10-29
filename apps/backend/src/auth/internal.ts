@@ -5,6 +5,10 @@ const SCHEME = 'Bearer ';
 
 export const secretDigest = (value: string): Buffer => createHash('sha256').update(value).digest();
 
+// The first 8 hex of the sha256 (#142, docs/postbacks.md -> Authenticity): names which secret
+// admitted a postback in the journal and the logs; neither the secret nor a usable part of it.
+export const secretKeyId = (digest: Buffer): string => digest.subarray(0, 4).toString('hex');
+
 // Hashing both sides first keeps the comparison constant-time whatever the length of the
 // presented value. Used by the bearer below and by the postback route's URL secret (#141).
 export function secretMatches(presented: string, expected: Buffer): boolean {

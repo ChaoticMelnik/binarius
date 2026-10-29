@@ -13,6 +13,7 @@ import {
   unusedSessionDeps,
   unusedSignalsDeps,
 } from '../trading/testing';
+import { secretDigest, secretKeyId } from '../auth/internal';
 import type { PostbackRoutesDeps } from './routes';
 import { unusedDepositDeps } from '../deposit/testing';
 
@@ -25,6 +26,8 @@ if (baseUrl === undefined || baseUrl === '') {
 
 const TOKEN = 'internal-token-for-tests';
 const SECRET = 's3cret-postback-path-segment-0123456789';
+const PREVIOUS = 'previous-postback-path-segment-9876543210';
+const keyIdOf = (secret: string) => secretKeyId(secretDigest(secret));
 let tmp: TempDatabase;
 let app: ReturnType<typeof buildApp>;
 
@@ -72,7 +75,7 @@ const testApp = (postbacks: Omit<PostbackRoutesDeps, 'db'> | undefined) =>
 
 beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
-  app = testApp({ secret: SECRET });
+  app = testApp({ secret: SECRET, previousSecret: PREVIOUS });
   await app.ready();
 });
 afterAll(async () => {
@@ -147,6 +150,7 @@ describe('GET /postbacks/binodex/:secret', () => {
         outcome: 'recorded',
         event: 'deposit',
         postbackId: keys.id,
+        secretKeyId: keyIdOf(SECRET),
       }),
     ]);
     const text = JSON.stringify(lines);
@@ -205,6 +209,52 @@ describe('GET /postbacks/binodex/:secret', () => {
     expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
     expect(linesOf('postback refused')).toHaveLength(1);
     expect(JSON.stringify(lines)).not.toContain(secret);
+  });
+
+  it('S1 admits the previous secret beside the current one and journals which one', async () => {
+    const keys = fresh();
+
+    const current = await get(deliveryUrl(keys));
+    const previous = await get(
+      deliveryUrl({ ...keys, id: `${keys.id}-prev` }, { event: 'ftd' }, PREVIOUS),
+    );
+
+    expect([current, previous].map((r) => [r.statusCode, r.json<unknown>()])).toEqual([
+      [200, { outcome: 'recorded' }],
+      [200, { outcome: 'repeated' }],
+    ]);
+    const rows = await rowsFor(keys.payment_id);
+    expect(rows.deposits).toEqual([expect.objectContaining({ verification: 'url_secret' })]);
+    expect(
+      rows.deliveries
+        .map((d) => [d.postbackId, d.outcome, d.secretKeyId])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+    ).toEqual([
+      [keys.id, 'recorded', keyIdOf(SECRET)],
+      [`${keys.id}-prev`, 'repeated', keyIdOf(PREVIOUS)],
+    ]);
+  });
+
+  it('S2 refuses a retired secret like any wrong one, naming its key id', async () => {
+    const retired = testApp({ secret: SECRET });
+    try {
+      const keys = fresh();
+      lines.length = 0;
+
+      const response = await get(deliveryUrl(keys, {}, PREVIOUS), retired);
+
+      expect([response.statusCode, response.json<unknown>()]).toEqual([
+        404,
+        { error: 'not_found' },
+      ]);
+      expect(await rowsFor(keys.payment_id)).toEqual({ deliveries: [], deposits: [] });
+      expect(linesOf('postback refused')).toEqual([
+        expect.objectContaining({ level: 40, presentedKeyId: keyIdOf(PREVIOUS) }),
+      ]);
+      expect(JSON.stringify(lines)).not.toContain(PREVIOUS);
+    } finally {
+      await retired.close();
+    }
   });
 
   it('refuses a repeated query key with 400 and journals nothing', async () => {

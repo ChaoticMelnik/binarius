@@ -264,6 +264,44 @@ describe('POSTBACK_URL_SECRET (#141)', () => {
   });
 });
 
+describe('POSTBACK_URL_SECRET_PREVIOUS (#142)', () => {
+  const current = 'a'.repeat(64);
+  const previous = 'b'.repeat(64);
+  const withCurrent = { ...valid, POSTBACK_URL_SECRET: current };
+
+  it('PS1 is undefined when absent', () => {
+    expect(parseEnv(withCurrent).postbackUrlSecretPrevious).toBeUndefined();
+  });
+
+  it('PS2 accepts a value of the pattern beside the current one', () => {
+    const env = parseEnv({ ...withCurrent, POSTBACK_URL_SECRET_PREVIOUS: previous });
+    expect(env.postbackUrlSecret).toBe(current);
+    expect(env.postbackUrlSecretPrevious).toBe(previous);
+  });
+
+  it.each([
+    ['empty', '', 'Env POSTBACK_URL_SECRET_PREVIOUS must not be empty'],
+    ['31 characters', 'b'.repeat(31), 'Env POSTBACK_URL_SECRET_PREVIOUS must be 32-100 characters'],
+    ['a slash', `${previous}/x`, 'Env POSTBACK_URL_SECRET_PREVIOUS must be 32-100 characters'],
+  ])('PS3 refuses %s', (_label, value, message) => {
+    expect(() => parseEnv({ ...withCurrent, POSTBACK_URL_SECRET_PREVIOUS: value })).toThrow(
+      message,
+    );
+  });
+
+  it('PS4 refuses a value equal to the current one', () => {
+    expect(() => parseEnv({ ...withCurrent, POSTBACK_URL_SECRET_PREVIOUS: current })).toThrow(
+      'Env POSTBACK_URL_SECRET_PREVIOUS must differ from POSTBACK_URL_SECRET',
+    );
+  });
+
+  it('PS5 refuses a previous secret without the current one', () => {
+    expect(() => parseEnv({ ...valid, POSTBACK_URL_SECRET_PREVIOUS: previous })).toThrow(
+      'Env POSTBACK_URL_SECRET_PREVIOUS needs POSTBACK_URL_SECRET',
+    );
+  });
+});
+
 describe('BROKER_WS_URL (#404)', () => {
   it('leaves the market data source off when absent', () => {
     expect(parseEnv(valid).brokerWsUrl).toBeUndefined();

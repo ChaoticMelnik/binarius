@@ -1,4 +1,5 @@
 import {
+  POSTBACK_SECRET_KEY_ID_PATTERN,
   PostbackDeliveryOutcome,
   PostbackEvent,
   PostbackRejectReason,
@@ -15,7 +16,7 @@ import {
   uuid,
   type AnyPgColumn,
 } from 'drizzle-orm/pg-core';
-import { createdAt, id, inList, literal } from './columns';
+import { createdAt, id, inList, literal, sqlTextLiteral } from './columns';
 import { depositEvents } from './deposit-events';
 
 const rejected = literal(PostbackDeliveryOutcome.Rejected);
@@ -42,6 +43,9 @@ export const postbackDeliveries = pgTable(
     }),
     // the query as received, the secret is in the path and never here
     payload: jsonb('payload').$type<Record<string, string>>().notNull(),
+    // the key id of the secret that admitted the delivery (#142, secretKeyId); NULL on rows
+    // journaled before 0087
+    secretKeyId: text('secret_key_id'),
     createdAt: createdAt(),
   },
   (t) => [
@@ -49,6 +53,10 @@ export const postbackDeliveries = pgTable(
     inList('postback_deliveries_event_check', t.event, PostbackEvent),
     inList('postback_deliveries_outcome_check', t.outcome, PostbackDeliveryOutcome),
     inList('postback_deliveries_reject_reason_check', t.rejectReason, PostbackRejectReason),
+    check(
+      'postback_deliveries_secret_key_id_check',
+      sql`${t.secretKeyId} ~ ${sqlTextLiteral(POSTBACK_SECRET_KEY_ID_PATTERN.source, 'POSTBACK_SECRET_KEY_ID_PATTERN')}`,
+    ),
     // a rejected row has a reason and no deposit; any other has a deposit, an id and an event,
     // so the partial unique below never sees a NULL id on a row it covers
     check(

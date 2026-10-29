@@ -1,6 +1,7 @@
 import { and, eq, isNull } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
+  DepositVerification,
   PostbackDeliveryOutcome,
   PostbackResponseOutcome,
   PostbackSource,
@@ -56,9 +57,16 @@ const notRejected = notRejectedDelivery(postbackDeliveries.outcome);
 // users or token_ledger. Every delivery that reaches it is journaled except a repeat of a
 // recorded postback id. Lock order: broker_accounts (FOR SHARE) → deposit_events → the journal,
 // the same relative order as activation's users → broker_accounts → deposit_events (Rule 5).
+// `secretKeyId` names the secret the route admitted the delivery with (#142, docs/postbacks.md →
+// Authenticity): the writer journals it and checks nothing; a deposit it creates is
+// `verification = url_secret` because a key id means the delivery passed the secret.
 export async function recordPostback(
   db: Db,
-  { source, query }: { source: PostbackSource; query: PostbackQuery },
+  {
+    source,
+    query,
+    secretKeyId,
+  }: { source: PostbackSource; query: PostbackQuery; secretKeyId: string },
 ): Promise<RecordPostbackResult> {
   const classified = classifyPostback(query);
   if (classified.kind === 'rejected') {
@@ -69,6 +77,7 @@ export async function recordPostback(
       outcome: PostbackDeliveryOutcome.Rejected,
       rejectReason: classified.reason,
       payload: query,
+      secretKeyId,
     });
     return {
       outcome: PostbackResponseOutcome.Rejected,
@@ -122,6 +131,7 @@ export async function recordPostback(
           paymentId,
           amount,
           currency: coin ?? null,
+          verification: DepositVerification.UrlSecret,
           ...owner,
         })
         .onConflictDoNothing({ target: [depositEvents.source, depositEvents.paymentId] })
@@ -171,6 +181,7 @@ export async function recordPostback(
               : PostbackDeliveryOutcome.DepositRepeated,
           depositEventId: result.depositEventId,
           payload: query,
+          secretKeyId,
         })
         // postback_deliveries_source_postback_idx's own predicate: a partial unique index is an
         // arbiter only when the conflict clause implies it

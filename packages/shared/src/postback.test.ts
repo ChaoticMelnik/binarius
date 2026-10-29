@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   POSTBACK_QUERY_MAX_KEYS,
   POSTBACK_QUERY_VALUE_MAX,
+  POSTBACK_SECRET_KEY_ID_PATTERN,
   POSTBACK_URL_SECRET_MAX_LENGTH,
   POSTBACK_URL_SECRET_PATTERN,
   PostbackRejectReason,
@@ -156,6 +157,15 @@ describe('POSTBACK_URL_SECRET_PATTERN', () => {
     `${'a'.repeat(31)}.`,
   ])('refuses %j', (value) => {
     expect(POSTBACK_URL_SECRET_PATTERN.test(value)).toBe(false);
+  });
+});
+
+describe('POSTBACK_SECRET_KEY_ID_PATTERN', () => {
+  it('pins the key id shape', () => {
+    expect(POSTBACK_SECRET_KEY_ID_PATTERN.test('2d711642')).toBe(true);
+    for (const value of ['2D711642', '2d71164', '2d7116420']) {
+      expect(POSTBACK_SECRET_KEY_ID_PATTERN.test(value)).toBe(false);
+    }
   });
 });
 

@@ -37,6 +37,7 @@ import { createStarsRefundApi } from './payments/star-refund';
 import { buildApp } from './app';
 import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
+import { secretDigest, secretKeyId } from './auth/internal';
 import { createMailingEngine } from './mailing/engine';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeListener } from './trading/session-notice-listener';
@@ -365,7 +366,15 @@ const app = buildApp({
     widgetOrigins: env.depositWidgetOrigins,
   },
   postbacks:
-    env.postbackUrlSecret === undefined ? undefined : { db, secret: env.postbackUrlSecret },
+    env.postbackUrlSecret === undefined
+      ? undefined
+      : {
+          db,
+          secret: env.postbackUrlSecret,
+          ...(env.postbackUrlSecretPrevious === undefined
+            ? {}
+            : { previousSecret: env.postbackUrlSecretPrevious }),
+        },
 });
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
@@ -649,7 +658,16 @@ if (!shuttingDown) {
   await app.listen({ port: env.port, host: '0.0.0.0' });
   // #397's manager greps this line for "demoOnly":true before it drives a stand
   app.log.info({ demoOnly: env.demoOnly }, 'backend started');
-  app.log.info({ enabled: env.postbackUrlSecret !== undefined }, 'postback route');
+  app.log.info(
+    {
+      enabled: env.postbackUrlSecret !== undefined,
+      // the current secret's key id, then the previous one's while a rotation lasts (#142)
+      secretKeyIds: [env.postbackUrlSecret, env.postbackUrlSecretPrevious]
+        .filter((secret) => secret !== undefined)
+        .map((secret) => secretKeyId(secretDigest(secret))),
+    },
+    'postback route',
+  );
   app.log.info({ enabled: marketData !== undefined }, 'market data source');
   app.log.info(
     {

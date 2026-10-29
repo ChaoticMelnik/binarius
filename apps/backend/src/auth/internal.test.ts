@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { internalBearerAuth } from './internal';
+import { POSTBACK_SECRET_KEY_ID_PATTERN } from '@binarius/shared';
+import { internalBearerAuth, secretDigest, secretKeyId } from './internal';
 
 const token = 'internal-token-for-tests';
 const app = Fastify({ logger: false });
@@ -46,5 +47,13 @@ describe('internalBearerAuth', () => {
   it('does not touch routes outside the guarded scope', async () => {
     const response = await app.inject({ method: 'GET', url: '/open' });
     expect(response.statusCode).toBe(200);
+  });
+});
+
+describe('secretKeyId (#142)', () => {
+  it('K1 is the first 8 hex of the sha256, as `printf x | shasum -a 256 | cut -c1-8` prints', () => {
+    const keyId = secretKeyId(secretDigest('x'));
+    expect(keyId).toBe('2d711642');
+    expect(POSTBACK_SECRET_KEY_ID_PATTERN.test(keyId)).toBe(true);
   });
 });
