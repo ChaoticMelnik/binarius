@@ -145,9 +145,9 @@ current tick finishes its exchange in flight, sends nothing more, and `stop()` r
 
 A timer never exchanges a token (docs/binodex-oauth.md → Refresh), with this one exception decided
 by the owner: the keeper exchanges a service account's token by its age. It holds because
-`ensureFreshAccessToken` checks the mark itself, under the row lock and after the status checks:
-`serviceOnly: true` on a row with `service_since IS NULL` answers `not_service` with nothing
-decrypted, exchanged or written (`token-service.db.test.ts` V1) and before the refused-token branch,
+`ensureFreshAccessToken` checks the mark itself, on its read (V7) and under the row lock, after the
+status checks: `serviceOnly: true` on a row with `service_since IS NULL` answers `not_service` with
+nothing decrypted, exchanged or written (`token-service.db.test.ts` V1) and before the refused-token branch,
 so an unmarked row's token is never marked expired (V6), and the keeper's candidate list
 never names an unmarked account (`service-accounts.db.test.ts` K2, `service-account-ops.db.test.ts`
 O6). The SQL list is an optimisation; the lock is the guarantee. Both options are read only when

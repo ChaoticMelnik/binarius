@@ -112,7 +112,7 @@ guard that holds it and where that guard is tested:
 | Reconciliation pass | each intent is attempted by one process at a time | the claim lease of `claimReconciling` (Rule 24) |
 | Settlement catch-up | both may read the same account's trades; the settle writes are idempotent | none for the reads: their cost is accepted risk 1 |
 | Stale-submitting sweeper | both may sweep; one move per intent | `markIntentUnknown`'s CAS with the age predicate |
-| Token refresh | the worker never exchanges a token itself; two processes asking for the same account exchange at most once | the backend's `ensureFreshAccessToken` under one row lock (`token-service.db.test.ts` «exchanges once when two callers race on the same account», Rule 12) |
+| Token refresh | the worker never exchanges a token itself; two processes asking for the same account exchange at most once | the backend's `ensureFreshAccessToken`: the exchange under one row lock (`token-service.db.test.ts` «exchanges once when two callers race on the same account», Rule 12), and in one backend process one flight per account (S1, Rule 60) |
 | Circuit breaker (#96) | **per-process windows**: each process counts only its own submits and its own sessions | none across processes (below) |
 
 **The circuit breaker during the overlap.** Each process has its own window
