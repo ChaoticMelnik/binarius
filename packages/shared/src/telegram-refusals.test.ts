@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deleteRefusal, editRefusal } from './telegram-refusals';
+import { deleteRefusal, editRefusal, fileRefusal } from './telegram-refusals';
 
 const refusal = (error_code: number, description: string) => ({ error_code, description });
 
@@ -27,6 +27,19 @@ describe('editRefusal', () => {
   it('another 400, or a gone phrase under another code, is not ours to read', () => {
     expect(editRefusal(refusal(400, 'Bad Request: chat not found'))).toBeUndefined();
     expect(editRefusal(refusal(403, 'Forbidden: message to edit not found'))).toBeUndefined();
+  });
+});
+
+describe('fileRefusal (#859)', () => {
+  it.each([
+    [400, 'Bad Request: wrong file identifier/HTTP URL specified', true],
+    [500, 'Internal Server Error', true],
+    [400, 'Bad Request: message is not modified: specified new message content is the same', false],
+    [400, 'Bad Request: message to edit not found', false],
+    [403, 'Forbidden: bot was blocked by the user', false],
+    [429, 'Too Many Requests: retry after 3', false],
+  ] as const)('T-file a %i «%s» is a file refusal: %s', (code, description, expected) => {
+    expect(fileRefusal(refusal(code, description))).toBe(expected);
   });
 });
 

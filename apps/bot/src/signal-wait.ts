@@ -2,6 +2,7 @@ import { GrammyError, HttpError, type Api } from 'grammy';
 import {
   editRefusal,
   errorLogFields,
+  fileRefusal,
   intervalForDuration,
   ShownSignalSource,
   SignalFeedOutcome,
@@ -240,8 +241,11 @@ export function createSignalWaiter({
   now = Date.now,
 }: SignalWaiterOptions): SignalWaiter {
   const entries = new Map<number, Entry>();
-  // the stills of the waits the users left, awaited by stop()
-  const freezes = new Set<Promise<void>>();
+  // the waits the users left on the animation whose still has not gone yet, frozen one at a time
+  const leaving = new Set<Entry>();
+  let freezing: Promise<void> = Promise.resolve();
+  // wakes the freeze's sleep until a 429's retry_after, for stop()
+  let wakePause = (): void => undefined;
   let attachedScreens: SignalWaitScreens | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<void> | undefined;
@@ -314,9 +318,8 @@ export function createSignalWaiter({
     };
   }
 
-  // a waiting screen keeps the entry's media; one that ends the wait shows the still. A text stays
-  // a text.
-  const waitingMedia = (entry: Entry): WaitMedia => entry.media;
+  // a screen that ends the wait shows the still; a waiting one keeps the entry's media. A text
+  // stays a text.
   const endMedia = (entry: Entry): WaitMedia => (entry.media === 'text' ? 'text' : 'still');
 
   function attached(): SignalWaitScreens {
@@ -419,14 +422,14 @@ export function createSignalWaiter({
     if (entry.kind === 'list') {
       const drawn = screens.list(signals, catalog, nowMs);
       if (drawn === undefined || drawn.listed > 0) return 'kept';
-      return edit(entry, drawn.screen, waitingMedia(entry));
+      return edit(entry, drawn.screen, entry.media);
     }
     const check = checkDemoTrade(catalog, entry.pair.assetId, DEMO_DURATION_SEC, nowMs);
     if (!check.ok) return 'kept';
     return edit(
       entry,
       screens.waiting(entry.pair.base, shownAlternatives(entry), { list, pair: check.pair }),
-      waitingMedia(entry),
+      entry.media,
     );
   }
 
@@ -472,7 +475,7 @@ export function createSignalWaiter({
         const outcome = await edit(
           entry,
           screens.waiting(pair.base, alternatives, { list, pair: check.pair }),
-          waitingMedia(entry),
+          entry.media,
         );
         if (outcome === 'drawn') {
           pair.alternatives = { shownAt: now(), shown: alternatives };
@@ -489,7 +492,7 @@ export function createSignalWaiter({
           : checkDemoTrade(catalog, pair.assetId, DEMO_DURATION_SEC, nowMs);
       const scan =
         list !== undefined && check?.ok === true ? { list, pair: check.pair } : undefined;
-      const outcome = await edit(entry, screens.waiting(pair.base, [], scan), waitingMedia(entry));
+      const outcome = await edit(entry, screens.waiting(pair.base, [], scan), entry.media);
       if (outcome === 'drawn') pair.alternatives = 'done';
       return outcome;
     }
@@ -576,8 +579,8 @@ export function createSignalWaiter({
     card: { text: TelegramHtml; keyboard: BotKeyboard; action: TradeAction },
   ): Promise<EditOutcome> {
     const { photos } = attached();
-    await pace();
-    if (!live(entry)) return 'ended';
+    const gated = await gate(() => live(entry));
+    if (gated !== undefined) return gated;
     try {
       const result = await editMessagePhotoByIdHtml(
         entry.api,
@@ -591,20 +594,17 @@ export function createSignalWaiter({
       end(entry);
       return 'drawn';
     } catch (error) {
-      if (error instanceof GrammyError && error.error_code !== 429 && error.error_code !== 403) {
-        const refusal = editRefusal(error);
-        if (refusal === 'shown') {
-          end(entry);
-          return 'drawn';
-        }
-        if (refusal !== 'gone') {
-          photos.forget(card.action);
-          logger.warn(
-            { ...errorLogFields(error), ...telegramErrorFields(error), kind: entry.kind },
-            'the signal wait card photo was refused, sending its text',
-          );
-          return finish(entry, { text: card.text, keyboard: card.keyboard }, entry.media);
-        }
+      if (error instanceof GrammyError && editRefusal(error) === 'shown') {
+        end(entry);
+        return 'drawn';
+      }
+      if (error instanceof GrammyError && fileRefusal(error)) {
+        photos.forget(card.action);
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error), kind: entry.kind },
+          'the signal wait card photo was refused, sending its text',
+        );
+        return finish(entry, { text: card.text, keyboard: card.keyboard });
       }
       const outcome = refused(entry, error, 'editMessageMedia');
       if (outcome === 'ended') end(entry);
@@ -624,10 +624,25 @@ export function createSignalWaiter({
     return outcome;
   }
 
+  // Two writers share the pace, the tick and the freezes: a call reserves its slot before it
+  // sleeps, so two calls never go at once.
   async function pace(): Promise<void> {
-    const wait = lastEditAt + editGapMs - now();
-    if (wait > 0) await sleep(wait);
-    lastEditAt = now();
+    const at = Math.max(now(), lastEditAt + editGapMs);
+    lastEditAt = at;
+    if (at > now()) await sleep(at - now());
+  }
+
+  // Before every edit of the wait: its slot in the pace, then the entry still to be edited and no
+  // 429's pause, which a freeze may have taken while the slot was awaited.
+  async function gate(alive: () => boolean): Promise<'ended' | 'paused' | undefined> {
+    await pace();
+    if (!alive()) return 'ended';
+    if (now() < pausedUntil) return 'paused';
+    return undefined;
+  }
+
+  function pauseFor(error: GrammyError): void {
+    pausedUntil = now() + (error.parameters.retry_after ?? 1) * 1000;
   }
 
   // One edit of the message into `screen` as `media` (#859): a text as a text; the same media its
@@ -657,8 +672,8 @@ export function createSignalWaiter({
   async function edit(entry: Entry, screen: DemoScreen, media: WaitMedia): Promise<EditOutcome> {
     const key = renderKey(screen, media);
     if (key === entry.rendered) return 'drawn';
-    await pace();
-    if (!live(entry)) return 'ended';
+    const gated = await gate(() => live(entry));
+    if (gated !== undefined) return gated;
     let drawnAs = media;
     try {
       try {
@@ -670,6 +685,8 @@ export function createSignalWaiter({
           { ...errorLogFields(error), ...telegramErrorFields(error), ...entryFields(entry) },
           'the scan media was refused, editing the caption',
         );
+        const again = await gate(() => live(entry));
+        if (again !== undefined) return again;
         drawnAs = entry.media;
         await send(entry, screen, drawnAs);
       }
@@ -685,11 +702,7 @@ export function createSignalWaiter({
   }
 
   const mediaRefused = (entry: Entry, media: ScanMediaKind, error: unknown): boolean =>
-    media !== entry.media &&
-    error instanceof GrammyError &&
-    error.error_code !== 429 &&
-    error.error_code !== 403 &&
-    editRefusal(error) === undefined;
+    media !== entry.media && error instanceof GrammyError && fileRefusal(error);
 
   function markDrawn(entry: Entry, key: string, media: WaitMedia): void {
     entry.rendered = key;
@@ -715,7 +728,7 @@ export function createSignalWaiter({
         return 'ended';
       }
       if (error.error_code === 429) {
-        pausedUntil = now() + (error.parameters.retry_after ?? 1) * 1000;
+        pauseFor(error);
         logger.warn(fields, 'signal wait message not edited');
         return 'paused';
       }
@@ -734,9 +747,9 @@ export function createSignalWaiter({
     logger.warn(fields, message);
   }
 
-  // The stop's edits: one launched every editGapMs, none after the window or after a 429 of the
-  // stop itself; a 429 of the last tick is waited out inside the window. The launched ones are
-  // awaited.
+  // The stop's edits: one launched every editGapMs, none after the window or inside a 429's pause
+  // taken by the stop itself or by a freeze in flight; a 429 of the last tick is waited out inside
+  // the window. The launched ones are awaited.
   async function drainEdits(remaining: Entry[]): Promise<void> {
     const deadline = now() + shutdownBudgetMs;
     if (pausedUntil > now()) {
@@ -744,9 +757,8 @@ export function createSignalWaiter({
       await sleep(pausedUntil - now());
     }
     const launched: Promise<void>[] = [];
-    let limited = false;
     for (const entry of remaining) {
-      if (limited || now() >= deadline) break;
+      if (now() >= deadline || now() < pausedUntil) break;
       launched.push(
         runWithLanguage(entry.language, async () => {
           try {
@@ -755,7 +767,7 @@ export function createSignalWaiter({
             if (renderKey(screen, media) === entry.rendered) return;
             await send(entry, screen, media);
           } catch (error) {
-            if (error instanceof GrammyError && error.error_code === 429) limited = true;
+            if (error instanceof GrammyError && error.error_code === 429) pauseFor(error);
             logger.warn(
               {
                 ...errorLogFields(error),
@@ -780,32 +792,57 @@ export function createSignalWaiter({
         : 'editMessageMedia';
 
   // The user left a wait on screen (a button, a command): its animation would loop on in the chat
-  // with stale figures, so it becomes the still with the start of trading, one edit at the pace of
-  // the others, no retry (#859). A text or a still stays as it is.
+  // with stale figures, so it becomes the still with the start of trading, one edit (#859). The
+  // freezes go one at a time outside the tick, at the edits' shared pace, none in a 429's pause: a
+  // pause is waited out, a 429 of the freeze itself waits its retry_after and tries again, another
+  // refusal is not retried. stop() wakes the wait and takes the queued ones into its drain.
   async function freeze(entry: Entry): Promise<void> {
-    await pace();
-    await runWithLanguage(entry.language, async () => {
-      try {
-        await send(entry, attached().expired(), 'still');
-      } catch (error) {
-        const fields = {
-          ...errorLogFields(error),
-          ...telegramErrorFields(error, 'editMessageMedia'),
-          ...entryFields(entry),
-        };
-        if (error instanceof GrammyError) {
-          if (error.error_code === 429) {
-            pausedUntil = now() + (error.parameters.retry_after ?? 1) * 1000;
-          }
-          if (editRefusal(error) !== undefined || error.error_code === 403) {
-            logger.info(fields, 'signal wait message not frozen');
-            return;
-          }
-        }
-        logger.warn(fields, 'signal wait message not frozen');
+    while (!stopped && leaving.has(entry)) {
+      if (now() < pausedUntil) await pauseSleep();
+      else if ((await gate(() => !stopped && leaving.has(entry))) === undefined) {
+        leaving.delete(entry);
+        await runWithLanguage(entry.language, () => sendStill(entry));
       }
-    });
+    }
   }
+
+  // the freeze's edit; a 429 puts the entry back into the queue unless the stop came
+  async function sendStill(entry: Entry): Promise<void> {
+    const screen = attached().expired();
+    if (renderKey(screen, 'still') === entry.rendered) return;
+    try {
+      await send(entry, screen, 'still');
+    } catch (error) {
+      const fields = {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, 'editMessageMedia'),
+        ...entryFields(entry),
+      };
+      if (error instanceof GrammyError) {
+        if (error.error_code === 429) {
+          pauseFor(error);
+          logger.warn(fields, 'signal wait message not frozen');
+          if (!stopped) leaving.add(entry);
+          return;
+        }
+        if (editRefusal(error) !== undefined || error.error_code === 403) {
+          logger.info(fields, 'signal wait message not frozen');
+          return;
+        }
+        if (fileRefusal(error)) attached().media.forget('still');
+      }
+      logger.warn(fields, 'signal wait message not frozen');
+    }
+  }
+
+  const pauseSleep = () =>
+    new Promise<void>((resolve) => {
+      const handle = setTimeout(resolve, pausedUntil - now());
+      wakePause = () => {
+        clearTimeout(handle);
+        resolve();
+      };
+    });
 
   return {
     attach(next) {
@@ -844,11 +881,12 @@ export function createSignalWaiter({
       if (entry === undefined) return;
       end(entry);
       if (entry.media !== 'animation' || stopped) return;
-      const frozen = freeze(entry).catch((error: unknown) => {
-        logger.error(errorLogFields(error), 'signal wait freeze failed');
-      });
-      freezes.add(frozen);
-      void frozen.finally(() => freezes.delete(frozen));
+      leaving.add(entry);
+      freezing = freezing
+        .then(() => freeze(entry))
+        .catch((error: unknown) => {
+          logger.error(errorLogFields(error), 'signal wait freeze failed');
+        });
     },
     has: (telegramUserId) => entries.has(telegramUserId),
     size: () => entries.size,
@@ -857,12 +895,14 @@ export function createSignalWaiter({
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
-      const remaining = [...entries.values()];
+      wakePause();
+      const remaining = [...entries.values(), ...leaving];
       entries.clear();
+      leaving.clear();
       await Promise.all([
         inflight,
         remaining.length > 0 ? drainEdits(remaining) : undefined,
-        Promise.allSettled([...freezes]),
+        freezing,
       ]);
     },
   };

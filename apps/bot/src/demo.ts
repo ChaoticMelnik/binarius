@@ -3,6 +3,7 @@ import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
   deleteRefusal,
   editRefusal,
+  fileRefusal,
   joinHtmlLines,
   BrokerRestErrorCode,
   checkStake,
@@ -1266,12 +1267,7 @@ export function createDemoComposer<C extends Context>({
       scanMedia.remember('animation', sent);
       return { place: placeOf(sent), media: 'animation' };
     } catch (error) {
-      if (
-        error instanceof GrammyError &&
-        error.error_code !== 429 &&
-        error.error_code !== 403 &&
-        editRefusal(error) === undefined
-      ) {
+      if (error instanceof GrammyError && fileRefusal(error)) {
         scanMedia.forget('animation');
         logger.warn(
           {

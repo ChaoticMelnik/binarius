@@ -1013,15 +1013,24 @@ describe('the live wait (#859)', () => {
     expect(editMessageCaption).not.toHaveBeenCalled();
   });
 
-  it('W29 a refused media edit forgets the file and puts the same screen into the caption', async () => {
+  it('W29 a refused media edit forgets the file and puts the same screen into the caption, a slot later', async () => {
     const { waiter, list, at, setListed, editMessageMedia, editMessageCaption, screens, logger } =
       setup();
-    editMessageMedia.mockRejectedValueOnce(OTHER());
+    const times: number[] = [];
+    editMessageMedia.mockImplementationOnce(() => {
+      times.push(Date.now());
+      return Promise.reject(OTHER());
+    });
+    editMessageCaption.mockImplementationOnce(() => {
+      times.push(Date.now());
+      return Promise.resolve(true);
+    });
     waiter.waitList(list(animation));
     setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
     await at(FIRST_TICK + 1_000);
     expect(screens.media.forget).toHaveBeenCalledWith('still');
     expect(captionOf(editMessageCaption.mock.calls[0])).toBe(`list:${PAIR_EURUSD.id}`);
+    expect(times[1]! - times[0]!).toBeGreaterThanOrEqual(GAP);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
       'the scan media was refused, editing the caption',
     ]);
@@ -1090,6 +1099,21 @@ describe('the live wait (#859)', () => {
     expect(done).toBe(true);
   });
 
+  it('W6g a card photo refused for its file under the animation goes onto the still with the card as its caption', async () => {
+    const { waiter, pair, at, setListed, editMessageMedia, editMessageCaption, screens } = setup();
+    editMessageMedia.mockRejectedValueOnce(OTHER());
+    waiter.waitPair(pair({ ...animation, origin: 'analysis' }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 1_000);
+    expect(screens.photos.forget).toHaveBeenCalledWith(TradeAction.Up);
+    expect(editMessageMedia.mock.calls[1]?.slice(2)).toEqual([
+      { type: 'photo', media: 'still-id', caption: 'card', parse_mode: 'HTML' },
+      { reply_markup: keyboardOf([callbackButton(ButtonRole.Nav, 'c', 'c')]) },
+    ]);
+    expect(editMessageCaption).not.toHaveBeenCalled();
+    expect(waiter.has(7)).toBe(false);
+  });
+
   it("W35 a screen drawn without the scanner's lines gets them on the first poll", async () => {
     const { waiter, pair, at, editMessageCaption, screens } = captionSetup();
     waiter.waitPair(pair({ ...animation, scanned: false, origin: 'analysis' }));
@@ -1108,4 +1132,112 @@ describe('the live wait (#859)', () => {
     await at(17_600);
     expect(editMessageCaption).not.toHaveBeenCalled();
   });
+
+  // the freezes of the waits left on the animation: one at a time, at the shared pace, none in a
+  // 429's pause, a 429 of their own retried after its retry_after
+  it('W37 a freeze waits out the pause of a 429 of the tick and goes once after its retry_after', async () => {
+    const { waiter, list, target, at, setListed, editMessageText, editMessageMedia } = setup();
+    editMessageText.mockRejectedValueOnce(LIMITED(3));
+    waiter.waitList(list(target(1)));
+    waiter.waitList(list({ ...target(2), ...animation }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 500);
+    waiter.leave(2);
+    await at(FIRST_TICK + 2_900);
+    expect(editMessageMedia).not.toHaveBeenCalled();
+    await at(FIRST_TICK + 3_000 + GAP);
+    expect(chatsOf(editMessageMedia)).toEqual([2]);
+    expect(captionOf(editMessageMedia.mock.calls[0])).toBe('expired');
+    await at(FIRST_TICK + 4_000);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+  });
+
+  it('W38 a 429 of a freeze stops the tick it came in, and the freeze goes again after its retry_after', async () => {
+    const { waiter, list, target, at, setListed, editMessageText, editMessageMedia } = setup();
+    editMessageMedia.mockRejectedValueOnce(LIMITED(3));
+    for (const user of [2, 3, 4]) waiter.waitList(list(target(user)));
+    waiter.waitList(list({ ...target(1), ...animation }));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 50);
+    waiter.leave(1);
+    await at(FIRST_TICK + 3_000);
+    expect(chatsOf(editMessageText)).toEqual([2, 3]);
+    expect(chatsOf(editMessageMedia)).toEqual([1]);
+    await at(FIRST_TICK + 3_600);
+    expect(chatsOf(editMessageMedia)).toEqual([1, 1]);
+    expect(captionOf(editMessageMedia.mock.calls[1])).toBe('expired');
+    await at(FIRST_TICK + POLL + GAP);
+    expect(chatsOf(editMessageText)).toEqual([2, 3, 4]);
+  });
+
+  it('W39 a freeze refused for its file forgets the still, a gone one ends quietly, neither tried again', async () => {
+    const { waiter, list, target, editMessageMedia, screens, logger } = setup();
+    editMessageMedia.mockRejectedValueOnce(OTHER()).mockRejectedValueOnce(GONE());
+    for (const user of [1, 2]) waiter.waitList(list({ ...target(user), ...animation }));
+    waiter.leave(1);
+    waiter.leave(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(chatsOf(editMessageMedia)).toEqual([1, 2]);
+    expect(vi.mocked(screens.media.forget).mock.calls).toEqual([['still']]);
+    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'signal wait message not frozen',
+    ]);
+    expect(logger.info.mock.calls.map((call) => call[1])).toEqual([
+      'signal wait message not frozen',
+    ]);
+  });
+
+  it('W40 the freezes go one at a time at the shared pace, never more than a slot before the tick', async () => {
+    const { waiter, list, target, at, setListed, editMessageText, editMessageMedia } = setup();
+    const times: number[] = [];
+    let retriedAt = 0;
+    editMessageMedia.mockImplementation(() => {
+      times.push(Date.now());
+      return Promise.resolve(true);
+    });
+    editMessageText.mockRejectedValueOnce(LIMITED(4)).mockImplementation(() => {
+      retriedAt = Date.now();
+      times.push(retriedAt);
+      return Promise.resolve(true);
+    });
+    waiter.waitList(list(target(20)));
+    for (let user = 1; user <= 10; user += 1) {
+      waiter.waitList(list({ ...target(user), ...animation }));
+    }
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 500);
+    for (let user = 1; user <= 10; user += 1) waiter.leave(user);
+    await at(FIRST_TICK + 7_000);
+    expect(times).toHaveLength(11);
+    for (let index = 1; index < times.length; index += 1) {
+      expect(times[index]! - times[index - 1]!).toBeGreaterThanOrEqual(GAP);
+    }
+    expect(retriedAt).toBeLessThanOrEqual(FIRST_TICK + POLL + 2 * GAP);
+  });
+
+  it.each([
+    [3, [2], ['expired']],
+    [30, [], []],
+  ])(
+    'W41 the stop wakes a freeze waiting out a %i s pause, its drain edits %j',
+    async (seconds, frozen, expired) => {
+      const { waiter, list, target, at, setListed, editMessageText, editMessageMedia, texts } =
+        setup();
+      editMessageText.mockRejectedValueOnce(LIMITED(seconds));
+      waiter.waitList(list(target(1)));
+      waiter.waitList(list({ ...target(2), ...animation }));
+      setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+      await at(FIRST_TICK + 200);
+      waiter.leave(2);
+      await at(FIRST_TICK + 500);
+      let done = false;
+      void waiter.stop().then(() => {
+        done = true;
+      });
+      await at(FIRST_TICK + 500 + 20_000 + 1_000);
+      expect(done).toBe(true);
+      expect(chatsOf(editMessageMedia)).toEqual(frozen);
+      expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`, ...expired]);
+    },
+  );
 });
