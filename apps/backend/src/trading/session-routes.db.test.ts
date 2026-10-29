@@ -2396,7 +2396,10 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
       expect(intents[0]).toMatchObject({
         action: 'up',
         signalDecisionId: intentRow.id,
-        submitDeadlineAt: new Date(startRow.takenAtMs + BUDGET_MS),
+        // #836: the series' clock closed F at F + 500 (advance), held 1 s; the budget from the
+        // hold's end, ahead of the reading's taken_at
+        submitNotBeforeAt: new Date(F + 1_500),
+        submitDeadlineAt: new Date(F + 1_500 + BUDGET_MS),
       });
     } finally {
       await driver.stop();
@@ -2665,6 +2668,7 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
         action: 'up',
         signalDecisionId: intentRow.id,
         submitDeadlineAt: null,
+        submitNotBeforeAt: new Date(shownSignal.decidedAt + 1_000),
       });
     } finally {
       await driver.stop();

@@ -332,7 +332,7 @@ describe('processIntentJob: the submit deadline of an H1 session (#670)', () => 
   afterEach(() => openTrading(tmp.db));
 
   // an intent of a session through the session's own writer, with or without an entry window
-  const sessionIntent = async (submitDeadlineAt?: Date) => {
+  const sessionIntent = async (submitDeadlineAt?: Date, submitNotBeforeAt?: Date) => {
     const seed = await seedUserWithAccount(tmp.db);
     const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
     const { intent } = await createSessionIntent(tmp.db, {
@@ -347,6 +347,7 @@ describe('processIntentJob: the submit deadline of an H1 session (#670)', () => 
       durationSec: 5,
       decision: null,
       submitDeadlineAt,
+      submitNotBeforeAt,
     });
     return { intentId: intent.id, userId: seed.userId };
   };
@@ -406,6 +407,123 @@ describe('processIntentJob: the submit deadline of an H1 session (#670)', () => 
       .where(eq(tradeIntents.id, intentId));
     expect(await processIntentJob(deps(acceptingExecutor()), { intentId })).toBe('expired');
     expect((await statusOf(intentId)).lastError).toBe(TradeIntentFailureReason.Expired);
+  });
+
+  // #836: the entry's hold, on a fake clock and a fake wait that records what it was asked
+  const holdOf = (nowMs: number, during?: () => Promise<void>) => {
+    const slept: number[] = [];
+    return {
+      slept,
+      now: () => nowMs,
+      sleep: async (ms: number) => {
+        slept.push(ms);
+        await during?.();
+      },
+    };
+  };
+  const holdLines = (entries: Record<string, unknown>[]) =>
+    entries.filter(
+      (entry) => entry.msg === 'intent held for its entry' || entry.msg === 'intent hold clamped',
+    );
+
+  it('H1-L6 holds the job until submit_not_before_at before the take, then submits', async () => {
+    const notBefore = new Date(Date.now() + 1_000);
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000), notBefore);
+    const hold = holdOf(notBefore.getTime() - 800);
+    const sleptAtSubmit: number[][] = [];
+    const executor = executorOf((intent) => {
+      sleptAtSubmit.push([...hold.slept]);
+      return { outcome: 'accepted', transport: 'socket', trade: openTradeFor(intent) };
+    });
+    const log = capture();
+    expect(
+      await processIntentJob(
+        { ...deps(executor), logger: log.sink, now: hold.now, sleep: hold.sleep },
+        { intentId },
+      ),
+    ).toBe('accepted');
+    expect(sleptAtSubmit).toEqual([[800]]);
+    expect(holdLines(log.entries())).toEqual([
+      expect.objectContaining({
+        level: 30,
+        intentId,
+        holdMs: 800,
+        msg: 'intent held for its entry',
+      }),
+    ]);
+  });
+
+  it('H1-L7 a hold already behind waits nothing and logs nothing', async () => {
+    const notBefore = new Date(Date.now() - 500);
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000), notBefore);
+    const hold = holdOf(notBefore.getTime() + 1);
+    const log = capture();
+    expect(
+      await processIntentJob(
+        { ...deps(acceptingExecutor()), logger: log.sink, now: hold.now, sleep: hold.sleep },
+        { intentId },
+      ),
+    ).toBe('accepted');
+    expect(hold.slept).toEqual([]);
+    expect(holdLines(log.entries())).toEqual([]);
+  });
+
+  it('H1-L8 a hold past INTENT_HOLD_MAX_MS is clamped to it, with a warn', async () => {
+    const notBefore = new Date(Date.now() + 10_000);
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000), notBefore);
+    const hold = holdOf(notBefore.getTime() - 10_000);
+    const log = capture();
+    expect(
+      await processIntentJob(
+        { ...deps(acceptingExecutor()), logger: log.sink, now: hold.now, sleep: hold.sleep },
+        { intentId },
+      ),
+    ).toBe('accepted');
+    expect(hold.slept).toEqual([2_000]);
+    expect(holdLines(log.entries())).toEqual([
+      expect.objectContaining({
+        level: 40,
+        intentId,
+        wantedMs: 10_000,
+        holdMs: 2_000,
+        msg: 'intent hold clamped',
+      }),
+    ]);
+  });
+
+  it('H1-L9 a forwarding process does not hold: its owner does', async () => {
+    const notBefore = new Date(Date.now() + 1_000);
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000), notBefore);
+    const hold = holdOf(notBefore.getTime() - 800);
+    expect(
+      await processIntentJob(
+        {
+          ...deps(acceptingExecutor()),
+          forward: () => Promise.resolve(true),
+          now: hold.now,
+          sleep: hold.sleep,
+        },
+        { intentId },
+      ),
+    ).toBe('forwarded');
+    expect(hold.slept).toEqual([]);
+  });
+
+  it('H1-L10 a switch closed during the hold rejects as trading_paused; the broker gets nothing', async () => {
+    const notBefore = new Date(Date.now() + 1_000);
+    const { intentId } = await sessionIntent(new Date(Date.now() + 60_000), notBefore);
+    const hold = holdOf(notBefore.getTime() - 800, () => closeTradingSwitch(tmp.db));
+    const executor = acceptingExecutor();
+    expect(
+      await processIntentJob({ ...deps(executor), now: hold.now, sleep: hold.sleep }, { intentId }),
+    ).toBe('rejected');
+    expect(hold.slept).toEqual([800]);
+    expect(executor.calls).toBe(0);
+    expect(await statusOf(intentId)).toMatchObject({
+      status: 'rejected',
+      lastError: TradeIntentFailureReason.TradingPaused,
+      submittedAt: null,
+    });
   });
 });
 

@@ -159,8 +159,8 @@ interface Harness {
   series: ReturnType<typeof scriptedSeries>;
   listed: ActiveH1Session[];
   histories: Map<string, SessionHistory | undefined>;
-  // the session's balance read (#775): undefined is no snapshot
-  balance: { read: SessionBalanceRead | undefined };
+  // the session's balance read (#775): undefined is no snapshot; onRead runs at each read
+  balance: { read: SessionBalanceRead | undefined; onRead?: () => void };
   creates: CreateSessionIntentInput[];
   records: SignalDecisionInput[];
   stops: { id: string; reason: string }[];
@@ -214,7 +214,7 @@ async function harness(
   const stopAnswers: (() => Promise<unknown>)[] = [];
   const historyReads = { n: 0 };
   const listAnswers: (() => Promise<ActiveH1Session[]>)[] = [];
-  const balance: { read: SessionBalanceRead | undefined } = {
+  const balance: { read: SessionBalanceRead | undefined; onRead?: () => void } = {
     read: {
       available: decimalStringSchema.parse('1000'),
       minTradeAmount: decimalStringSchema.parse('1'),
@@ -280,7 +280,10 @@ async function harness(
         historyReads.n += 1;
         return Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory());
       },
-      balance: () => Promise.resolve(balance.read),
+      balance: () => {
+        balance.onRead?.();
+        return Promise.resolve(balance.read);
+      },
       createIntent: (input) => {
         creates.push(input);
         const answer = answers.shift();
@@ -329,7 +332,7 @@ const ramp = (n: number) => [
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('the H1 driver (#707)', () => {
-  it('H1-DR1: a signal becomes an intent with the deadline taken_at + budget, its row, then a wake', async () => {
+  it('H1-DR1: a signal becomes an intent held to closedAt + 1 s, the deadline the hold + budget, its row, then a wake', async () => {
     const h = await harness();
     h.feed(A, T, ramp(1));
     await flush();
@@ -347,7 +350,9 @@ describe('the H1 driver (#707)', () => {
       amount: '1.50',
       action: 'up',
       durationSec: 5,
-      submitDeadlineAt: new Date(takenAtMs + BUDGET_MS),
+      // #836: the closed second (F + 300) + entryDelaySec, then the budget from the hold's end
+      submitNotBeforeAt: new Date(F + 1_300),
+      submitDeadlineAt: new Date(F + 1_300 + BUDGET_MS),
       decision: {
         context: 'session',
         tradingSessionId: 's1',
@@ -786,6 +791,7 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
       durationSec: 5,
     });
     expect('submitDeadlineAt' in input).toBe(false);
+    expect('submitNotBeforeAt' in input).toBe(false);
     expect(input.decision).toEqual({
       context: 'session',
       tradingSessionId: 's1',
@@ -889,6 +895,7 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({ step: 2, action: 'down', amount: sizerStake(lostStep1) });
     expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
+    expect('submitNotBeforeAt' in h.creates[0]!).toBe(false);
     expect(h.creates[0]!.decision).toMatchObject({
       version: 'h1-repeat',
       source: { kind: 'settlement', trigger: 'signal' },
@@ -906,6 +913,7 @@ describe('the H1 driver sizes and repeats as a regular session (#775)', () => {
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({ step: 2, action: 'up', amount: '1.50' });
     expect(h.creates[0]!.submitDeadlineAt).toBeInstanceOf(Date);
+    expect(h.creates[0]!.submitNotBeforeAt).toEqual(new Date(F + 1_300));
     expect(h.creates[0]!.decision).toMatchObject({ version: 'h1' });
   });
 
@@ -1249,12 +1257,13 @@ describe("the H1 start's reading and hand-over (#796)", () => {
     expect(h.line()).toMatchObject({ sessions: 0, decisions: 0, signals: 0 });
   });
 
-  it('H1-DR40: adopt with a signal creates Шаг 1 at once on the reading: its deadline, its row, a wake', async () => {
+  it('H1-DR40: adopt with a signal creates Шаг 1 at once on the reading: its hold and deadline, its row, a wake', async () => {
     const h = await harness({ sessions: [] });
     h.feed(A, T, ramp(1));
     const start = startOf(h);
     h.driver.adopt(sessionOf('s1'), start);
-    // the clock moves between the reading and the intent's write: the deadline is the reading's
+    // the clock moves between the reading and the intent's write: the hold is the reading's
+    // second's (#836), and the deadline runs from it while it is still ahead
     clock.now += 300;
     await flush();
     expect(h.creates).toHaveLength(1);
@@ -1263,7 +1272,8 @@ describe("the H1 start's reading and hand-over (#796)", () => {
       step: 1,
       action: 'up',
       amount: '1.50',
-      submitDeadlineAt: new Date(start.facts.takenAtMs + BUDGET_MS),
+      submitNotBeforeAt: new Date(F + 1_300),
+      submitDeadlineAt: new Date(F + 1_300 + BUDGET_MS),
     });
     expect(h.creates[0]!.decision).toEqual({
       context: 'session',
@@ -1413,6 +1423,8 @@ describe('the shown start of an H1 session (#829)', () => {
       durationSec: 5,
     });
     expect('submitDeadlineAt' in input).toBe(false);
+    // #836: the shown decision's moment + entryDelaySec, long behind here
+    expect(input.submitNotBeforeAt).toEqual(new Date(T + 291_400));
     expect(input.decision).toEqual({
       context: 'session',
       tradingSessionId: 's1',
@@ -1552,5 +1564,93 @@ describe('the shown start of an H1 session (#829)', () => {
       source: { kind: 'settlement', trigger: 'signal' },
     });
     expect(h.line()).toMatchObject({ repeats: 1, shown: 0 });
+  });
+});
+
+// #836, docs/h1.md -> The entry: no H1 intent is taken before its second + entryDelaySec
+describe('the entry hold of an H1 intent (#836)', () => {
+  const readingAt = (h: Harness) => {
+    const reading = h.driver.current(A, h1Settings());
+    if (reading.kind !== 'decision') throw new Error(`no reading: ${reading.reason}`);
+    return reading.facts;
+  };
+
+  it("H1-DR51: a start on an old reading holds to the second's close + 1 s; the deadline runs from the reading's taken_at, not from the creation", async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, ramp(1));
+    // the second closed at F + 300; the reading is taken 1.5 s after F, past the hold, and the
+    // creation comes 1.5 s after the reading
+    clock.now = F + 1_500;
+    h.balance.onRead = () => {
+      clock.now += 1_500;
+    };
+    h.driver.adopt(sessionOf('s1'), { facts: readingAt(h), pair: { payout: 96, symbol: `P${A}` } });
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      submitNotBeforeAt: new Date(F + 1_300),
+      submitDeadlineAt: new Date(F + 1_500 + BUDGET_MS),
+    });
+  });
+
+  it('H1-DR55: the deadline runs from the decision, not from a slow creation', async () => {
+    const h = await harness();
+    // the second closes at F + 300, its decision is taken at F + 320; the creation comes after a
+    // balance read that takes 1.5 s
+    h.balance.onRead = () => {
+      clock.now += 1_500;
+    };
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      submitNotBeforeAt: new Date(F + 1_300),
+      submitDeadlineAt: new Date(F + 1_300 + BUDGET_MS),
+    });
+  });
+
+  it('H1-DR52: a shown direction decided a moment ago is held to its decision + 1 s, with no deadline', async () => {
+    const h = await harness({ sessions: [] });
+    h.feed(A, T, flat(300));
+    const decidedAt = clock.now - 400;
+    h.driver.adopt(sessionOf('s1'), {
+      shown: {
+        action: 'up',
+        second: decidedAt - 600,
+        decidedAt,
+        shownAtMs: decidedAt + 100,
+        source: 'list',
+      },
+      pair: { payout: 95, symbol: `P${A}` },
+    });
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.submitNotBeforeAt).toEqual(new Date(decidedAt + 1_000));
+    expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
+  });
+
+  it('H1-DR53: the repeat step has neither a hold nor a deadline', async () => {
+    const h = await harness();
+    h.feed(A, T, flat(300));
+    h.histories.set('s1', lostStep1);
+    h.driver.notice('s1');
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]!.decision).toMatchObject({ version: 'h1-repeat' });
+    expect('submitNotBeforeAt' in h.creates[0]!).toBe(false);
+    expect('submitDeadlineAt' in h.creates[0]!).toBe(false);
+  });
+
+  it("H1-DR54: the hold is the session's entryDelaySec, not a constant", async () => {
+    const base = h1Settings();
+    const settings = { ...base, signal: { ...base.signal, entryDelaySec: 2 } };
+    const h = await harness({ sessions: [sessionOf('s1', settings)] });
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      submitNotBeforeAt: new Date(F + 2_300),
+      submitDeadlineAt: new Date(F + 2_300 + BUDGET_MS),
+    });
   });
 });

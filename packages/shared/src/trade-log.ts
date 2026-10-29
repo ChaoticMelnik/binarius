@@ -116,6 +116,9 @@ export const tradeLogTradeSchema = z.strictObject({
   // no window
   lastError: tradeIntentFailureReasonSchema.nullable(),
   submitDeadlineAtMs: unixMsSchema.nullable(),
+  // trade_intents.submit_not_before_at (#836): the entry's hold, the earliest take; null means no
+  // hold (a repeat step, a route's intent, a row before 0086)
+  submitNotBeforeAtMs: unixMsSchema.nullable(),
   // the trade's cycle and step in it (sessionTradeSteps); null until the trade is settled
   cycle: z.int().positive().nullable(),
   cycleStep: z.int().positive().nullable(),

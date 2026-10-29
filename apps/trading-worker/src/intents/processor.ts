@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import type pino from 'pino';
 import {
   errorIdentity,
@@ -20,6 +21,7 @@ import {
   type TradeIntentRow,
 } from '@binarius/db';
 import { MAX_DETAIL_LENGTH } from '@binarius/broker-rest';
+import { INTENT_HOLD_MAX_MS } from './config';
 import type { SubmitResult, TradeExecutor } from './executor';
 
 export type Logger = Pick<pino.Logger, 'info' | 'warn' | 'error' | 'debug'>;
@@ -40,6 +42,9 @@ export interface ProcessorDeps {
   // hands a queued intent to its owner's queue before the take (#347, intents/router.ts); true
   // when it did. Absent on a process's own queue: one hop at most
   forward?: (intent: TradeIntentRow) => Promise<boolean>;
+  // the entry's hold's clock and wait (#836); absent: Date.now and a timer
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
 }
 
 export type ProcessOutcome =
@@ -85,6 +90,23 @@ export async function processIntentJob(
   }
 }
 
+// The entry's hold (#836, docs/h1.md -> The entry): an H1 session's intent is not taken before
+// its submit_not_before_at, on this process's clock; the age, the deadline and the switch are
+// judged by the take after it. A hold past INTENT_HOLD_MAX_MS is not an entry's (the row is
+// wrong): clamped, with a warn
+async function holdForEntry(deps: ProcessorDeps, intent: TradeIntentRow): Promise<void> {
+  if (intent.submitNotBeforeAt === null) return;
+  const wantedMs = intent.submitNotBeforeAt.getTime() - (deps.now ?? Date.now)();
+  if (wantedMs <= 0) return;
+  const holdMs = Math.min(wantedMs, INTENT_HOLD_MAX_MS);
+  if (holdMs < wantedMs) {
+    deps.logger.warn({ intentId: intent.id, wantedMs, holdMs }, 'intent hold clamped');
+  } else {
+    deps.logger.info({ intentId: intent.id, holdMs }, 'intent held for its entry');
+  }
+  await (deps.sleep ?? sleep)(holdMs);
+}
+
 async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promise<ProcessOutcome> {
   const { db, logger, config } = deps;
   // before the take, so the intent never becomes submitting and the executor is never called;
@@ -106,6 +128,7 @@ async function handleQueued(deps: ProcessorDeps, intent: TradeIntentRow): Promis
     return 'rejected';
   }
   if (deps.forward !== undefined && (await deps.forward(intent))) return 'forwarded';
+  await holdForEntry(deps, intent);
   const taken = await takeIntent(db, {
     id: intent.id,
     expectedVersion: intent.version,

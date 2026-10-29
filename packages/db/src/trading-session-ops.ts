@@ -479,6 +479,8 @@ export interface CreateSessionIntentInput {
   decision: SignalDecisionInput | null;
   // an H1 session's entry window (#670): takeIntent refuses the intent after it
   submitDeadlineAt?: Date;
+  // the entry's hold (#836): the worker does not take the intent before it
+  submitNotBeforeAt?: Date;
 }
 
 // createTradeIntent's own path: the step key makes a repeat a replay, and the session row is
@@ -500,7 +502,12 @@ export async function createSessionIntent(
       durationSec: input.durationSec,
       clientRequestId: `session:${input.sessionId}:${input.step}`,
     },
-    { id: input.sessionId, decision: input.decision, submitDeadlineAt: input.submitDeadlineAt },
+    {
+      id: input.sessionId,
+      decision: input.decision,
+      submitDeadlineAt: input.submitDeadlineAt,
+      submitNotBeforeAt: input.submitNotBeforeAt,
+    },
     options,
   );
 }

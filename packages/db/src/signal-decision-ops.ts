@@ -156,6 +156,7 @@ export interface TradeLogIntentRow {
   submittedAt: Date | null;
   lastError: TradeIntentFailureReason | null;
   submitDeadlineAt: Date | null;
+  submitNotBeforeAt: Date | null;
   broker: TradeLogBrokerRow | null;
 }
 
@@ -242,6 +243,7 @@ export async function readTradeLogPage(
       intentSubmittedAt: tradeIntents.submittedAt,
       intentLastError: tradeIntents.lastError,
       intentSubmitDeadlineAt: tradeIntents.submitDeadlineAt,
+      intentSubmitNotBeforeAt: tradeIntents.submitNotBeforeAt,
       brokerStatus: brokerTrades.status,
       brokerPayout: brokerTrades.payout,
       brokerOpenPrice: brokerTrades.openPrice,
@@ -338,6 +340,7 @@ export async function readTradeLogPage(
               submittedAt: row.intentSubmittedAt,
               lastError: row.intentLastError,
               submitDeadlineAt: row.intentSubmitDeadlineAt,
+              submitNotBeforeAt: row.intentSubmitNotBeforeAt,
               broker:
                 row.brokerStatus === null ||
                 row.brokerOpenPrice === null ||

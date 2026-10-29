@@ -252,12 +252,17 @@ export const H1_SERIES_TICK_MS = 100;
 export const H1_SERIES_CAPACITY_SEC = 320;
 
 // --- The H1 driver (#707, docs/h1.md -> The driver) -----------------------------------------------
-// H1_SUBMIT_BUDGET_MS: an intent's submit_deadline_at is the decision's taken_at_ms + this; the
-// worker's take after it rejects the intent entry_window_missed without a broker call. It bounds
-// only the wait before the take; the submit after the take runs under the worker's own timeouts
+// H1_SUBMIT_BUDGET_MS: an intent's submit_deadline_at is max(submit_not_before_at, its decision's
+// taken_at_ms) + this (#836: the budget runs from the later of the hold's end and the decision,
+// never from the creation); the worker's take after it rejects the intent entry_window_missed
+// without a broker call. It bounds only the wait before the take; the submit after the take runs
+// under the worker's own timeouts. The cap is the entry window's width: a take at the budget's end
+// comes at most that width after the hold's end (closedAtMs + entryDelaySec); the close's lag
+// past f (a clock close at f + H1_SECOND_CLOSE_MARGIN_MS plus up to one H1_SERIES_TICK_MS) comes
+// on top (docs/h1.md -> The entry)
 export const DEFAULT_H1_SUBMIT_BUDGET_MS = 700;
 export const MIN_H1_SUBMIT_BUDGET_MS = 100;
-export const MAX_H1_SUBMIT_BUDGET_MS = 5_000;
+export const MAX_H1_SUBMIT_BUDGET_MS = (H1_ENTRY_WINDOW_SEC.to - H1_ENTRY_WINDOW_SEC.from) * 1_000;
 // how often the driver reads the active H1 sessions: a new one trades, a stopped one is dropped
 // within this
 export const H1_DRIVER_SCAN_MS = 5_000;
@@ -580,13 +585,13 @@ const TIMING_CHAIN_HOLDS =
   H1_SECOND_CLOSE_MARGIN_MS < MARKET_DATA_SKEW_MARGIN_MS &&
   H1_SECOND_CLOSE_MARGIN_MS < TICK_MAX_SKEW_MS &&
   H1_SERIES_CAPACITY_SEC >= H1_SHADOW_MAX_WINDOW_SEC + H1_ENTRY_WINDOW_SEC.to + H1_EXPIRY_SEC + 1 &&
-  // the H1 driver (#707): the default sits inside its bounds; a take after the expiry would open a
-  // trade whose predicted window has passed; the series' clock (the driver's tick) is no slower
-  // than the scan, the scan ends inside phase 1 and the line spans scans. stop() waits for the
-  // intent creations in flight, ordinary database latency (above)
+  // the H1 driver (#707): the default sits inside its bounds; the budget is at most the entry
+  // window's width, counted from the entry's hold's end (#836), not from f; the series' clock (the
+  // driver's tick) is no slower than the scan, the scan ends inside phase 1 and the line spans
+  // scans. stop() waits for the intent creations in flight, ordinary database latency (above)
   MIN_H1_SUBMIT_BUDGET_MS <= DEFAULT_H1_SUBMIT_BUDGET_MS &&
   DEFAULT_H1_SUBMIT_BUDGET_MS <= MAX_H1_SUBMIT_BUDGET_MS &&
-  MAX_H1_SUBMIT_BUDGET_MS <= H1_EXPIRY_SEC * 1000 &&
+  H1_ENTRY_WINDOW_SEC.from * 1_000 + MAX_H1_SUBMIT_BUDGET_MS <= H1_ENTRY_WINDOW_SEC.to * 1_000 &&
   H1_SERIES_TICK_MS <= H1_DRIVER_SCAN_MS &&
   H1_DRIVER_SCAN_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   H1_DRIVER_SCAN_MS <= H1_DRIVER_LOG_MS &&

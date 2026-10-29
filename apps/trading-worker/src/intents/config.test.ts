@@ -26,6 +26,7 @@ import {
   CATCHUP_STALLED_RETRY_MS,
   CATCHUP_TICK_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
+  INTENT_HOLD_MAX_MS,
   INTENT_RECOVERY_DELAY_MS,
   INTENT_ROUTER_DRAIN_POLL_MS,
   INTENT_ROUTER_DRAIN_TAIL_MS,
@@ -54,6 +55,13 @@ const composeYaml = readFileSync(
 // violation takes this file down before the first test runs. An expectation here could only ever
 // see true.
 describe('timing constants', () => {
+  // #836: the entry's hold is the window's end, and the submit cap left room for it in phase 1
+  it('pin the entry hold and the submit cap', () => {
+    expect(INTENT_HOLD_MAX_MS).toBe(2_000);
+    expect(MAX_SUBMIT_ACK_TIMEOUT_MS).toBe(28_000);
+    expect(INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+  });
+
   it('keep the ack timeout, both shutdown phases, stop grace, lock and stale threshold in order', () => {
     expect(MAX_SUBMIT_ACK_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS).toBeLessThan(
@@ -159,7 +167,10 @@ describe('the session manager in the shutdown budget (#101)', () => {
   it('stops after the drain inside phase 1, and nothing it cannot cut outlasts phase 1', () => {
     // #94: the registry's deregister follows the manager's stop in the same step
     expect(
-      MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS,
+      INTENT_HOLD_MAX_MS +
+        MAX_SUBMIT_ACK_TIMEOUT_MS +
+        SESSION_STOP_BUDGET_MS +
+        WORKER_HEARTBEAT_TIMEOUT_MS,
     ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_SOCKET_CONNECT_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
@@ -173,9 +184,9 @@ describe('the session manager in the shutdown budget (#101)', () => {
 
 describe('the intent router (#347)', () => {
   it('starts its drain before the cut, after a submit at the env maximum', () => {
-    expect(MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS).toBeLessThan(
-      SHUTDOWN_PHASE1_BUDGET_MS,
-    );
+    expect(
+      INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS,
+    ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
   });
 
   it('ends its stop inside phase 1 whatever the deregister does', () => {
@@ -199,7 +210,19 @@ describe('the intent router (#347)', () => {
     // deregister stop, then the tail, all before notAfter
     const notAfter = SHUTDOWN_PHASE1_BUDGET_MS - 2 * INTENT_ROUTER_STOP_BUDGET_MS;
     expect(
-      10_000 + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_TAIL_MS,
+      INTENT_HOLD_MAX_MS +
+        10_000 +
+        SESSION_STOP_BUDGET_MS +
+        WORKER_HEARTBEAT_TIMEOUT_MS +
+        INTENT_ROUTER_DRAIN_TAIL_MS,
+    ).toBeLessThanOrEqual(notAfter);
+    // the docs' "SUBMIT_ACK_TIMEOUT_MS ≤ 16 s" is this sum's edge
+    expect(
+      INTENT_HOLD_MAX_MS +
+        16_000 +
+        SESSION_STOP_BUDGET_MS +
+        WORKER_HEARTBEAT_TIMEOUT_MS +
+        INTENT_ROUTER_DRAIN_TAIL_MS,
     ).toBeLessThanOrEqual(notAfter);
   });
 

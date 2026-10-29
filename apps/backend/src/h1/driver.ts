@@ -64,17 +64,18 @@ import { H1_SCANNER_PARAMS } from './scanner';
 // session whose entries come from H1; every session the bot starts is one since #828. On every
 // closed second of the pair of an active H1 session, the session's detector decides on the series'
 // window; a signal of a session with no live intent and inside its limits becomes an intent of the
-// session's sizer's stake with a submit deadline, its signal_decisions row in the intent's
-// transaction, then a publisher wake.
+// session's sizer's stake with an entry hold and a submit deadline (#836, docs/h1.md -> The
+// entry), its signal_decisions row in the intent's transaction, then a publisher wake.
 // Шаг 2 after a lost or tied Шаг 1 is the repeat step: created at the settlement's notice, in that
-// trade's direction, without a window. A no_signal second opens a waiting period, recorded once.
+// trade's direction, without a hold or a window. A no_signal second opens a waiting period, recorded once.
 // It never reads the payout as a gate and stops a session on a stop refusal of createSessionIntent
 // and at the no-signal limit, counted on the seconds the detector decided no_signal (#775, review
 // round 1): the attempt never asks H1, so only the driver has that evidence. The other limits'
 // stops are the orchestrator's.
 // The shown start (#829, docs/h1.md -> The shown direction): a start the bot made on a direction it
-// showed hands that direction over by adopt(); Шаг 1 is created at once in it, without a window
-// (as the repeat step: the window protects the entry of a live reading), its row of version h1-start.
+// showed hands that direction over by adopt(); Шаг 1 is created at once in it, with the entry's hold
+// from the shown decision and without a window (the window protects the entry of a live reading),
+// its row of version h1-start.
 
 export interface H1DriverConfig {
   // how often the active H1 sessions are read
@@ -82,7 +83,8 @@ export interface H1DriverConfig {
   // the period of series.advance(): the driver's tick alone closes quiet seconds
   tickMs: number;
   logMs: number;
-  // submit_deadline_at = taken_at_ms + this (H1_SUBMIT_BUDGET_MS)
+  // submit_deadline_at = max(submit_not_before_at, the decision's taken_at_ms) + this
+  // (H1_SUBMIT_BUDGET_MS, #836)
   submitBudgetMs: number;
   // current() reads the newest closed second f only while now - f is at most this
   // (H1_START_SECOND_MAX_AGE_MS, #796)
@@ -779,6 +781,16 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
               detail,
             );
     const signal = repeat === null && plan!.kind === 'signal' ? plan!.signal : null;
+    const entryMs = settings.signal.entryDelaySec * SECOND_MS;
+    // the entry's hold (#836): the second closed on the backend's clock (closedAtMs is at or after
+    // f in that clock while the series runs) plus the entry delay; the shown direction's from its
+    // decision's moment, the same clock; the repeat has no second
+    const notBeforeMs =
+      signal !== null
+        ? signal.closedAtMs + entryMs
+        : repeat === null
+          ? (plan as Extract<H1TradePlan, { kind: 'shown' }>).shown.decidedAt + entryMs
+          : null;
     let created: CreateTradeIntentResult;
     try {
       created = await sessions.createIntent({
@@ -797,10 +809,17 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
               : (plan as Extract<H1TradePlan, { kind: 'shown' }>).shown.action,
         durationSec: settings.durationSec,
         decision: row(SignalDecisionOutcome.Intent, null),
-        // the entry window is the H1 signal's; the repeat, as a regular session's Шаг 2, and the
-        // shown direction, which has no live entry to protect, have none
+        ...(notBeforeMs === null ? {} : { submitNotBeforeAt: new Date(notBeforeMs) }),
+        // the deadline is the signal's (#670): the budget from the later of the hold's end and the
+        // decision's moment (signal.takenAtMs: the second's decision, or the start's reading), never
+        // this trade's own clock, read after the awaits above; the repeat, as a regular session's
+        // Шаг 2, and the shown direction, which has no live entry to protect, have none
         ...(signal !== null
-          ? { submitDeadlineAt: new Date(signal.takenAtMs + config.submitBudgetMs) }
+          ? {
+              submitDeadlineAt: new Date(
+                Math.max(notBeforeMs!, signal.takenAtMs) + config.submitBudgetMs,
+              ),
+            }
           : {}),
       });
     } catch (error) {

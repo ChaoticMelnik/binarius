@@ -110,8 +110,9 @@ describe('parseEnv', () => {
     ['INTENT_MAX_AGE_MS', '999', 'Env INTENT_MAX_AGE_MS must be between 1000 and 600000'],
     ['INTENT_MAX_AGE_MS', '600001', 'Env INTENT_MAX_AGE_MS must be between 1000 and 600000'],
     // the floor sits above the transports' own timeouts, 5 s (#96)
-    ['SUBMIT_ACK_TIMEOUT_MS', '5999', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 30000'],
-    ['SUBMIT_ACK_TIMEOUT_MS', '30001', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 30000'],
+    ['SUBMIT_ACK_TIMEOUT_MS', '5999', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 28000'],
+    // #836: the cap leaves the entry's hold room in phase 1
+    ['SUBMIT_ACK_TIMEOUT_MS', '28001', 'Env SUBMIT_ACK_TIMEOUT_MS must be between 6000 and 28000'],
     ['WORKER_CONCURRENCY', '0', 'Env WORKER_CONCURRENCY must be between 1 and 100'],
     ['WORKER_CONCURRENCY', 'x', 'Env WORKER_CONCURRENCY must be an integer'],
     // E3 (#94): the scan assumes fewer than 10 000 accounts in work (broker-session.md, risk 9)

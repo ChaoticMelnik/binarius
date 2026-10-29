@@ -211,7 +211,7 @@ async function tradeOnce() {
 }
 
 describe('the H1 driver on the database (#707)', () => {
-  it('H1-DB1: the intent carries the deadline and its decision row; the outbox event is there', async () => {
+  it('H1-DB1: the intent carries the entry hold, the deadline and its decision row; the outbox event is there', async () => {
     const { session, f } = await tradeOnce();
     const [intent] = await tmp.db
       .select()
@@ -240,7 +240,12 @@ describe('the H1 driver on the database (#707)', () => {
       ticksUntilMs: null,
       params: expect.objectContaining({ set: 'session', entryDelaySec: 1, expirySec: 5 }),
     });
-    expect(intent!.submitDeadlineAt!.getTime()).toBe(row!.takenAtMs + BUDGET_MS);
+    // #836: the second closed at f + 300, held 1 s; the budget runs from the later of the hold
+    // and the decision's taken_at
+    expect(intent!.submitNotBeforeAt!.getTime()).toBe(f + 1_300);
+    expect(intent!.submitDeadlineAt!.getTime()).toBe(
+      Math.max(f + 1_300, row!.takenAtMs) + BUDGET_MS,
+    );
     const events = await tmp.db
       .select({ id: outboxEvents.id })
       .from(outboxEvents)
@@ -346,6 +351,7 @@ describe('the shown start on the database (#829)', () => {
       action: 'down',
       amount: '1.00000000',
       submitDeadlineAt: null,
+      submitNotBeforeAt: new Date(second + 1_400),
       clientRequestId: `session:${session.id}:1`,
     });
     const [row] = await tmp.db
@@ -474,6 +480,7 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
         action: 'up',
         durationSec: 5,
         submitDeadlineAt: null,
+        submitNotBeforeAt: null,
         clientRequestId: `session:${session.id}:2`,
       });
       expect(Number(second!.amount)).toBeGreaterThan(1);
