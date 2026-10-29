@@ -171,7 +171,7 @@ export interface ClientPush {
 }
 
 // The waiting message (#860): the animation by its file_id once one is known, else the file
-export interface SessionWaitingPush {
+interface SessionWaitingPush {
   animation: string | InputFile;
   text: TelegramHtml;
   reply_markup: BotKeyboard;

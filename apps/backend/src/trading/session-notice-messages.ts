@@ -189,7 +189,7 @@ export const sessionCycleStopKeyboard = (sessionId: string, language: BotLanguag
 
 // The waiting message's «⏹» (#536): `:w` tells the bot the press came under the waiting message.
 // One keyboard for its send and every edit of its caption (#860).
-export const sessionWaitingKeyboard = (sessionId: string, language: BotLanguage): BotKeyboard =>
+const sessionWaitingKeyboard = (sessionId: string, language: BotLanguage): BotKeyboard =>
   keyboardOf([
     callbackButton(
       ButtonRole.Danger,
@@ -199,7 +199,7 @@ export const sessionWaitingKeyboard = (sessionId: string, language: BotLanguage)
   ]);
 
 // The session pair's scan (#860): the scanner's list as the sender read it, and the pair
-export interface SessionWaitingScan {
+interface SessionWaitingScan {
   list: ScanList;
   pair: { assetId: number; symbol: string };
 }
