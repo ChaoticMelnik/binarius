@@ -5,6 +5,7 @@ import {
   callbackButton,
   deleteRefusal,
   editRefusal,
+  fileRefusal,
   keyboardOf,
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
@@ -39,6 +40,7 @@ import {
 } from './backend-client';
 import {
   demoLaunchCallbackData,
+  pressedUnderMedia,
   removeLegacyKeyboard,
   stripKeyboard,
   SESSION_START_PATTERN,
@@ -65,6 +67,7 @@ import {
 import type { Logger } from './logging';
 import { currentLanguage } from './language';
 import {
+  editMessageCaptionByIdHtml,
   editMessagePhotoByIdHtml,
   editMessagePhotoByIdHtmlWithoutNextStep,
   editMessageTextByIdHtml,
@@ -86,6 +89,7 @@ import {
   sessionEditMethod,
   type SessionTracker,
 } from './session-tracker';
+import type { ScanMedia } from './scan-media';
 import type { SetupCardPhotos } from './setup-card';
 import type { ShownSignals } from './shown-signals';
 import { SESSION_SUMMARY_RETRY_WAIT_MS } from './timing';
@@ -169,6 +173,8 @@ export interface TradingSessionDeps {
   cashierUrl?: string;
   // the pictures of a signal's direction, shared with the analysis card (#568)
   setupCardPhotos: SetupCardPhotos;
+  // the scanner's still (#860): the reply to «⏹» under the session's waiting animation
+  scanMedia: Pick<ScanMedia, 'file' | 'remember' | 'forget'>;
   // «📤 Поделиться» under the card (#538): only with the storage channel the promo card is posted to
   shareEnabled: boolean;
   // the wait before the summary's photo again after a 429 (#537); setTimeout's by default
@@ -178,6 +184,11 @@ export interface TradingSessionDeps {
 }
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// how a reply in place of a pressed media message treats the media (#860): the scanner's still
+// in place of the animation, or the animation kept with the reply as its caption
+type InPlaceMedia = 'still' | 'keep';
+type InPlaceMethod = 'editMessageText' | 'editMessageMedia' | 'editMessageCaption';
 
 interface Refusal {
   text: BotStaticHtmlKey;
@@ -300,6 +311,7 @@ export function createTradingSessionComposer<C extends Context>({
   connectButtons,
   cashierUrl,
   setupCardPhotos,
+  scanMedia,
   shareEnabled,
   sleep = defaultSleep,
   shownSignals,
@@ -481,11 +493,14 @@ export function createTradingSessionComposer<C extends Context>({
       // A press starts no tracking: the session message is tracked from its start in this
       // process, or by #567's pass once its id is recorded; one whose id is not recorded gets no
       // card (docs/bot-session.md risk 56)
+      const keyboard = sessionCardKeyboard(view, cashierUrl);
       await drawStopReply(
         ctx,
         sessionStopReplyText(view),
-        sessionCardKeyboard(view, cashierUrl),
+        keyboard,
         'the pressed message was already gone',
+        keyboard,
+        'still',
       );
       return;
     }
@@ -660,22 +675,24 @@ export function createTradingSessionComposer<C extends Context>({
       keyboard,
       'the pressed message was already gone',
       menuKeyboard(),
+      'keep',
     );
   }
 
   // The reply under the waiting message (#587), in place of the pressed message. Logged and left
-  // when Telegram refused it otherwise: the summary still follows.
+  // when Telegram refused it otherwise: the summary still follows. `media` as drawInPlace's.
   async function drawStopReply(
     ctx: Context,
     text: TelegramHtml,
     reply_markup: BotKeyboard,
     goneNote: string,
-    goneMarkup = reply_markup,
+    goneMarkup: BotKeyboard,
+    media: InPlaceMedia,
   ): Promise<void> {
-    const drawn = await drawInPlace(ctx, text, reply_markup, goneNote, goneMarkup);
+    const drawn = await drawInPlace(ctx, text, reply_markup, goneNote, goneMarkup, media);
     if (drawn.in === 'refused') {
       logger.warn(
-        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, 'editMessageText') },
+        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, drawn.method) },
         'trading session stop reply not drawn',
       );
     }
@@ -683,32 +700,72 @@ export function createTradingSessionComposer<C extends Context>({
 
   // The pressed message edited in place; refused as gone (deleted, or past 48 h), the same text as
   // a new message, under `goneMarkup` (the same keyboard by default); «not modified» counts as drawn; any other Telegram refusal or a
-  // transport failure is handed back to log; anything else is a bug, rethrown to bot.catch.
+  // transport failure is handed back to log, with the method called; anything else is a bug,
+  // rethrown to bot.catch. Under the session's waiting animation (#860) the text is a caption:
+  // `still` ends the wait on the scanner's still (a refused file forgets its id and edits the
+  // caption under the animation instead), `keep` edits the caption alone, the wait going on.
   async function drawInPlace(
     ctx: Context,
     text: TelegramHtml,
     reply_markup: BotKeyboard,
     goneNote?: string,
     goneMarkup = reply_markup,
+    media: InPlaceMedia = 'keep',
   ): Promise<
     | { in: 'place' }
     | { in: 'new'; sent: { chat: { id: number }; message_id: number } }
-    | { in: 'refused'; error: HttpError }
+    | { in: 'refused'; error: HttpError; method: InPlaceMethod }
   > {
+    const chatId = ctx.chat?.id;
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    let method: InPlaceMethod = 'editMessageText';
+    // the still with the text as its caption; false when Telegram refused the file, its id then
+    // forgotten. Any other refusal is the caller's, as the method it names
+    const drawnOnStill = async (chat: number, message: number): Promise<boolean> => {
+      method = 'editMessageMedia';
+      try {
+        const result = await editMessagePhotoByIdHtml(
+          ctx.api,
+          chat,
+          message,
+          scanMedia.file('still'),
+          text,
+          { reply_markup },
+        );
+        scanMedia.remember('still', result);
+        return true;
+      } catch (error) {
+        if (!(error instanceof GrammyError) || !fileRefusal(error)) throw error;
+        scanMedia.forget('still');
+        logger.warn(
+          { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageMedia') },
+          'the scan media was refused, editing the caption',
+        );
+        return false;
+      }
+    };
     try {
-      await editMessageTextHtml(ctx, text, { reply_markup });
+      if (pressedUnderMedia(ctx) && chatId !== undefined && messageId !== undefined) {
+        if (media === 'still' && (await drawnOnStill(chatId, messageId))) {
+          return { in: 'place' };
+        }
+        method = 'editMessageCaption';
+        await editMessageCaptionByIdHtml(ctx.api, chatId, messageId, text, { reply_markup });
+      } else {
+        await editMessageTextHtml(ctx, text, { reply_markup });
+      }
       return { in: 'place' };
     } catch (error) {
       const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
       if (refusal === 'shown') return { in: 'place' };
       if (refusal === 'gone') {
         if (goneNote !== undefined) {
-          logger.info({ ...telegramErrorFields(error, 'editMessageText') }, goneNote);
+          logger.info({ ...telegramErrorFields(error, method) }, goneNote);
         }
         return { in: 'new', sent: await replyHtml(ctx, text, { reply_markup: goneMarkup }) };
       }
       if (!(error instanceof HttpError)) throw error;
-      return { in: 'refused', error };
+      return { in: 'refused', error, method };
     }
   }
 
@@ -732,7 +789,7 @@ export function createTradingSessionComposer<C extends Context>({
     );
     if (drawn.in === 'refused') {
       logger.warn(
-        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, 'editMessageText') },
+        { ...errorLogFields(drawn.error), ...telegramErrorFields(drawn.error, drawn.method) },
         'trading session message not edited',
       );
       return;

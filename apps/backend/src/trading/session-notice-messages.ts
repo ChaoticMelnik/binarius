@@ -23,10 +23,18 @@ import {
   type TradingSessionView,
   type BotKeyboard,
   type BotLanguage,
+  type ScanList,
+  joinHtmlLines,
+  telegramHtml,
 } from '@binarius/shared';
 import type { ClaimedSessionTrade, SessionOpenNoticeRow } from '@binarius/db';
 import { menuButton, type ClientPushMessage } from '../auth/client-push';
-import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/texts';
+import {
+  clientLabelsOf,
+  clientScanTextsOf,
+  clientSessionTextsOf,
+  clientTextsOf,
+} from '../auth/texts';
 
 // What the session notices say (#464, docs/bot-session.md → Trade messages), in the client bot's
 // voice through the catalog (Rule 30) and in the session owner's language (#633): the shared
@@ -179,18 +187,40 @@ export const sessionCycleStopKeyboard = (sessionId: string, language: BotLanguag
     ),
   ]);
 
-// The waiting message (#536, docs/bot-session.md → The waiting message): the wait for the next
-// signal, with the one button that stops the session; `:w` tells the bot to delete it on a press.
-export const sessionWaitingMessage = (
-  sessionId: string,
-  language: BotLanguage,
-): ClientPushMessage => ({
-  text: clientTextsOf(language).sessionWaitingSignal,
-  reply_markup: keyboardOf([
+// The waiting message's «⏹» (#536): `:w` tells the bot the press came under the waiting message.
+// One keyboard for its send and every edit of its caption (#860).
+export const sessionWaitingKeyboard = (sessionId: string, language: BotLanguage): BotKeyboard =>
+  keyboardOf([
     callbackButton(
       ButtonRole.Danger,
       clientLabelsOf(language).sessionStopButton,
       sessionStopCallbackData(sessionId, { waiting: true }),
     ),
-  ]),
-});
+  ]);
+
+// The session pair's scan (#860): the scanner's list as the sender read it, and the pair
+export interface SessionWaitingScan {
+  list: ScanList;
+  pair: { assetId: number; symbol: string };
+}
+
+// The waiting message (#536, docs/bot-session.md → The waiting message): the wait for the next
+// signal, with the one button that stops the session. Since #860 the caption under the scanner's
+// animation: with the session pair's scan lines (scan-summary.ts → pairScanLines, the bot's wait's
+// own), or the header alone when the pair cannot be named.
+export const sessionWaitingMessage = (
+  sessionId: string,
+  language: BotLanguage,
+  scan?: SessionWaitingScan,
+): ClientPushMessage => {
+  const header = clientTextsOf(language).sessionWaitingSignal;
+  return {
+    text:
+      scan === undefined
+        ? header
+        : telegramHtml`${header}
+
+${joinHtmlLines(clientScanTextsOf(language).pairScanLines(scan.list, scan.pair))}`,
+    reply_markup: sessionWaitingKeyboard(sessionId, language),
+  };
+};

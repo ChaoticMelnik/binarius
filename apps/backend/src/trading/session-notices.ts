@@ -1,9 +1,11 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { GrammyError } from 'grammy';
+import type { Message } from 'grammy/types';
 import {
   deleteRefusal,
   editRefusal,
   errorLogFields,
+  fileRefusal,
   safeParseTradingSessionSettings,
   SESSION_SUMMARY_FALLBACK_MS,
   TradingSessionStatus,
@@ -21,6 +23,7 @@ import {
   claimSummaryFallback,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  listSessionWaitingCaptions,
   listSummaryFallback,
   readSessionWaitingMessage,
   recordSessionCycleMessage,
@@ -31,11 +34,13 @@ import {
   releaseSummaryFallback,
   type Db,
   type PendingSessionNotice,
+  type SessionWaitingCaption,
   type SummaryFallbackSession,
 } from '@binarius/db';
 import type { PairsCatalog } from '@binarius/broker-rest';
 import type { ClientPush, ClientPushMessage } from '../auth/client-push';
 import type { BalanceReconciler } from '../broker/balance-reconciler';
+import { EMPTY_H1_SCANNER_LIST, type H1Scanner } from '../h1/scanner';
 import { createSendPacer, sendFailureOf } from '../mailing/engine';
 import {
   SESSION_NOTICE_CHAT_GAP_MS,
@@ -45,6 +50,8 @@ import {
   SESSION_NOTICE_SEND_PER_SECOND,
   SESSION_NOTICE_TICK_MS,
   SESSION_NOTICE_WAKE_GAP_MS,
+  SESSION_WAIT_CAPTION_EDITS_PER_PASS,
+  SESSION_WAIT_CAPTION_MS,
 } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import {
@@ -55,6 +62,7 @@ import {
   sessionWaitingMessage,
   type SessionCycleNotice,
 } from './session-notice-messages';
+import type { ScanMedia } from './scan-media';
 import { readFinishedSessionView } from './session-view';
 
 // docs/bot-session.md → Trade messages (#464). One loop in the backend process sends every
@@ -91,6 +99,13 @@ import { readFinishedSessionView } from './session-view';
 // interval's - the interval stays as the safety net for a lost notification. Woken ticks start at
 // least wakeGapMs apart, so a storm of notifications costs at most a few ticks a second; a step
 // skipped because its chat was cooling wakes the sender again at the end of that chat's gap.
+// The waiting message is the scanner's animation (#860, Rule 59), its caption the session pair's
+// scan from the H1 scanner's memory; a pass of its own, captions(), edits the caption to newer
+// figures every captionMs, serial with the ticks (one `ticking`) and inside the same pace and
+// 429 pause: at most captionEditsPerPass sessions a pass, round by id, a caption equal to the one
+// shown not sent, a cooling chat skipped, and the pass ends at a wake() or a pause, so a trade's
+// message waits for no more than the edit in flight. Which caption each message shows is memory
+// only: a restart costs one edit per message, answered «not modified».
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -105,6 +120,9 @@ export interface SessionNoticeConfig {
   holdMs: number;
   // the least time between the starts of a tick and a woken tick after it (#723)
   wakeGapMs: number;
+  // the waiting message's caption pass (#860): its period and the sessions it edits at most
+  captionMs: number;
+  captionEditsPerPass: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -116,6 +134,8 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   chatGapMs: SESSION_NOTICE_CHAT_GAP_MS,
   holdMs: SESSION_NOTICE_HOLD_MS,
   wakeGapMs: SESSION_NOTICE_WAKE_GAP_MS,
+  captionMs: SESSION_WAIT_CAPTION_MS,
+  captionEditsPerPass: SESSION_WAIT_CAPTION_EDITS_PER_PASS,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -126,9 +146,14 @@ export interface SessionNoticeSenderDeps {
     | 'editSessionTrade'
     | 'sendSessionSummary'
     | 'sendSessionWaiting'
+    | 'editSessionWaitingCaption'
     | 'deleteSessionWaiting'
   >;
   catalog: Pick<PairsCatalog, 'read'>;
+  // the waiting message's animation (#860)
+  media: ScanMedia;
+  // the pairs' scan the caption prints (#860); without one (no BROKER_WS_URL) the empty list
+  scanner?: Pick<H1Scanner, 'fresh'>;
   balance: Pick<BalanceReconciler, 'refresh'>;
   logger: FastifyBaseLogger;
   config?: Partial<SessionNoticeConfig>;
@@ -142,8 +167,10 @@ export interface SessionNoticeSender {
   // a tick now, or right after the one in flight, no sooner than wakeGapMs after the last tick's
   // start; calls before that tick merge into it, and after stop() it does nothing (#723)
   wake(): void;
+  // The waiting messages' caption pass (#860): nothing while a tick or a pass runs, or after stop()
+  captions(): Promise<void>;
   start(): void;
-  // Ends the loop and waits for the tick in flight: no claim and no fallback summary's balance read
+  // Ends the loop and waits for the tick or the caption pass in flight: no claim and no fallback summary's balance read
   // starts after it; the call in flight completes or times out (timing.ts).
   stop(): Promise<void>;
 }
@@ -177,13 +204,33 @@ interface Delivery {
   keyboard?: BotKeyboard;
 }
 
+// what removeWaiting reads and writes of a session: a tick's row, or a caption pass's (#860)
+type WaitingSession = Pick<
+  PendingSessionNotice,
+  | 'sessionId'
+  | 'telegramUserId'
+  | 'status'
+  | 'telegramBlocked'
+  | 'waitingMessageId'
+  | 'waitingDue'
+  | 'waitingForSignal'
+>;
+
+// the caption a waiting message shows (#860): its message's id and text, or frozen after its
+// edits ran out of attempts, so the pass leaves it until the next waiting message
+interface ShownCaption {
+  messageId: number;
+  caption: string;
+  frozen: boolean;
+}
+
 const waitingMayGo = (session: PendingSessionNotice): boolean =>
   session.status === TradingSessionStatus.Active && !session.telegramBlocked;
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): SessionNoticeSender {
-  const { db, push, catalog, balance, logger } = deps;
+  const { db, push, catalog, balance, media, logger } = deps;
   const config = { ...DEFAULT_SESSION_NOTICE_CONFIG, ...deps.config };
   const now = deps.now ?? (() => performance.now());
   const pace = createSendPacer({
@@ -213,6 +260,20 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   let coolingAt = Infinity;
   let lastCoolingFiredAt = -Infinity;
   let coolingUntil: number | undefined;
+  // the caption pass (#860): it runs, the next pass starts after this session id, its timer, and
+  // the caption each live waiting message shows, at most config.scan of them
+  let passing = false;
+  let captionCursor: string | undefined;
+  let captionTimer: NodeJS.Timeout | undefined;
+  const shownCaptions = new Map<string, ShownCaption>();
+  const showCaption = (sessionId: string, caption: ShownCaption) => {
+    shownCaptions.delete(sessionId);
+    shownCaptions.set(sessionId, caption);
+    const oldest = shownCaptions.keys().next();
+    if (shownCaptions.size > config.scan && oldest.done !== true) {
+      shownCaptions.delete(oldest.value);
+    }
+  };
 
   const chatOf = (telegramUserId: bigint) => String(telegramUserId);
   const cooling = (telegramUserId: bigint) => {
@@ -225,6 +286,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   const messaged = (telegramUserId: bigint) => {
     chatNextAt.set(chatOf(telegramUserId), now() + config.chatGapMs);
   };
+  // the caption pass's look at a chat: no timer, a skipped caption waits for a later pass
+  const chatCooling = (telegramUserId: bigint) =>
+    now() < (chatNextAt.get(chatOf(telegramUserId)) ?? -Infinity);
   const prune = (map: Map<string, number>) => {
     for (const [key, until] of map) if (until <= now()) map.delete(key);
   };
@@ -452,7 +516,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     session: Pick<PendingSessionNotice, 'telegramUserId'>;
     label: Delivery['label'] | 'session summary' | 'session waiting message';
     key: string;
-    method: 'sendMessage' | 'editMessageText';
+    method: 'sendMessage' | 'sendAnimation' | 'editMessageText';
     fields: Record<string, unknown>;
     error: unknown;
     release: () => Promise<unknown>;
@@ -497,10 +561,11 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // between the «⏹» may have stopped the session and handed the message to the bot, which draws
   // its reply in place of it; another id or NULL is not deleted. A hand-over committed during the
   // delete call itself shows as a clear that finds the id gone, logged (docs risk 82).
-  async function removeWaiting(session: PendingSessionNotice, messageId: number): Promise<Removal> {
+  async function removeWaiting(session: WaitingSession, messageId: number): Promise<Removal> {
     const fields = { sessionId: session.sessionId };
     const clear = async (afterDelete = false): Promise<Removal> => {
       attempts.delete(`${session.sessionId}:delete:${String(messageId)}`);
+      shownCaptions.delete(session.sessionId);
       const own = await clearSessionWaitingMessage(db, { sessionId: session.sessionId, messageId });
       if (afterDelete && !own) {
         logger.warn(fields, 'session waiting message deleted after the stop took it over');
@@ -517,6 +582,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const row = await readSessionWaitingMessage(db, { sessionId: session.sessionId });
     if (row?.waitingMessageId !== messageId) {
       attempts.delete(`${session.sessionId}:delete:${String(messageId)}`);
+      shownCaptions.delete(session.sessionId);
       session.waitingMessageId = null;
       if (row !== undefined) session.status = row.status;
       logger.info(fields, 'session waiting message taken over: not deleted');
@@ -593,15 +659,18 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     const claim = await claimSessionWaiting(db, { sessionId: session.sessionId });
     if (claim === undefined) return 'skip';
     const key = `${session.sessionId}:waiting:${String(claim.slot)}`;
-    let messageId: number;
+    const message = waitingMessage(session);
+    let sent: Message.AnimationMessage;
     try {
-      messageId = await push.sendSessionWaiting(
-        session.telegramUserId,
-        sessionWaitingMessage(session.sessionId, session.language),
-      );
+      sent = await push.sendSessionWaiting(session.telegramUserId, {
+        animation: media.animation(),
+        ...message,
+      });
       messaged(session.telegramUserId);
     } catch (error) {
       messaged(session.telegramUserId);
+      // a bad file or a stale file_id (#860): the next attempt uploads the file again
+      if (error instanceof GrammyError && fileRefusal(error)) media.forget();
       // 403: certainly not delivered, the slot is freed, due again once the user is reachable;
       // unknown: it may have been delivered, the slot stays claimed, never a second one on it
       const release = () =>
@@ -610,7 +679,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
         session,
         label: 'session waiting message',
         key,
-        method: 'sendMessage',
+        method: 'sendAnimation',
         fields,
         error,
         release,
@@ -621,6 +690,8 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       });
     }
     attempts.delete(key);
+    media.remember(sent);
+    const messageId = sent.message_id;
     if (!Number.isInteger(messageId) || messageId <= 0) {
       logger.warn(fields, 'session waiting message not recorded: no message id');
       return 'next';
@@ -630,7 +701,10 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       slot: claim.slot,
       messageId,
     });
-    if (recorded) return 'next';
+    if (recorded) {
+      showCaption(session.sessionId, { messageId, caption: message.text.value, frozen: false });
+      return 'next';
+    }
     await pace();
     try {
       await push.deleteSessionWaiting(session.telegramUserId, messageId);
@@ -642,6 +716,154 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       );
     }
     return 'next';
+  }
+
+  // The waiting message of a session as it is now (#860): the session pair's scan from the
+  // scanner's memory; the header alone when the settings cannot be read or the pair is not in the
+  // catalog. The scanner keys its seconds by the epoch, so it reads Date.now(), not the sender's
+  // monotonic clock.
+  function waitingMessage({
+    sessionId,
+    language,
+    settings,
+  }: Pick<PendingSessionNotice, 'sessionId' | 'language' | 'settings'>): ClientPushMessage {
+    const parsed = safeParseTradingSessionSettings(settings);
+    if (!parsed.success) return sessionWaitingMessage(sessionId, language);
+    const { assetId } = parsed.data;
+    const symbol = pairOf(catalog.read(), assetId).label;
+    if (symbol === null) return sessionWaitingMessage(sessionId, language);
+    const list = deps.scanner?.fresh(Date.now()) ?? EMPTY_H1_SCANNER_LIST;
+    return sessionWaitingMessage(sessionId, language, { list, pair: { assetId, symbol } });
+  }
+
+  // One waiting message's caption edited (#860), as docs → The waiting message tabulates each
+  // outcome. A message gone - deleted by the user, past 48 h, or a text message of the backend
+  // before #860 - is deleted and its id dropped, so the next tick sends the animation anew.
+  async function editCaption(
+    row: SessionWaitingCaption,
+    message: ClientPushMessage,
+  ): Promise<Step> {
+    const { sessionId, telegramUserId, waitingMessageId: messageId } = row;
+    const fields = { sessionId };
+    const key = `${sessionId}:caption:${String(messageId)}`;
+    const caption = message.text.value;
+    try {
+      await push.editSessionWaitingCaption(
+        telegramUserId,
+        messageId,
+        message.text,
+        message.reply_markup,
+      );
+      attempts.delete(key);
+      showCaption(sessionId, { messageId, caption, frozen: false });
+      return 'next';
+    } catch (error) {
+      const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+      if (refusal === 'shown') {
+        attempts.delete(key);
+        showCaption(sessionId, { messageId, caption, frozen: false });
+        return 'next';
+      }
+      if (refusal === 'gone') {
+        attempts.delete(key);
+        shownCaptions.delete(sessionId);
+        logger.info(fields, 'session waiting caption not edited: the message is gone');
+        await pace();
+        if (stopped) return 'skip';
+        const removal = await removeWaiting(
+          {
+            sessionId,
+            telegramUserId,
+            status: TradingSessionStatus.Active,
+            telegramBlocked: false,
+            waitingMessageId: messageId,
+            waitingDue: false,
+            waitingForSignal: true,
+          },
+          messageId,
+        );
+        return removal.kind === 'wait' ? pauseFor(removal.ms) : 'next';
+      }
+      const logged = {
+        ...fields,
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, 'editMessageCaption'),
+      };
+      const failure = sendFailureOf(error);
+      switch (failure.kind) {
+        case 'forbidden':
+          logger.warn(logged, 'session waiting caption refused: the user is unreachable');
+          shownCaptions.delete(sessionId);
+          await recordTelegramSendFailure({ db, log: logger }, telegramUserId, error);
+          return 'next';
+        case 'wait':
+          return pauseFor(failure.ms);
+        case 'refused':
+          if (mayRetry(key)) {
+            logger.warn(logged, 'session waiting caption not edited');
+            return 'next';
+          }
+          logger.warn(logged, 'session waiting caption dropped');
+          showCaption(sessionId, { messageId, caption, frozen: true });
+          return 'next';
+        case 'unknown':
+          logger.warn(logged, 'session waiting caption edit outcome unknown');
+          return 'next';
+      }
+    } finally {
+      messaged(telegramUserId);
+    }
+  }
+
+  // The caption pass (#860): the next page of live waiting messages by id, each caption that
+  // changed edited after its pace, the waiting message's id re-read right before the edit, as the
+  // delete does (#587 round 1). It yields to a wake() and a pause before and after each pace.
+  async function runCaptions(): Promise<void> {
+    if (now() < pausedUntil) return;
+    const limit = config.captionEditsPerPass;
+    const rows = await listSessionWaitingCaptions(db, { after: captionCursor, limit });
+    captionCursor = rows.length < limit ? undefined : rows.at(-1)?.sessionId;
+    let edited = 0;
+    let skipped = 0;
+    let yielded = false;
+    for (const row of rows) {
+      const { sessionId, waitingMessageId: messageId } = row;
+      const message = waitingMessage(row);
+      const known = shownCaptions.get(sessionId);
+      if (
+        known?.messageId === messageId &&
+        (known.frozen || known.caption === message.text.value)
+      ) {
+        skipped += 1;
+        continue;
+      }
+      if (chatCooling(row.telegramUserId)) {
+        skipped += 1;
+        continue;
+      }
+      if (stopped || wakes > 0 || now() < pausedUntil) {
+        yielded = true;
+        break;
+      }
+      await pace();
+      if (stopped) return;
+      if (now() < pausedUntil || wakes > 0) {
+        yielded = true;
+        break;
+      }
+      const live = await readSessionWaitingMessage(db, { sessionId });
+      if (live?.waitingMessageId !== messageId) {
+        shownCaptions.delete(sessionId);
+        logger.info({ sessionId }, 'session waiting caption taken over: not edited');
+        continue;
+      }
+      edited += 1;
+      if ((await editCaption(row, message)) === 'pause') {
+        yielded = true;
+        break;
+      }
+    }
+    logger.debug({ listed: rows.length, edited, skipped, yielded }, 'session waiting captions');
   }
 
   // The finished session's final mark (#537): every trade's message went and the waiting message
@@ -844,9 +1066,14 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     if (ticking === undefined) armWake(lastTickAt + config.wakeGapMs);
   }
 
-  // a tick longer than its interval makes the next one a no-op
+  // a tick longer than its interval makes the next one a no-op; one that comes during a caption
+  // pass runs right after it, as a wake (#860)
   function tick(): Promise<void> {
     if (stopped) return Promise.resolve();
+    if (passing) {
+      wake();
+      return ticking ?? Promise.resolve();
+    }
     ticking ??= runTick()
       .catch((error: unknown) => logger.error(errorLogFields(error), 'session notice tick failed'))
       .finally(() => {
@@ -857,17 +1084,38 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     return ticking;
   }
 
+  // the caption pass (#860) under the tick's own `ticking`, so the two never call Telegram side by
+  // side: a pass is skipped while a tick runs, and a wake() during a pass runs its tick right after
+  function captions(): Promise<void> {
+    if (stopped || ticking !== undefined) return Promise.resolve();
+    passing = true;
+    ticking = runCaptions()
+      .catch((error: unknown) =>
+        logger.error(errorLogFields(error), 'session waiting captions failed'),
+      )
+      .finally(() => {
+        passing = false;
+        ticking = undefined;
+        if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
+      });
+    return ticking;
+  }
+
   return {
     tick,
     wake,
+    captions,
     start() {
       if (stopped || timer !== undefined) return;
       timer = setInterval(() => void tick(), config.tickMs);
+      captionTimer = setInterval(() => void captions(), config.captionMs);
     },
     async stop() {
       stopped = true;
       clearInterval(timer);
       timer = undefined;
+      clearInterval(captionTimer);
+      captionTimer = undefined;
       clearTimeout(wakeTimer);
       wakeTimer = undefined;
       clearTimeout(coolingTimer);

@@ -173,6 +173,21 @@ export const sessionNoticeWakeBoundsHold = ({
 }: { listenRetryMs?: number; wakeGapMs?: number } = {}): boolean =>
   listenRetryMs <= SESSION_NOTICE_TICK_MS && wakeGapMs < SESSION_NOTICE_CHAT_GAP_MS;
 
+// The waiting message's caption (#860, docs/bot-session.md → The waiting message): the sender's
+// pass that edits it to the scanner's newer figures, this often - the owner's «every 3 to 5 s»
+export const SESSION_WAIT_CAPTION_MS = 4_000;
+// the sessions one pass edits at most, round by id, inside the sender's pace
+export const SESSION_WAIT_CAPTION_EDITS_PER_PASS = 9;
+// The pass's links of the chain (#860), a function so a test can show which value breaks them: it
+// runs no more often than the tick, so the captions never outrun the real steps, and its edits
+// take at most a quarter of the pace over its period - the captions yield the budget first.
+export const sessionWaitCaptionBoundsHold = ({
+  captionMs = SESSION_WAIT_CAPTION_MS,
+  editsPerPass = SESSION_WAIT_CAPTION_EDITS_PER_PASS,
+}: { captionMs?: number; editsPerPass?: number } = {}): boolean =>
+  SESSION_NOTICE_TICK_MS <= captionMs &&
+  editsPerPass * (1000 / SESSION_NOTICE_SEND_PER_SECOND) <= captionMs / 4;
+
 // --- The Stars reconciler (#117) --------------------------------------------------------------
 // docs/stars.md → Reconciliation. Long polling confirms an update's offset even when its handler
 // failed, so a successful_payment the backend never heard of is lost to the bot; the reconciler
@@ -526,6 +541,7 @@ const TIMING_CHAIN_HOLDS =
   SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS &&
   SESSION_NOTICE_TICK_MS < SESSION_NOTICE_HOLD_MS &&
   sessionNoticeWakeBoundsHold() &&
+  sessionWaitCaptionBoundsHold() &&
   1000 / SESSION_NOTICE_SEND_PER_SECOND +
     TRADING_ACCESS_REFRESH_BUDGET_MS +
     CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <

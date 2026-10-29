@@ -11,6 +11,7 @@ import {
   createH1Driver,
   createH1Scanner,
   createInitDataVerifier,
+  createScanMedia,
   createScanPacer,
   createSecondSeries,
   createSessionNoticeListener,
@@ -268,6 +269,8 @@ export async function startE2eBackend(deps: {
     push: clientPush,
     catalog: pairsCatalog,
     balance: balanceReconciler,
+    media: createScanMedia(app.log),
+    scanner: h1Scanner,
     logger: app.log,
     config: {
       tickMs: E2E_BACKEND_TUNING.noticeTickMs,

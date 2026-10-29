@@ -1,4 +1,5 @@
-import { Api } from 'grammy';
+import { Api, type InputFile } from 'grammy';
+import type { Message } from 'grammy/types';
 import {
   BOT_MESSAGE_SPACER,
   ButtonRole,
@@ -151,9 +152,29 @@ export interface ClientPush {
   // when it cannot): with sound and its next step
   sendSessionSummary(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
   // The waiting message under the session's messages (#536, docs/bot-session.md → The waiting
-  // message): without sound, with its «⏹». Resolves to its message_id, which its delete takes.
-  sendSessionWaiting(telegramUserId: bigint, message: ClientPushMessage): Promise<number>;
+  // message): the scanner's animation since #860, without sound, its caption and its «⏹».
+  // Resolves to the sent message: its message_id, which the caption's edit and the delete take,
+  // and the animation's file_id, which the next send reuses.
+  sendSessionWaiting(
+    telegramUserId: bigint,
+    message: SessionWaitingPush,
+  ): Promise<Message.AnimationMessage>;
+  // The waiting message's caption edited to the scanner's newer figures (#860). The keyboard is
+  // required: an edit without it would take the «⏹» off (Bot API, Rule 31).
+  editSessionWaitingCaption(
+    telegramUserId: bigint,
+    messageId: number,
+    text: TelegramHtml,
+    reply_markup: BotKeyboard,
+  ): Promise<void>;
   deleteSessionWaiting(telegramUserId: bigint, messageId: number): Promise<void>;
+}
+
+// The waiting message (#860): the animation by its file_id once one is known, else the file
+export interface SessionWaitingPush {
+  animation: string | InputFile;
+  text: TelegramHtml;
+  reply_markup: BotKeyboard;
 }
 
 export interface CreateClientPushOptions {
@@ -178,7 +199,8 @@ export function createClientPush({
   // chat_id as a string: the column is bigint, and a string is the conversion that cannot round.
   // This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the bot's: the
   // only place here that sets parse_mode and unwraps TelegramHtml, which is why ESLint allows a
-  // raw sendMessage in this file alone outside tests. The button label is plain: Telegram does
+  // raw sendMessage (and, since #860, sendAnimation and editMessageCaption) in this file alone outside
+  // tests. The button label is plain: Telegram does
   // not parse it. Every text ends with the width spacer, as the bot's do (#506,
   // docs/bot-navigation.md → The width).
   const sent = (text: TelegramHtml) => text.value + BOT_MESSAGE_SPACER;
@@ -208,16 +230,28 @@ export function createClientPush({
       ...(reply_markup === undefined ? {} : { reply_markup }),
     });
   };
-  const sendSessionWaiting = async (
+  // A caption carries no width spacer (Rule 18): the media sets the message's width.
+  const sendSessionWaiting = (
     telegramUserId: bigint,
-    { text, reply_markup }: ClientPushMessage,
-  ) => {
-    const message = await api.sendMessage(String(telegramUserId), sent(text), {
+    { animation, text, reply_markup }: SessionWaitingPush,
+  ) =>
+    api.sendAnimation(String(telegramUserId), animation, {
+      caption: text.value,
       parse_mode: 'HTML',
       disable_notification: true,
       reply_markup,
     });
-    return message.message_id;
+  const editSessionWaitingCaption = async (
+    telegramUserId: bigint,
+    messageId: number,
+    text: TelegramHtml,
+    reply_markup: BotKeyboard,
+  ) => {
+    await api.editMessageCaption(String(telegramUserId), messageId, {
+      caption: text.value,
+      parse_mode: 'HTML',
+      reply_markup,
+    });
   };
   const deleteSessionWaiting = async (telegramUserId: bigint, messageId: number) => {
     await api.deleteMessage(String(telegramUserId), messageId);
@@ -233,6 +267,7 @@ export function createClientPush({
     editSessionTrade,
     sendSessionSummary: send,
     sendSessionWaiting,
+    editSessionWaitingCaption,
     deleteSessionWaiting,
   };
 }

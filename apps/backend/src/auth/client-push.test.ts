@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { GrammyError, HttpError, InlineKeyboard } from 'grammy';
+import { GrammyError, HttpError, InlineKeyboard, InputFile } from 'grammy';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BotLanguage,
@@ -317,31 +317,87 @@ describe('the session notices (#464)', () => {
   });
 });
 
-describe('the waiting message (#536)', () => {
-  it('sends it as Telegram HTML without sound, with its keyboard, answering its message_id', async () => {
+describe('the waiting message (#536, #860)', () => {
+  const reply_markup = keyboardOf([
+    callbackButton(ButtonRole.Danger, RU_LABELS.sessionStopButton, 'session:x'),
+  ]);
+  const WAITING = { message_id: 4243, animation: { file_id: 'radar-id' } };
+
+  it('CP1 sends the animation with an HTML caption without sound, with its keyboard, answering the message', async () => {
     const push = createClientPush({ token: TOKEN });
     const { calls, answers } = captureApi(push);
-    answers.set('sendMessage', () => ({ message_id: 4243 }));
-    const reply_markup = keyboardOf([
-      callbackButton(ButtonRole.Danger, RU_LABELS.sessionStopButton, 'session:x'),
-    ]);
+    answers.set('sendAnimation', () => WAITING);
     expect(
       await push.sendSessionWaiting(TELEGRAM_USER_ID, {
+        animation: 'radar-id',
         text: telegramHtml`<b>ждём</b>`,
         reply_markup,
       }),
-    ).toBe(4243);
-    expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
-    const payload = sentPayload(calls, 'sendMessage');
-    expect({ ...payload, text: pushedText(payload) }).toMatchObject({
+    ).toEqual(WAITING);
+    expect(calls.map((call) => call.method)).toEqual(['sendAnimation']);
+    const payload = sentPayload(calls, 'sendAnimation');
+    expect(payload).toMatchObject({
       chat_id: '9007199254740993',
-      text: '<b>ждём</b>',
+      animation: 'radar-id',
+      caption: '<b>ждём</b>',
       parse_mode: 'HTML',
       disable_notification: true,
     });
     expect(inlineButtons(payload)).toEqual([
       { text: RU_LABELS.sessionStopButton, callback_data: 'session:x' },
     ]);
+  });
+
+  it('CP2 edits its caption as Telegram HTML with its keyboard', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls } = captureApi(push);
+    await push.editSessionWaitingCaption(
+      TELEGRAM_USER_ID,
+      4243,
+      telegramHtml`<b>ждём</b>`,
+      reply_markup,
+    );
+    expect(calls.map((call) => call.method)).toEqual(['editMessageCaption']);
+    const payload = sentPayload(calls, 'editMessageCaption');
+    expect(payload).toMatchObject({
+      chat_id: '9007199254740993',
+      message_id: 4243,
+      caption: '<b>ждём</b>',
+      parse_mode: 'HTML',
+    });
+    expect(inlineButtons(payload)).toEqual([
+      { text: RU_LABELS.sessionStopButton, callback_data: 'session:x' },
+    ]);
+  });
+
+  // Rule 18: a caption carries no width spacer, the media sets the width
+  it('CP3 neither caption ends with the width spacer', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendAnimation', () => WAITING);
+    const text = telegramHtml`<b>x</b>`;
+    await push.sendSessionWaiting(TELEGRAM_USER_ID, { animation: 'radar-id', text, reply_markup });
+    await push.editSessionWaitingCaption(TELEGRAM_USER_ID, 4243, text, reply_markup);
+    expect(sentPayload(calls, 'sendAnimation')?.caption).toBe('<b>x</b>');
+    expect(sentPayload(calls, 'editMessageCaption')?.caption).toBe('<b>x</b>');
+  });
+
+  it('CP4 uploads a file as a file and names a file_id as a string', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendAnimation', () => WAITING);
+    const file = new InputFile(new Uint8Array([71, 73, 70]), 'scan-radar.gif');
+    await push.sendSessionWaiting(TELEGRAM_USER_ID, {
+      animation: file,
+      text: telegramHtml`x`,
+      reply_markup,
+    });
+    await push.sendSessionWaiting(TELEGRAM_USER_ID, {
+      animation: 'radar-id',
+      text: telegramHtml`x`,
+      reply_markup,
+    });
+    expect(calls.map((call) => call.payload.animation)).toEqual([file, 'radar-id']);
   });
 
   it('deletes it by its id', async () => {
@@ -389,7 +445,8 @@ describe('the deposit push', () => {
   });
 });
 
-// #506: every text of this seam ends with the width spacer, read here as sent
+// #506: every text of this seam ends with the width spacer, read here as sent; the waiting
+// message's caption does not (CP3)
 describe('the width spacer (#506)', () => {
   const SPACED = '<b>x</b>' + BOT_MESSAGE_SPACER;
   const reply_markup = keyboardOf([callbackButton(ButtonRole.Nav, RU_LABELS.menuButton, 'menu')]);
@@ -415,13 +472,6 @@ describe('the width spacer (#506)', () => {
     const { push, calls } = pushed();
     await push.editSessionTrade(TELEGRAM_USER_ID, 1, telegramHtml`<b>x</b>`);
     expect(sentPayload(calls, 'editMessageText')?.text).toBe(SPACED);
-  });
-
-  it('sendSessionWaiting appends the width spacer', async () => {
-    const { push, calls, answers } = pushed();
-    answers.set('sendMessage', () => ({ message_id: 1 }));
-    await push.sendSessionWaiting(TELEGRAM_USER_ID, { text: telegramHtml`<b>x</b>`, reply_markup });
-    expect(sentPayload(calls, 'sendMessage')?.text).toBe(SPACED);
   });
 });
 

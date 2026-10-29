@@ -578,6 +578,7 @@ export function createBot({
     connectButtons,
     cashierUrl,
     setupCardPhotos,
+    scanMedia,
     shareEnabled: shareStorageChatId !== undefined,
     shownSignals,
     ...(sleep === undefined ? {} : { sleep }),

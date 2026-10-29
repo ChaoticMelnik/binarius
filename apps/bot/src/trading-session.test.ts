@@ -53,6 +53,7 @@ import {
   SESSION_VIEW,
   TEXT_CARD_MESSAGE_ID,
   USER,
+  animationCallbackUpdate,
   callbackUpdate,
   captureApi,
   fakeBackend,
@@ -651,6 +652,89 @@ describe('«⏹ Остановить сессию» under the waiting message (#
     const update = callbackUpdate(WAITING_STOP);
     await pressUpdate(update);
     expect(stopSession.mock.calls).toEqual([[SESSION_ID, String(USER.id), pressedIdOf(update)]]);
+  });
+
+  // #860: the session's waiting message is the scanner's animation; the reply ends the wait on its
+  // still, a failure keeps the animation and draws its caption
+  const mediaOf = (payload: Record<string, unknown> | undefined) =>
+    payload?.media as { type: string; media: unknown; caption: string; parse_mode: string };
+  const FILE_REFUSED: ApiError = {
+    ok: false,
+    error_code: 400,
+    description: 'Bad Request: wrong file identifier/HTTP URL specified',
+  };
+
+  it('SW8 under the animation the reply is drawn on the still, its caption the end line; the next one names the still by its id', async () => {
+    const { pressUpdate, calls, answers, logger } = setup();
+    answers.set('editMessageMedia', photoAnswer(1, ['still-small', 'still-id']));
+    const update = animationCallbackUpdate(WAITING_STOP);
+    await pressUpdate(update);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
+    const edit = payloadOf(calls, 'editMessageMedia');
+    expect(edit).toMatchObject({ chat_id: USER.id, message_id: pressedIdOf(update) });
+    expect(mediaOf(edit)).toMatchObject({
+      type: 'photo',
+      caption: replyOf(STOPPED),
+      parse_mode: 'HTML',
+    });
+    expect(mediaOf(edit).media).toBeInstanceOf(InputFile);
+    expect(rowsOf(edit)).toEqual(STOPPED_ROWS);
+    expect(warnings(logger)).toEqual([]);
+    calls.length = 0;
+    await pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(mediaOf(payloadOf(calls, 'editMessageMedia')).media).toBe('still-id');
+  });
+
+  it('SW9 a failed stop under the animation: its caption, the «⏹» again or the menu', async () => {
+    const broken = setup({ stopSession: () => Promise.reject(httpError(500)) });
+    await broken.pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(methods(broken.calls)).toEqual(['answerCallbackQuery', 'editMessageCaption']);
+    const caption = payloadOf(broken.calls, 'editMessageCaption');
+    expect(caption).toMatchObject({ caption: TEXTS.unavailable.value, parse_mode: 'HTML' });
+    expect(rowsOf(caption)).toEqual([STOP_AGAIN_ROW]);
+
+    const missing = setup({ stopSession: () => Promise.reject(httpError(404, 'not_found')) });
+    await missing.pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(methods(missing.calls)).toEqual(['answerCallbackQuery', 'editMessageCaption']);
+    expect(rowsOf(payloadOf(missing.calls, 'editMessageCaption'))).toEqual([MENU_ROW]);
+  });
+
+  it('SW10 the still refused for its file: forgotten, the reply drawn as the caption under the animation', async () => {
+    const { pressUpdate, calls, answers, apiErrors, logger } = setup();
+    // a first reply brings the still's id, so the refused edit names it
+    answers.set('editMessageMedia', photoAnswer(1, ['still-id']));
+    await pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    calls.length = 0;
+    apiErrors.set('editMessageMedia', FILE_REFUSED);
+    await pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(mediaOf(payloadOf(calls, 'editMessageMedia')).media).toBe('still-id');
+    expect(methods(calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageMedia',
+      'editMessageCaption',
+    ]);
+    const caption = payloadOf(calls, 'editMessageCaption');
+    expect(caption?.caption).toBe(replyOf(STOPPED));
+    expect(rowsOf(caption)).toEqual(STOPPED_ROWS);
+    expect(warnings(logger)).toEqual(['the scan media was refused, editing the caption']);
+    apiErrors.delete('editMessageMedia');
+    calls.length = 0;
+    await pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(mediaOf(payloadOf(calls, 'editMessageMedia')).media).toBeInstanceOf(InputFile);
+  });
+
+  it('SW11 the animation gone: the reply as a new message, the info line naming editMessageMedia', async () => {
+    const { pressUpdate, calls, apiErrors, logger } = setup();
+    apiErrors.set('editMessageMedia', EDIT_GONE);
+    await pressUpdate(animationCallbackUpdate(WAITING_STOP));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageMedia', 'sendMessage']);
+    const sent = payloadOf(calls, 'sendMessage');
+    expect(sent?.text).toBe(replyOf(STOPPED));
+    expect(rowsOf(sent)).toEqual(STOPPED_ROWS);
+    const gone = logger.info.mock.calls.find(
+      (call) => call[1] === 'the pressed message was already gone',
+    );
+    expect(gone?.[0]).toMatchObject({ method: 'editMessageMedia' });
   });
 
   it("SW2' a session that had already ended: read, and its end line in place", async () => {

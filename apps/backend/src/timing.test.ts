@@ -95,6 +95,9 @@ import {
   SESSION_NOTICE_TICK_MS,
   SESSION_NOTICE_WAKE_GAP_MS,
   sessionNoticeWakeBoundsHold,
+  SESSION_WAIT_CAPTION_EDITS_PER_PASS,
+  SESSION_WAIT_CAPTION_MS,
+  sessionWaitCaptionBoundsHold,
   MAX_BALANCE_POLL_PER_MINUTE,
   MAX_BALANCE_RECONCILE_INTERVAL_MS,
   MARKET_DATA_ACCOUNT_RETRY_MS,
@@ -634,6 +637,26 @@ describe('broker balance timing', () => {
   it('TW3 breaks the wake chain with a floor between woken ticks not below the chat gap (#723)', () => {
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS - 1 })).toBe(true);
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS })).toBe(false);
+  });
+
+  it("TC1 pins the waiting message's caption pass: the owner's 3 to 5 s, nine sessions a pass (#860)", () => {
+    expect(SESSION_WAIT_CAPTION_MS).toBeGreaterThanOrEqual(3_000);
+    expect(SESSION_WAIT_CAPTION_MS).toBeLessThanOrEqual(5_000);
+    expect(SESSION_WAIT_CAPTION_MS).toBe(4_000);
+    expect(SESSION_WAIT_CAPTION_EDITS_PER_PASS).toBe(9);
+    expect(sessionWaitCaptionBoundsHold()).toBe(true);
+  });
+
+  it('TC2 breaks the caption chain with a pass more often than the tick or more edits than a quarter of the pace (#860)', () => {
+    // six edits fit a quarter of the tick, so only the first link decides here
+    expect(
+      sessionWaitCaptionBoundsHold({ captionMs: SESSION_NOTICE_TICK_MS, editsPerPass: 6 }),
+    ).toBe(true);
+    expect(
+      sessionWaitCaptionBoundsHold({ captionMs: SESSION_NOTICE_TICK_MS - 1, editsPerPass: 6 }),
+    ).toBe(false);
+    expect(sessionWaitCaptionBoundsHold({ editsPerPass: 9 })).toBe(true);
+    expect(sessionWaitCaptionBoundsHold({ editsPerPass: 10 })).toBe(false);
   });
 
   // the listener's stop() waits for a pool.connect() in flight, bounded by the pool's
