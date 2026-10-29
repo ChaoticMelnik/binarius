@@ -25,11 +25,11 @@ Status option ids:
   Canceled     e78329c7
 ```
 
-Stable for the life of the project. Filled in once at the pipeline's bootstrap (2026-09-21). Never call `gh project field-list`/`item-list` again just to look these up.
+Stable for the life of the project. Filled in once at the pipeline's bootstrap. Never call `gh project field-list`/`item-list` again just to look these up.
 
 ### Why the status templates use GraphQL, not `gh project item-list`
 
-`gh project item-list` returns 30 items unless given `--limit`, in no particular order and without saying it truncated (verified 2026-09-24: 30 of 47 items by default, highest issue number 31). A status lookup through it reports "not on the board" for any issue past the cut, which is how #54 and #56 went missing. The templates below ask GraphQL for one issue's own project items (the first 20 projects the issue is on — more is not expected, and the template prints a warning if there are), or page through the whole project with a cursor.
+`gh project item-list` returns 30 items unless given `--limit`, in no particular order and without saying it truncated. A status lookup through it reports "not on the board" for any issue past the cut (#54, #56). The templates below ask GraphQL for one issue's own project items (the first 20 projects the issue is on — more is not expected, and the template prints a warning if there are), or page through the whole project with a cursor.
 
 ---
 
