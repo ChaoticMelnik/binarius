@@ -201,7 +201,7 @@ describe('parseEnv', () => {
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '25', 'signalScanMaxPerMinute', 25],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '200', 'signalScanMaxPerMinute', 200],
     ['H1_SUBMIT_BUDGET_MS', '100', 'h1SubmitBudgetMs', 100],
-    ['H1_SUBMIT_BUDGET_MS', '5000', 'h1SubmitBudgetMs', 5000],
+    ['H1_SUBMIT_BUDGET_MS', '1000', 'h1SubmitBudgetMs', 1000],
   ] as const)('accepts %s=%s at its bound', (name, value, key, expected) => {
     expect(parseEnv({ ...valid, [name]: value })[key]).toBe(expected);
   });
@@ -216,8 +216,9 @@ describe('parseEnv', () => {
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '24', 'must be between 25 and 200'],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '201', 'must be between 25 and 200'],
     ['SIGNAL_SCAN_MAX_PER_MINUTE', '', 'must not be empty'],
-    ['H1_SUBMIT_BUDGET_MS', '99', 'must be between 100 and 5000'],
-    ['H1_SUBMIT_BUDGET_MS', '5001', 'must be between 100 and 5000'],
+    ['H1_SUBMIT_BUDGET_MS', '99', 'must be between 100 and 1000'],
+    // #836: the budget runs after the entry's hold and stays inside the +2 s window
+    ['H1_SUBMIT_BUDGET_MS', '1001', 'must be between 100 and 1000'],
     ['H1_SUBMIT_BUDGET_MS', '700.5', 'must be an integer'],
     ['H1_SUBMIT_BUDGET_MS', '', 'must not be empty'],
   ])('rejects %s=%s', (name, value, message) => {

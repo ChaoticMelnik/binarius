@@ -935,17 +935,20 @@ describe('readSessionHistory', () => {
 
 // #670: the H1 driver's intents (#707)
 describe('createSessionIntent: the submit deadline (#707)', () => {
-  it('H1-H3 createSessionIntent writes the submit deadline; without one the column is NULL', async () => {
+  it('H1-H3 createSessionIntent writes the submit deadline and the hold (#836); without them the columns are NULL', async () => {
     const seed = await seedSessionAccount();
+    const notBefore = new Date(Date.now() + 1_000);
     const deadline = new Date(Date.now() + 1_500);
     const { intent } = await createSessionIntent(
       tmp.db,
-      intentInput(seed, { submitDeadlineAt: deadline }),
+      intentInput(seed, { submitDeadlineAt: deadline, submitNotBeforeAt: notBefore }),
     );
     expect(intent.submitDeadlineAt).toEqual(deadline);
+    expect(intent.submitNotBeforeAt).toEqual(notBefore);
     await reject(intent);
     const { intent: plain } = await createSessionIntent(tmp.db, intentInput(seed, { step: 2 }));
     expect(plain.submitDeadlineAt).toBeNull();
+    expect(plain.submitNotBeforeAt).toBeNull();
   });
 });
 

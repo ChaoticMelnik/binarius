@@ -469,6 +469,7 @@ describe('trade-log export (#666)', () => {
           submittedAtMs: trade.intent.submittedAt?.getTime() ?? null,
           lastError: trade.step === 3 ? 'broker_rejected' : null,
           submitDeadlineAtMs: null,
+          submitNotBeforeAtMs: null,
           cycle: trade.cycle,
           cycleStep: trade.cycleStep,
           broker: trade.broker,
@@ -681,6 +682,24 @@ describe('trade-log export (#666)', () => {
         lastError: 'entry_window_missed',
         submitDeadlineAtMs: deadline.getTime(),
         submittedAtMs: null,
+      }),
+    ]);
+  });
+
+  it('X20 an intent with an entry hold prints its submit_not_before_at (#836)', async () => {
+    const session = await seedSession();
+    const { intent } = await sessionIntent(session, 1, { record: signalRecord() });
+    const notBefore = new Date('2003-06-01T00:00:01.300Z');
+    await tmp.db
+      .update(tradeIntents)
+      .set({ submitNotBeforeAt: notBefore })
+      .where(eq(tradeIntents.id, intent.id));
+    const { code, out } = await run('export', '--from', FROM, '--session', session.sessionId);
+    expect(code).toBe(0);
+    expect(linesOf(out).map((line) => line.trade)).toEqual([
+      expect.objectContaining({
+        intentId: intent.id,
+        submitNotBeforeAtMs: notBefore.getTime(),
       }),
     ]);
   });

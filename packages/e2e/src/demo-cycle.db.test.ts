@@ -242,7 +242,12 @@ it('runs /start → the email login → a demo session → its result', async ()
   const shown = bot.shownTaken[0]!;
   await until('the first intent', async () => (await reads.intentsOf(started.id)).length > 0);
   const [firstIntent] = await reads.intentsOf(started.id);
-  expect(firstIntent).toMatchObject({ action: 'up', submitDeadlineAt: null });
+  // #836: the shown direction is held to its decision + 1 s, with no deadline
+  expect(firstIntent).toMatchObject({
+    action: 'up',
+    submitDeadlineAt: null,
+    submitNotBeforeAt: new Date(shown.decidedAt + 1_000),
+  });
   // the route's row and the driver's are written concurrently (adopt is fire-and-forget)
   const decisions = await reads.decisionsOf(started.id);
   const firstTwo = decisions.slice(0, 2).sort((a, b) => a.context.localeCompare(b.context));

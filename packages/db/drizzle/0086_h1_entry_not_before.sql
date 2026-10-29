@@ -1,0 +1,2 @@
+ALTER TABLE "trade_intents" ADD COLUMN "submit_not_before_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "trade_intents" ADD CONSTRAINT "trade_intents_submit_window_check" CHECK ("trade_intents"."submit_not_before_at" is null or "trade_intents"."submit_deadline_at" is null or "trade_intents"."submit_not_before_at" < "trade_intents"."submit_deadline_at");

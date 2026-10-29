@@ -70,6 +70,10 @@ export const tradeIntents = pgTable(
     // entry window. takeIntent and rejectLateIntent compare it with the database's now(); no CHECK
     // against created_at, which is the database's clock
     submitDeadlineAt: timestamp('submit_deadline_at', { withTimezone: true }),
+    // the first moment an H1 session's intent may be taken (#836, docs/h1.md -> The entry), on the
+    // backend's clock; NULL = no hold. The worker holds the job until it on its own clock; no
+    // CHECK against created_at, as for the deadline
+    submitNotBeforeAt: timestamp('submit_not_before_at', { withTimezone: true }),
     lastError: text('last_error').$type<TradeIntentFailureReason>(),
     // the reconciliation pass's lease and order key (#89): written only by claimReconciling, with
     // the database clock; NULL = never attempted; kept when the intent leaves reconciling
@@ -122,6 +126,12 @@ export const tradeIntents = pgTable(
     check(
       'trade_intents_decision_session_check',
       sql`${t.signalDecisionId} is null or ${t.tradingSessionId} is not null`,
+    ),
+    // the hold ends before the take's deadline (#836); either may be NULL (a repeat, a shown
+    // direction, a row before 0086)
+    check(
+      'trade_intents_submit_window_check',
+      sql`${t.submitNotBeforeAt} is null or ${t.submitDeadlineAt} is null or ${t.submitNotBeforeAt} < ${t.submitDeadlineAt}`,
     ),
     inList('trade_intents_mode_check', t.mode, TradeMode),
     inList('trade_intents_action_check', t.action, TradeAction),

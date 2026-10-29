@@ -603,6 +603,13 @@
       "when": 1793206107551,
       "tag": "0085_drop_h1_since",
       "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1793258489351,
+      "tag": "0086_h1_entry_not_before",
+      "breakpoints": true
     }
   ]
 }

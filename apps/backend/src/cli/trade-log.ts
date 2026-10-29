@@ -200,6 +200,7 @@ export function toTradeLogLine(
             submittedAtMs: intent.submittedAt?.getTime() ?? null,
             lastError: intent.lastError,
             submitDeadlineAtMs: intent.submitDeadlineAt?.getTime() ?? null,
+            submitNotBeforeAtMs: intent.submitNotBeforeAt?.getTime() ?? null,
             cycle: step?.cycle ?? null,
             cycleStep: step?.step ?? null,
             broker:

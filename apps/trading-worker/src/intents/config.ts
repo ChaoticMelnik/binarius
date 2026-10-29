@@ -1,4 +1,5 @@
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
+import { H1_ENTRY_WINDOW_SEC } from '@binarius/shared';
 import { ACCESS_TOKEN_ROUTE_BUDGET_MS } from '@binarius/shared/access-token';
 import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
@@ -21,6 +22,9 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 // sweeper — declares the intent unknown only once it has been submitting for STALE_SUBMITTING_MS.
 // The phase-1 budget covers the ack deadline plus the outcome write; a database that times out
 // every statement is the exit(1) path (intent left submitting, resolved by the sweeper).
+// The entry's hold (#836, docs/h1.md -> The entry) runs inside the same job before the take, so
+// every link that waits out a submit counts INTENT_HOLD_MAX_MS ahead of it:
+//   INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS
 // A side link: BROKER_REST_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS, so a job that makes a broker
 // REST call without a deadline of its own still finishes inside the drain. The constant is the
 // REST client's own (packages/broker-rest/src/rest.ts).
@@ -60,8 +64,8 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS - phase 1 waits for pass.stop(); no
 //     check starts after stop(), so it waits for the attempt or the check in flight, never both
 // The session manager (#101, broker/session-config.ts) adds these:
-//   MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS
-//     < SHUTDOWN_PHASE1_BUDGET_MS — the manager stops after the intents consumer drained, and the
+//   INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS
+//     + WORKER_HEARTBEAT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — the manager stops after the intents consumer drained, and the
 //     fleet registry deregisters after it (#94, its own bound), inside the same phase-1 step
 //   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS and ACCESS_TOKEN_ROUTE_BUDGET_MS
 //     < SHUTDOWN_PHASE1_BUDGET_MS — a connection attempt or a token fetch that stop() could not
@@ -72,8 +76,8 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
 //     alongside the other steps: one attempt at most
 // The intent router (#347, intents/router.ts) adds these:
-//   MAX_SUBMIT_ACK_TIMEOUT_MS + 2 × INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the
-//     own queue's consumer waits out a submit, and the drain starts before its cut (notAfter =
+//   INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + 2 × INTENT_ROUTER_STOP_BUDGET_MS
+//     < SHUTDOWN_PHASE1_BUDGET_MS — the own queue's consumer waits out a hold and a submit, and the drain starts before its cut (notAfter =
 //     the phase-1 start + SHUTDOWN_PHASE1_BUDGET_MS - 2 × INTENT_ROUTER_STOP_BUDGET_MS), so one
 //     move pass and the final one always run
 //   2 × INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS — the router's stop ends by
@@ -83,15 +87,15 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     us, and its last pass sees a forward that landed up to a poll before it ends
 //   INTENT_ROUTER_DRAIN_POLL_MS < INTENT_ROUTER_STOP_BUDGET_MS — a poll's sleep never outlives the
 //     final pass's budget
-//   the whole tail fits before notAfter for SUBMIT_ACK_TIMEOUT_MS ≤ 18 s (the default 10 s: 10 +
-//     2 + 2 + 9 ≤ 31, stated, pinned by literal in intents/config.test.ts); above that, a stop
+//   the whole tail fits before notAfter for SUBMIT_ACK_TIMEOUT_MS ≤ 16 s (the default 10 s with
+//     the hold: 2 + 10 + 2 + 2 + 9 ≤ 31, stated, pinned by literal in intents/config.test.ts); above that, a stop
 //     that meets a submit waiting out nearly its deadline cuts the tail with a warn line
 //   INTENT_RECOVERY_DELAY_MS, INTENT_ROUTER_STOP_BUDGET_MS, INTENT_ROUTER_DRAIN_POLL_MS and
 //     INTENT_ROUTER_DRAIN_TAIL_MS are timer delays (BullMQ's delay, a timer)
 //   INTENT_RECOVERY_DELAY_MS < the backend publisher's staleQueuedMs (30 s) and < INTENT_MAX_AGE_MS's
 //     default (60 s) — stated across processes, pinned by literal in intents/config.test.ts
 export const MIN_SUBMIT_ACK_TIMEOUT_MS = 6_000;
-export const MAX_SUBMIT_ACK_TIMEOUT_MS = 30_000;
+export const MAX_SUBMIT_ACK_TIMEOUT_MS = 28_000;
 export const SHUTDOWN_PHASE1_BUDGET_MS = 35_000;
 export const SHUTDOWN_PHASE2_BUDGET_MS = 4_000;
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 40_000;
@@ -99,6 +103,9 @@ export const LOCK_DURATION_MS = 60_000;
 export const STALLED_INTERVAL_MS = 30_000;
 export const MAX_STALLED_COUNT = 1;
 export const STALE_SUBMITTING_MS = 60_000;
+// the longest entry's hold before the take (#836): the entry delay (1 s) plus room for the clock
+// difference between the backend and the worker; a longer wait is a wrong row, clamped with a warn
+export const INTENT_HOLD_MAX_MS = H1_ENTRY_WINDOW_SEC.to * 1_000;
 
 // how long a forwarded intent may wait in its owner's queue before the forwarder takes it itself
 // (#347, the insurance job in the forwarder's own queue)
@@ -167,6 +174,7 @@ const TIMING_CHAIN_HOLDS =
   BROKER_REST_TIMEOUT_MS < MIN_SUBMIT_ACK_TIMEOUT_MS &&
   MIN_SUBMIT_ACK_TIMEOUT_MS <= MAX_SUBMIT_ACK_TIMEOUT_MS &&
   MAX_SUBMIT_ACK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS &&
   COMPOSE_STOP_GRACE_PERIOD_MS < LOCK_DURATION_MS &&
   LOCK_DURATION_MS <= STALE_SUBMITTING_MS &&
@@ -191,13 +199,17 @@ const TIMING_CHAIN_HOLDS =
   WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
   2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS &&
   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  MAX_SUBMIT_ACK_TIMEOUT_MS + SESSION_STOP_BUDGET_MS + WORKER_HEARTBEAT_TIMEOUT_MS <
+  INTENT_HOLD_MAX_MS +
+    MAX_SUBMIT_ACK_TIMEOUT_MS +
+    SESSION_STOP_BUDGET_MS +
+    WORKER_HEARTBEAT_TIMEOUT_MS <
     SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_SOCKET_CONNECT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   ACCESS_TOKEN_ROUTE_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + 2 * INTENT_ROUTER_STOP_BUDGET_MS <
+    SHUTDOWN_PHASE1_BUDGET_MS &&
   2 * INTENT_ROUTER_STOP_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   WORKER_HEARTBEAT_MS + WORKER_HEARTBEAT_TIMEOUT_MS + INTENT_ROUTER_DRAIN_POLL_MS <
     INTENT_ROUTER_DRAIN_TAIL_MS &&

@@ -465,7 +465,7 @@ describe('broker balance timing', () => {
     );
   });
 
-  it("bounds the H1 driver's submit budget by the expiry and its scan by phase 1 (#707)", () => {
+  it("bounds the H1 driver's submit budget by the entry window (#836) and its scan by phase 1 (#707)", () => {
     expect({
       DEFAULT_H1_SUBMIT_BUDGET_MS,
       MIN_H1_SUBMIT_BUDGET_MS,
@@ -475,13 +475,15 @@ describe('broker balance timing', () => {
     }).toEqual({
       DEFAULT_H1_SUBMIT_BUDGET_MS: 700,
       MIN_H1_SUBMIT_BUDGET_MS: 100,
-      MAX_H1_SUBMIT_BUDGET_MS: 5_000,
+      MAX_H1_SUBMIT_BUDGET_MS: 1_000,
       H1_DRIVER_SCAN_MS: 5_000,
       H1_DRIVER_LOG_MS: 60_000,
     });
     expect(MIN_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(DEFAULT_H1_SUBMIT_BUDGET_MS);
     expect(DEFAULT_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(MAX_H1_SUBMIT_BUDGET_MS);
-    expect(MAX_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(H1_EXPIRY_SEC * 1000);
+    expect(H1_ENTRY_WINDOW_SEC.from * 1_000 + MAX_H1_SUBMIT_BUDGET_MS).toBeLessThanOrEqual(
+      H1_ENTRY_WINDOW_SEC.to * 1_000,
+    );
     expect(H1_SERIES_TICK_MS).toBeLessThanOrEqual(H1_DRIVER_SCAN_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(H1_DRIVER_SCAN_MS).toBeLessThanOrEqual(H1_DRIVER_LOG_MS);

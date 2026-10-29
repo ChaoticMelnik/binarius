@@ -3327,6 +3327,42 @@ describe('trade_intents.submit_deadline_at (#670)', () => {
   });
 });
 
+describe('trade_intents.submit_not_before_at (#836)', () => {
+  const at = (ms: number) => new Date(Date.UTC(2026, 9, 29, 6, 0, 0) + ms);
+
+  it.each([
+    ['both NULL', {}],
+    ['a hold without a deadline (a shown direction)', { submitNotBeforeAt: at(1_000) }],
+    ['a deadline without a hold (a row before 0086)', { submitDeadlineAt: at(700) }],
+    ['a hold before its deadline', { submitNotBeforeAt: at(1_000), submitDeadlineAt: at(1_700) }],
+  ])('H1-D3: accepts %s', async (_name, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      const [row] = await tx
+        .insert(tradeIntents)
+        .values(intent(seed, 'h1', patch))
+        .returning();
+      expect(row!.submitNotBeforeAt).toEqual(
+        (patch as { submitNotBeforeAt?: Date }).submitNotBeforeAt ?? null,
+      );
+    });
+  });
+
+  it.each([
+    ['a hold equal to its deadline', { submitNotBeforeAt: at(1_000), submitDeadlineAt: at(1_000) }],
+    ['a hold after its deadline', { submitNotBeforeAt: at(1_700), submitDeadlineAt: at(1_000) }],
+  ])('H1-D3: refuses %s', async (_name, patch) => {
+    await rolledBack(async (tx) => {
+      const seed = await seedAccount(tx);
+      await rejectsWith(
+        tx.insert(tradeIntents).values(intent(seed, 'h1', patch)),
+        '23514',
+        'trade_intents_submit_window_check',
+      );
+    });
+  });
+});
+
 describe('broker_balance_snapshots', () => {
   it.each(SNAPSHOT_AMOUNTS)('accepts a zero %s', async (field) => {
     await rolledBack(async (tx) => {

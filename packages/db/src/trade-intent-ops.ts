@@ -84,6 +84,9 @@ export interface IntentSession {
   // the last moment the intent may be taken (#670, an H1 session's entry window); absent: none.
   // The route's request schema has no such field: only a session's path writes the column
   submitDeadlineAt?: Date;
+  // the first moment the intent may be taken (#836, the entry's hold); absent: no hold. Only a
+  // session's path writes it, like the deadline
+  submitNotBeforeAt?: Date;
 }
 
 export interface CreateTradeIntentOptions {
@@ -279,6 +282,7 @@ async function createInTransaction(
       clientRequestId: input.clientRequestId,
       tradingSessionId: session?.id ?? null,
       submitDeadlineAt: session?.submitDeadlineAt ?? null,
+      submitNotBeforeAt: session?.submitNotBeforeAt ?? null,
       signalDecisionId: decisionId,
       status: TradeIntentStatus.Planned,
       tokensReserved: tokens,

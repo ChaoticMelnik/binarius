@@ -2161,8 +2161,11 @@ describe('the submit deadline of an H1 session intent (#670)', () => {
     expect(intent.submitDeadlineAt).toEqual(deadline);
     const { intent: plain } = await sessionIntent();
     expect(plain.submitDeadlineAt).toBeNull();
+    expect(plain.submitNotBeforeAt).toBeNull();
     const route = await seedQueuedIntent(tmp.db);
     expect(route.intent.submitDeadlineAt).toBeNull();
+    // #836: the route's intent has no hold either
+    expect(route.intent.submitNotBeforeAt).toBeNull();
   });
 
   it('H1-T2 takes an intent whose deadline is ahead, and one without a deadline', async () => {
