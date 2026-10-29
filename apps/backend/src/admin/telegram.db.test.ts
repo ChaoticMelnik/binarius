@@ -1,8 +1,16 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { and, eq } from 'drizzle-orm';
 import { BotError, GrammyError } from 'grammy';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { sql } from 'drizzle-orm';
-import { AuditAction, LinkState } from '@binarius/shared';
+import {
+  AuditAction,
+  LinkState,
+  TELEGRAM_RETRY_FAILED_MESSAGE,
+  TELEGRAM_RETRY_RECOVERED_MESSAGE,
+} from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import {
   auditLog,
   completeLogin,
@@ -774,6 +782,133 @@ describe('polling', () => {
       'the staff login bot stopped polling',
     );
     await expect(failing.stop()).resolves.toBeUndefined();
+  });
+
+  // #67: grammY's own retry loop against a local Bot API server — captureApi replaces the
+  // transformer chain, so these are the scenes that reach the retry log. A long poll past its
+  // script is held open until stop() aborts it; stop()'s confirming getUpdates has no `timeout`.
+  describe('a Bot API call grammY retries', () => {
+    let server: Server | undefined;
+    afterEach(async () => {
+      const running = server;
+      server = undefined;
+      running?.closeAllConnections();
+      if (running !== undefined) await new Promise((resolve) => running.close(resolve));
+    });
+
+    const reply = (status: number, body: object) => ({ status, body: JSON.stringify(body) });
+    const ok = (result: unknown) => reply(200, { ok: true, result });
+
+    const retriedCallsServer = async (
+      script: Record<string, readonly { status: number; body: string }[]>,
+    ): Promise<string> => {
+      const served = new Map<string, number>();
+      const started = createServer((request, response) => {
+        const chunks: Buffer[] = [];
+        request.on('data', (chunk: Buffer) => chunks.push(chunk));
+        request.on('end', () => {
+          const method = request.url?.split('/').pop() ?? '';
+          const body =
+            chunks.length === 0 ? {} : (JSON.parse(String(Buffer.concat(chunks))) as object);
+          const longPoll = method === 'getUpdates' && 'timeout' in body;
+          const stopConfirmation = method === 'getUpdates' && !longPoll;
+          const index = served.get(method) ?? 0;
+          if (!stopConfirmation) served.set(method, index + 1);
+          const scripted = stopConfirmation ? undefined : script[method]?.[index];
+          if (scripted === undefined && longPoll) return;
+          const { status, body: text } =
+            scripted ??
+            ok(method === 'getUpdates' ? [] : method === 'getMe' ? ADMIN_BOT_INFO : true);
+          response.statusCode = status;
+          response.setHeader('content-type', 'application/json');
+          response.end(text);
+        });
+      });
+      server = started;
+      await new Promise<void>((resolve) => started.listen(0, '127.0.0.1', resolve));
+      return `http://127.0.0.1:${(started.address() as AddressInfo).port}`;
+    };
+
+    it('PL4 writes a warn per refused long poll and an info on recovery, while isPolling() stays true', async () => {
+      const apiRoot = await retriedCallsServer({
+        getUpdates: [
+          reply(429, {
+            ok: false,
+            error_code: 429,
+            description: 'Too Many Requests: retry after 0',
+            parameters: { retry_after: 0 },
+          }),
+          ok([]),
+        ],
+      });
+      const running = createAdminBot({
+        token: '1:token',
+        db: tmp.db,
+        logger,
+        botInfo: ADMIN_BOT_INFO,
+        webPublicUrl: TEST_WEB_PUBLIC_URL,
+        apiRoot,
+        telegramApiTimeoutMs: 2_000,
+      });
+
+      running.start();
+      await until('getUpdates to recover', () =>
+        logger.info.mock.calls.some(([, message]) => message === TELEGRAM_RETRY_RECOVERED_MESSAGE),
+      );
+
+      expect(running.isPolling()).toBe(true);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          err: { name: 'GrammyError' },
+          method: 'getUpdates',
+          telegramErrorCode: 429,
+          retryAfterS: 0,
+          failures: 1,
+        }),
+        TELEGRAM_RETRY_FAILED_MESSAGE,
+      );
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'getUpdates', failures: 1 }),
+        TELEGRAM_RETRY_RECOVERED_MESSAGE,
+      );
+      await running.stop();
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.error).not.toHaveBeenCalled();
+    });
+
+    it('PL5 writes the refused getMe at warn before the bot stops polling', async () => {
+      const apiRoot = await retriedCallsServer({
+        getMe: [reply(401, { ok: false, error_code: 401, description: 'Unauthorized' })],
+      });
+      const failing = createAdminBot({
+        token: '1:bad',
+        db: tmp.db,
+        logger,
+        webPublicUrl: TEST_WEB_PUBLIC_URL,
+        apiRoot,
+        telegramApiTimeoutMs: 2_000,
+      });
+
+      failing.start();
+      await until('the bot to stop polling', () => logger.error.mock.calls.length > 0);
+
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          err: { name: 'GrammyError' },
+          method: 'getMe',
+          telegramErrorCode: 401,
+          failures: 1,
+        }),
+        TELEGRAM_RETRY_FAILED_MESSAGE,
+      );
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ method: 'getMe', telegramErrorCode: 401 }),
+        'the staff login bot stopped polling',
+      );
+      expect(failing.isPolling()).toBe(false);
+      await expect(failing.stop()).resolves.toBeUndefined();
+    });
   });
 });
 

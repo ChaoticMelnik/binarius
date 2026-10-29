@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { createServer, type Server } from 'node:http';
 import pino from 'pino';
 import { BotError, GrammyError, HttpError, type Api } from 'grammy';
 import type { ApiError, Update } from 'grammy/types';
@@ -20,6 +21,8 @@ import {
   type LogLevel,
   demoAnalysisCallbackData,
   BotLanguage,
+  TELEGRAM_RETRY_FAILED_MESSAGE,
+  TELEGRAM_RETRY_RECOVERED_MESSAGE,
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
@@ -59,6 +62,9 @@ import {
   USER,
   USER_VIEW,
   captureApi,
+  closeServer,
+  fakeBackend,
+  listen,
   userView,
   callbackUpdate,
   messageAnswer,
@@ -78,6 +84,7 @@ import {
 } from './testing';
 import { settingsText, TEXTS } from './texts';
 import {
+  POLLING_TIMEOUT_S,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -1992,5 +1999,205 @@ describe('what the session tracker and the recovery write (#567, #570 m5)', () =
       updateId: update.update_id,
     });
     expect(lines.join('')).not.toContain('SECRET-DESC');
+  });
+});
+
+// A Bot API server scripted per method and call: each call takes the next reply of its method;
+// a long poll (a getUpdates with `timeout`) past its script is held open until the client aborts
+// it, and stop()'s confirming getUpdates (no `timeout`) and any other call past its script answer
+// ok. grammY runs its own retry loop against it, which is what the transformer sits in.
+interface ScriptedReply {
+  status: number;
+  body: string;
+}
+
+const okReply = (result: unknown): ScriptedReply => ({
+  status: 200,
+  body: JSON.stringify({ ok: true, result }),
+});
+const refusalReply = (errorCode: number, description: string, retryAfter?: number) => ({
+  status: errorCode,
+  body: JSON.stringify({
+    ok: false,
+    error_code: errorCode,
+    description,
+    ...(retryAfter === undefined ? {} : { parameters: { retry_after: retryAfter } }),
+  }),
+});
+
+describe('what the bot writes about a Bot API call grammY retries (#67)', () => {
+  let server: Server | undefined;
+  afterEach(async () => {
+    const running = server;
+    server = undefined;
+    running?.closeAllConnections();
+    await closeServer(running);
+  });
+
+  const retriedCallsServer = async (script: Record<string, readonly ScriptedReply[]>) => {
+    const served = new Map<string, number>();
+    const started = createServer((request, response) => {
+      const chunks: Buffer[] = [];
+      request.on('data', (chunk: Buffer) => chunks.push(chunk));
+      request.on('end', () => {
+        const method = request.url?.split('/').pop() ?? '';
+        const body =
+          chunks.length === 0 ? {} : (JSON.parse(String(Buffer.concat(chunks))) as object);
+        const longPoll = method === 'getUpdates' && 'timeout' in body;
+        const stopConfirmation = method === 'getUpdates' && !longPoll;
+        const index = served.get(method) ?? 0;
+        if (!stopConfirmation) served.set(method, index + 1);
+        const reply = stopConfirmation ? undefined : script[method]?.[index];
+        if (reply === undefined && longPoll) return;
+        const { status, body: text } =
+          reply ?? okReply(method === 'getUpdates' ? [] : method === 'getMe' ? BOT_INFO : true);
+        response.statusCode = status;
+        response.setHeader('content-type', status === 502 ? 'text/html' : 'application/json');
+        response.end(text);
+      });
+    });
+    server = started;
+    return listen(started);
+  };
+
+  const pollingBot = (apiRoot: string, logger: pino.Logger, withBotInfo = true) =>
+    createBot({
+      intentTracker: stubTracker(),
+      sessionTracker: stubSessionTracker(),
+      sessionResumer: stubSessionResumer(),
+      signalWaiter: stubSignalWaiter(),
+      shownSignals: stubShownSignals(),
+      token: TOKEN,
+      backend: fakeBackend(),
+      logger,
+      ...(withBotInfo ? { botInfo: BOT_INFO } : {}),
+      apiRoot,
+      telegramApiTimeoutMs: 2_000,
+    });
+
+  const levelsAndMethods = (lines: readonly string[]) =>
+    lines
+      .map(parsed)
+      .filter(
+        (entry) =>
+          entry.msg === TELEGRAM_RETRY_FAILED_MESSAGE ||
+          entry.msg === TELEGRAM_RETRY_RECOVERED_MESSAGE,
+      )
+      .map((entry) => [entry.level, entry.method]);
+
+  it('PL1 writes a warn per refused attempt and an info on recovery, and nothing for its own stop', async () => {
+    const tooMany = refusalReply(429, 'Too Many Requests: retry after 0', 0);
+    const apiRoot = await retriedCallsServer({
+      deleteWebhook: [tooMany],
+      getUpdates: [tooMany, okReply([])],
+    });
+    const { lines, logger } = sink();
+    const bot = pollingBot(apiRoot, logger);
+
+    const started = bot.start({ timeout: POLLING_TIMEOUT_S, limit: 1 });
+    await until(
+      'getUpdates to recover',
+      () => levelsAndMethods(lines).filter(([level]) => level === 30).length === 2,
+    );
+    const linesBeforeStop = lines.length;
+    await bot.stop();
+    await started;
+
+    expect(levelsAndMethods(lines)).toEqual([
+      [40, 'deleteWebhook'],
+      [30, 'deleteWebhook'],
+      [40, 'getUpdates'],
+      [30, 'getUpdates'],
+    ]);
+    const [deleteWebhookFailed, deleteWebhookRecovered, getUpdatesFailed] = lines.map(parsed);
+    expect(deleteWebhookFailed).toMatchObject({
+      msg: TELEGRAM_RETRY_FAILED_MESSAGE,
+      err: { name: 'GrammyError' },
+      method: 'deleteWebhook',
+      telegramErrorCode: 429,
+      retryAfterS: 0,
+      failures: 1,
+    });
+    expect(deleteWebhookRecovered).toMatchObject({
+      msg: TELEGRAM_RETRY_RECOVERED_MESSAGE,
+      method: 'deleteWebhook',
+      failures: 1,
+    });
+    expect(getUpdatesFailed).toMatchObject({
+      err: { name: 'GrammyError' },
+      method: 'getUpdates',
+      telegramErrorCode: 429,
+      retryAfterS: 0,
+    });
+    expect(lines.slice(linesBeforeStop).map(parsed)).not.toContainEqual(
+      expect.objectContaining({ level: 40 }),
+    );
+    expect(lines.join('')).not.toContain('Too Many Requests');
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+
+  it('PL2 names a transport failure by the classes grammY and node-fetch throw', async () => {
+    const apiRoot = await retriedCallsServer({
+      deleteWebhook: [{ status: 502, body: '<html>Bad Gateway</html>' }],
+    });
+    const { lines, logger } = sink();
+    const bot = pollingBot(apiRoot, logger);
+
+    const started = bot.start({ timeout: POLLING_TIMEOUT_S, limit: 1 });
+    await until(
+      'deleteWebhook to recover',
+      () => lineWith(lines, TELEGRAM_RETRY_RECOVERED_MESSAGE) !== undefined,
+    );
+    await bot.stop();
+    await started;
+
+    expect(levelsAndMethods(lines)).toEqual([
+      [40, 'deleteWebhook'],
+      [30, 'deleteWebhook'],
+    ]);
+    expect(lineWith(lines, TELEGRAM_RETRY_FAILED_MESSAGE)).toMatchObject({
+      err: { name: 'HttpError' },
+      method: 'deleteWebhook',
+      transportError: { name: 'FetchError' },
+      failures: 1,
+    });
+    expect(lines.join('')).not.toContain('Bad Gateway');
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
+  });
+
+  it('PL3 writes the refused getMe at warn, then the fatal stop with its method and code', async () => {
+    const apiRoot = await retriedCallsServer({ getMe: [refusalReply(401, 'Unauthorized')] });
+    const { lines, logger } = sink();
+    const exit = vi.fn();
+    runBot({
+      bot: pollingBot(apiRoot, logger, false),
+      tracker: { stop: () => Promise.resolve() },
+      sessionTracker: { stop: () => Promise.resolve() },
+      sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
+      signalWaiter: { stop: () => Promise.resolve() },
+      botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
+      logger,
+      exit,
+      signals: ['SIGTERM'],
+      signalSource: new EventEmitter(),
+    });
+    await until('the bot to exit', () => exit.mock.calls.length > 0);
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(lineWith(lines, TELEGRAM_RETRY_FAILED_MESSAGE)).toMatchObject({
+      level: 40,
+      err: { name: 'GrammyError' },
+      method: 'getMe',
+      telegramErrorCode: 401,
+      failures: 1,
+    });
+    expect(lineWith(lines, 'long polling stopped with an error')).toMatchObject({
+      level: 50,
+      err: { name: 'GrammyError' },
+      method: 'getMe',
+      telegramErrorCode: 401,
+    });
+    expect(lines.join('')).not.toContain('Unauthorized');
+    expect(lines.join('')).not.toContain('SECRET-TOKEN');
   });
 });

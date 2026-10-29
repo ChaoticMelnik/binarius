@@ -58,3 +58,4 @@ export * from './fetch-deadline';
 export * from './rate-window';
 export * from './telegram-refusals';
 export * from './telegram-logging';
+export * from './telegram-retry-log';

@@ -4082,4 +4082,19 @@ describe('the bounds this project does not own', () => {
         'against SHUTDOWN_BUDGET_MS before touching this assertion.',
     ).toBe(GRAMMY_POLLING_BACKOFF_MS);
   });
+
+  // #67: createTelegramRetryLog sees the polling loop's failures only because its getUpdates goes
+  // through the API transformers, and logs a refusal as retried because grammY rethrows only these
+  it('matches what grammY retries in the polling loop and how it calls getUpdates', () => {
+    const source = readFileSync(grammyBotJs, 'utf8');
+    const upgrade =
+      'grammY changed its polling loop (node_modules/grammy/out/bot.js). This is a grammY ' +
+      'upgrade, not a broken test: re-check createTelegramRetryLog ' +
+      '(packages/shared/src/telegram-retry-log.ts) and TELEGRAM_RETRIED_METHODS against ' +
+      'fetchUpdates and handlePollingError before touching this assertion.';
+    expect(source.includes('this.api.getUpdates('), upgrade).toBe(true);
+    expect(source.includes('error.error_code === 401 || error.error_code === 409'), upgrade).toBe(
+      true,
+    );
+  });
 });
