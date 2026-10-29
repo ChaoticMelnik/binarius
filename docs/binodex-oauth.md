@@ -707,7 +707,7 @@ may also come from the worker's cache, up to `ACCESS_TOKEN_CACHE_TTL_MS` after t
 | Caller | `mayRefresh` | Window after the token is handed out |
 | --- | --- | --- |
 | backend balance reconciler — `POST /trading/access`, `POST /trading/sessions` (no snapshot), the background tick, `reportRefused` | routes `true`; tick and report `false` | the COMMIT and one `GET /v1/broker/user`, milliseconds |
-| session view (`readFinishedSessionView`, #337) through the balance reconciler — `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/stop` (#122), the session notices' summary (#464); only a finished session whose snapshot predates its last settlement | `false` | the COMMIT and one `GET /v1/broker/user`, at most `TRADING_ACCESS_REFRESH_BUDGET_MS` |
+| session view (`readFinishedSessionView`, #337) through the balance reconciler — `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/stop` (#122), the session notices' fallback summary (#464; `refreshFinishedBalance`, not waited for in the tick since #870); only a finished session whose snapshot predates its last settlement | `false` | the COMMIT and one `GET /v1/broker/user`, at most `TRADING_ACCESS_REFRESH_BUDGET_MS` |
 | `rate-limit-probe` (backend CLI) | `false` | two GETs |
 | executor (`trade-command-executor.ts`, the REST path) | `true` (default) | the route's answer and one `openTrade` POST |
 | REST reconciler (`rest-reconciler.ts`) | `true` | the pages of both windows, at most `RECONCILE_ATTEMPT_TIMEOUT_MS` |
