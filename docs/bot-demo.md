@@ -90,17 +90,19 @@ pnpm test --project unit apps/bot/src packages/broker-rest packages/shared/src/c
 ```text
 demo                      (the card's button)
   bot  → answerCallbackQuery ∥ GET /trading/signals ∥ GET /trading/pairs
-  bot  → sendMessage: «Сигналы сейчас · ⏱ 5 с», the pairs with a signal two a row (green ⬆️, red ⬇️, #475), «🔄 Обновить» «🧭 Вручную» «🏠 В меню» in one row; no pair: «🔎 Анализирую сигналы…» with «🧭» / «🏠» (#664)
+  bot  → sendMessage: «Сигналы сейчас · ⏱ 5 с», the pairs with a signal two a row (green ⬆️, red ⬇️, #475), «🔄 Обновить» «🧭 Вручную» «🏠 В меню» in one row; no pair: sendAnimation, the scanner's animation under the scanner's caption («🛰 Сканирую рынок · N пар…», #859) with «🧭» / «🏠» (#664)
   bot  → the wait registered on that message (#664): the list after 30 s, or its first pair
 demo:sig[:<sec>]          («🔄 Обновить», «↩️ К списку», «📡 Сигналы», «📡 Показать сигналы», «🔀 Выбрать другую пару»; `demo:sig:<sec>` of buttons from #382 to #685)
-  bot  → the same reads → editMessageText: the same list, in place, and the wait
+  bot  → the same reads → editMessageText: the same list, in place, and the wait; no pair:
+         editMessageMedia, the pressed text becomes the animation (#859; under a photo or the
+         animation sendAnimation at once)
 demo:l:<assetId>:<sec>[:a|:n]  (a pair of the list; in demo since #476 also the analysis's session row :a, the row under a finished trade and «🔁 Ещё сессия» :n; «↩️ К запуску», «↩️ Назад» of the typed amount; an alternative under a wait, #664)
   bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade(<sec>) ∥ POST /trading/access
          ∥ GET /trading/signals for :n only (#664, #828)
   bot  → editMessageText (sendMessage for :n, and under a photo — the analysis card — sendMessage
          at once, #761): the amount screen in demo, the launch screen in real; for :n with the pair
-         not in the list → «⏳ Проверяю сигнал по {пара}…» with the other pairs that have a signal
-         now, «🧭» / «🏠», and the wait (#664)
+         not in the list → sendAnimation: «⏳ Проверяю сигнал по {пара}…» with the pair's scanner
+         lines (#859) and the other pairs that have a signal now, «🧭» / «🏠», and the wait (#664)
 demo:sa:<assetId>:<sec>:<amount>:<l|a>  (an amount of the amount screen, #476)
   bot  → answerCallbackQuery ∥ POST /trading/stake (demo, <amount>) ∥ GET /trading/pairs
   bot  → on a save: POST /trading/sessions, one attempt → the session's status (an H1 session,
@@ -248,7 +250,7 @@ expire.
 | Outcome | What the bot shows |
 |---|---|
 | one or more pairs left after the join | `demoSignalsHeader` with the duration's label + up to 12 pairs two a row (`signalsShown`; at least five when five have a signal, the tail below 80 % included) + [refresh · manual] + [menu] |
-| none left (no signal, every one closed or delisted, the scanner's warm-up after a start) | the wait (#664): `signalsWaiting` («🔎 Анализирую сигналы · ⏱ 5 с / Проверяю пары каждую секунду. Как только появится сигнал, список откроется здесь.») + [manual] + [menu], no refresh; the list comes into the same message |
+| none left (no signal, every one closed or delisted, the scanner's warm-up after a start) | the wait (#664, #859): the scanner's animation under its caption (`scanSummaryLines`: «🛰 Сканирую рынок · 115 пар · 6 900 проверок в минуту / Сейчас: EUR/JPY / ✅ Котировки ✅ Движение цены ⏳ Отбор сигнала / Ближе всего к сигналу: …») + [manual] + [menu], no refresh; the list comes into the same message, on the still |
 | the catalog's three failures ([The check](#the-check)) | that row's text + [«🔄 Повторить» (the pressed data; `demo:sig` under a legacy datum) · manual] + [menu]; a stale catalog draws no list |
 | `readSignals` threw (unreachable, a non-2xx, a broken body) | «⚠️ Сервис временно недоступен…» + [«🔄 Повторить» · manual] + [menu]; `warn` `trading signals not read` |
 | the body has no list for the duration (a backend scanning other intervals: a deploy mismatch) | the same unavailable screen, never an empty list; `warn` `trading signals list missing` with `interval` |
@@ -283,8 +285,8 @@ in order:
 | The list | What the press shows |
 |---|---|
 | the pair in it | the amount screen in demo, the launch screen in real, as above (W-door3) |
-| the pair not in it | «⏳ Проверяю сигнал по {symbol} / Смотрю каждую секунду (⏱ 5 с)…» (`pairWaiting`) and, while other pairs have a signal, «Сигнал уже есть по другим парам — можно не ждать и выбрать одну из них 👇» (`pairWaitingAlternatives`) over their buttons two a row (`signalsShown`; the chosen pair is not in the list) + «🧭 Вручную» + «🏠 В меню»; the wait registered (W-door1) |
-| not read (`readSignals` threw, or no `5s` list) | the same wait without the alternatives; `warn` `trading signals not read` or `trading signals list missing` (W-door2) |
+| the pair not in it | as the animation (#859): «⏳ Проверяю сигнал по {symbol} / Смотрю каждую секунду (⏱ 5 с)…» (`pairWaiting`), the pair's scanner lines (`pairScanning` with its closeness, or `pairScanningNoMove`, and `scanStages`) and, while other pairs have a signal, «Сигнал уже есть по другим парам — можно не ждать и выбрать одну из них 👇» (`pairWaitingAlternatives`) over their buttons two a row (`signalsShown`; the chosen pair is not in the list) + «🧭 Вручную» + «🏠 В меню»; the wait registered (W-door1) |
+| not read (`readSignals` threw, or no `5s` list) | the same wait without the alternatives and without the scanner lines (the wait's first poll draws them); `warn` `trading signals not read` or `trading signals list missing` (W-door2) |
 
 `:n` answers with a new message, as for every screen of this node (W-door4); no screen of the door
 says «нет сигнала» (W-door5). The start route never refuses for want of a signal since #828
@@ -683,8 +685,8 @@ failed expansion changes nothing on screen.
 `editOrReply` edits the message the pressed button is under, and classifies every refusal
 (`telegram-refusals.ts`):
 
-- under a photo (the analysis card #482, the session's summary card #318; `pressedUnderPhoto`,
-  `demo.ts`) — no edit is tried: the screen goes as a new message with the same keyboard at once,
+- under a photo (the analysis card #482, the session's summary card #318, the wait's still) or
+  the wait's animation (#859; `pressedUnderMedia`, `demo.ts`) — no edit is tried: the screen goes as a new message with the same keyboard at once,
   no log (#761). The copies in `cycle-stake.ts` and `stake-picker.ts` do the same.
 - «message is not modified» (the same screen pressed twice) — done; `info`
   `the demo screen already shows this`.
@@ -838,10 +840,10 @@ flight is skipped. Push from the backend would need an inbound server on the bot
 
 | Entry | Drawn | Then |
 |---|---|---|
-| the list, no pair yet | «🔎 Анализирую сигналы · ⏱ 5 с…» (`signalsWaiting`) + [🧭] / [🏠] | a poll with a pair: the list in the same message, its 30 s from that edit |
+| the list, no pair yet | the animation under the scanner's caption (`signalsScanning` …) + [🧭] / [🏠] | a poll with a pair: the list on the still in the same message, its 30 s from that edit |
 | the list with pairs | «📡 Сигналы сейчас…» + the pairs + [🔄 · 🧭] / [🏠] | after `SIGNALS_LIST_TTL_MS` (30 s): «🚀 Начать торговлю / Сигнал живёт секунду, и этот список устарел…» (`signalsExpired`) + [📡 Показать сигналы · 🧭] / [🏠], and the entry ends |
-| the pair (the door `:n`) | «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`) + the other pairs with a signal now, under `pairWaitingAlternatives`, read at the press | the alternatives taken away after 30 s, the wait goes on; the pair's signal: the amount screen (demo) or the launch (real) by a fresh access read, and the entry ends |
-| the analysis | the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the candle feature lines when the decision has them + [🧭] / [🏠]; the alternatives from the first poll | the pair in the list: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` when the answer carries `h1` (a refused photo: its caption as text); `h1` null by that read (a second boundary crossed between the two reads): the entry stays, its pending alternatives drawn without the pair; a `fetch_failed` or a throw adds one `warn` (a `fetch_failed` with `h1` still draws the card) |
+| the pair (the door `:n`) | the animation: «⏳ Проверяю сигнал по {symbol}…» (`pairWaiting`), the pair's scanner lines + the other pairs with a signal now, under `pairWaitingAlternatives`, read at the press | the alternatives taken away after 30 s, the wait goes on; the pair's signal: the amount screen (demo) or the launch (real) by a fresh access read, and the entry ends |
+| the analysis | «⏳» becomes the animation: the analysis header, «⏳ Проверяю сигнал…» (`analysisWaiting`), the candle feature lines when the decision has them + [🧭] / [🏠]; the scanner lines and the alternatives from the first poll | the pair in the list: `POST /trading/signal` with `analysis` (#484) and access, then the card in the same message by `editMessageMedia` when the answer carries `h1` (a refused photo: its caption as text); `h1` null by that read (a second boundary crossed between the two reads): the entry stays, its pending alternatives drawn without the pair; a `fetch_failed` or a throw adds one `warn` (a `fetch_failed` with `h1` still draws the card) |
 | any | — | the pair closed, gone or not taking 5 s by the fresh catalog: its refusal (`demoPairClosed` …), the entry ends; past `SIGNAL_WAIT_MAX_MS` (1 h, a technical bound below Telegram's 48 h, not a product limit) or at the stop: `signalsExpired`, the entry ends |
 
 What the wait draws is recorded for the start (#829) once its edit is on screen (done, «message is
@@ -858,9 +860,39 @@ step. The stop and the bound draw the list's text for every kind of entry, the p
 analysis's too («…этот список устарел»): the owner adjusts the text at review (manager's decision
 2026-10-21).
 
+**The live wait (#859, Rule 58).** The wait is a media message: the scanner's looping animation
+(`packages/shared/assets/scan-radar.gif`, generated by `node tooling/scan-media.ts`; a GIF, which
+`sendAnimation` turns into a silent looping video, or any MP4 put in its place) under a caption that
+prints `GET /trading/signals` → `summary` (`scan-summary.ts` in `packages/shared`): the scanned pairs
+and `scanned × 60` checks a minute, the pair the scanner is on (`summary.scanning`, a line only when
+the catalog has it), the stages as state (quotes ✅ while the source streams, price movement ✅
+while a pair is scanned, signal selection ⏳), and up to three closest pairs (`closeness`,
+`h1ClosenessPct`, at most 99 %; no line without one); a pair's wait prints its own closeness
+instead. The caption is redrawn last in a tick, after the edits that end waits: an entry at most
+once in `SIGNAL_WAIT_CAPTION_MS` (4 s), the longest waiting first, at most
+`SIGNAL_WAIT_CAPTION_EDITS_PER_TICK` (2) a tick, none in a tick a 429 stopped — with N waiting
+users each caption moves once in max(4 s, N / 2 s). A screen drawn without the scanner's lines (the
+analysis reads no list; a door whose read failed) gets them at the first poll. Whatever ends a
+wait — a list, the next step, a refusal, the expiry, the bound, the stop, the user leaving by a
+button or a command — shows the still (`scan-still.png`) in one edit: `leave()` launches it for an
+animation outside the tick, at the edits' pace, no retry, awaited by `stop()`. The card is the
+photo of its direction, as before. The files' `file_id`s live in the process's memory
+(`telegram-file-ids.ts`); a media edit or send refused for its file (no 429, 403 or edit refusal)
+forgets the id and draws the same screen without new media: `editMessageCaption` under the
+media, the text path for a handler's send (the entry is then `text` and behaves as before #859).
+The edit by the media the message has and the one it gets:
+
+| was → becomes | method |
+|---|---|
+| text → text | `editMessageText` |
+| text → animation or still, animation → still | `editMessageMedia` |
+| animation → animation, still → still | `editMessageCaption` |
+| any → the card | `editMessageMedia` (the photo of its direction) |
+
 **Edits.** By the message's id outside any update, in the entry's language, through `send.ts`
-(`editMessageTextByIdHtml`, `editMessagePhotoByIdHtml`), only when the whole screen differs — its
-text and its keyboard: the render key, as the session tracker's (#568). Paced one every
+(`editMessageTextByIdHtml`, `editMessagePhotoByIdHtml`, `editMessageAnimationByIdHtml`,
+`editMessageCaptionByIdHtml`), only when the whole screen differs — its media, its text and its
+keyboard: the render key, as the session tracker's (#568). Paced one every
 `SIGNAL_WAIT_EDIT_GAP_MS` (200 ms, 5 a second): with the session recovery's 4 and the backend's
 20 + 9 a second on the same token the worst coincidence is about 38 a second, above Telegram's
 ~30 ([bot-session.md](bot-session.md)), so a 429 stops the tick's edits and pauses every edit for
@@ -894,9 +926,11 @@ window leaves every message «⏳…» — the launched ones awaited
 (`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
-Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), `demo.test.ts` → the
-wait for signals, W-door1–5, W-door3′, W-an1 and W-shown1–6 (#829), `shown-signals.test.ts`
-SS1–SS7, `timing.test.ts` → the wait's bounds, `lifecycle.test.ts`.
+Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), W23–W36 (#859: the
+live wait), `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
+W-shown1–6 (#829), `shown-signals.test.ts` SS1–SS7, `timing.test.ts` → the wait's bounds,
+`lifecycle.test.ts`. Stated: how the animation looks in Telegram's light and dark themes (the
+media has its own opaque ground) and that it loops and autoplays — the owner's check on a stand.
 
 ## Boundaries
 

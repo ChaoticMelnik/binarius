@@ -266,6 +266,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 55. **Сканер H1 и показанный сигнал** — список сигналов и `h1` анализа — из новейшего решения R1 пары на текущей секунде, в памяти; направление в боте — только из `h1` → `rules/signal-h1.md`
 56. **Вход H1 не раньше f + entryDelaySec** — `submit_not_before_at` пишет драйвер от `closedAtMs`, воркер держит job до него перед `takeIntent`, дедлайн — от позднего из конца удержания и `taken_at_ms` решения → `rules/signal-h1.md`
 57. **Подлинность постбэка** — секрет в пути (`POSTBACK_URL_SECRET`, на ротацию `POSTBACK_URL_SECRET_PREVIOUS`) — единственный механизм, чужой — 404 без строки; `postback_deliveries.secret_key_id` и `deposit_events.verification` — предикат побочных эффектов → `rules/payments.md`
+58. **Живое ожидание сигнала** — экран ожидания — анимация с подписью из сводки сканера, правки подписи последней очередью → `rules/bot-ui.md`
 
 ### Map: path → rules
 
@@ -278,14 +279,14 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `README.md` | core 16 |
 | `apps` | core 52 |
 | `apps/backend` | signal-h1 20, 43 |
-| `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48, 55, 56; bot-ui 18, 19, 31, 46, 47, 49; payments 35, 57 |
-| `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 44, 48, 55; bot-ui 18, 19, 29, 30, 31, 46; payments 39; auth 12, 13 |
+| `apps/backend/src` | core 9, 10, 14, 16, 51; trading 22, 23, 27, 28, 33; signal-h1 41, 44, 45, 48, 55, 56; bot-ui 18, 19, 31, 46, 47, 49, 58; payments 35, 57 |
+| `apps/backend/src/admin` | core 2, 3, 5, 7, 8, 10, 14, 17; trading 22, 28, 33, 36; signal-h1 44, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 58; payments 39; auth 12, 13 |
 | `apps/backend/src/auth` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 18, 19, 29, 30, 31, 49; payments 35, 57; auth 12, 13 |
 | `apps/backend/src/bot-texts` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/backend/src/broker` | core 26; trading 21; auth 12 |
 | `apps/backend/src/cli` | core 26; trading 23, 28, 33, 50; signal-h1 42, 44, 45, 48; bot-ui 30; payments 39, 40 |
 | `apps/backend/src/deposit` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 37; auth 12, 13 |
-| `apps/backend/src/h1` | trading 23; signal-h1 42, 44, 48, 55, 56 |
+| `apps/backend/src/h1` | trading 23; signal-h1 42, 44, 48, 55, 56; bot-ui 58 |
 | `apps/backend/src/mailing` | bot-ui 19 |
 | `apps/backend/src/market-data` | signal-h1 41, 44, 45, 48 |
 | `apps/backend/src/outbox` | trading 6 |
@@ -293,10 +294,10 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/backend/src/postbacks` | core 3, 5, 7, 9, 17; trading 22, 33, 36; bot-ui 19, 29, 30; payments 35, 37, 57; auth 12, 13 |
 | `apps/backend/src/signal` | signal-h1 41 |
 | `apps/backend/src/trade-log` | signal-h1 45 |
-| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47; auth 12, 13 |
+| `apps/backend/src/trading` | core 3, 5, 7, 17, 26; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 58; auth 12, 13 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
-| `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39; auth 12, 13 |
+| `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
 | `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54; signal-h1 44, 45; bot-ui 18 |
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12 |
@@ -306,7 +307,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48, 56; auth 12 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28; signal-h1 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
-| `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47; payments 38 |
+| `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 58; payments 38 |
 | `apps/web/src/admin` | core 52; bot-ui 30; payments 38 |
 | `apps/web/src/cashier` | payments 38 |
 | `apps/web/src/oauth` | core 26; payments 38 |
@@ -315,7 +316,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/binodex-oauth.md` | auth 12 |
 | `docs/bonus-rules.md` | payments 40 |
 | `docs/bot-demo-trade.md` | bot-ui 29 |
-| `docs/bot-demo.md` | bot-ui 46 |
+| `docs/bot-demo.md` | bot-ui 46, 58 |
 | `docs/bot-navigation.md` | bot-ui 31, 49 |
 | `docs/bot-session.md` | trading 28; bot-ui 47 |
 | `docs/bot-texts.md` | bot-ui 18, 30 |
@@ -355,8 +356,8 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/e2e/src` | core 51; trading 28; bot-ui 18 |
 | `packages/e2e/src/harness` | core 10; trading 22, 28; bot-ui 29, 46 |
 | `packages/mock-broker/src` | core 2, 10, 51; trading 15, 23, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
-| `packages/shared` | core 10, 52; trading 27; bot-ui 30 |
-| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49; payments 39, 40; auth 12 |
+| `packages/shared` | core 10, 52; trading 27; bot-ui 30, 58 |
+| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58; payments 39, 40; auth 12 |
 | `packages/signal` | signal-h1 43 |
 | `packages/signal-stand` | signal-h1 20 |
 | `packages/signal-stand/src` | core 10, 51; trading 25, 28; signal-h1 20, 41, 42, 43; bot-ui 18 |
@@ -364,7 +365,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/signal/src/fixtures` | signal-h1 20 |
 | `packages/stake/src` | core 2, 10, 51; trading 23, 25, 27, 28, 33; signal-h1 43, 44, 45, 48; bot-ui 18 |
 | `scripts` | trading 27, 28; bot-ui 47 |
-| `tooling` | core 1, 52 |
+| `tooling` | core 1, 52; bot-ui 58 |
 <!-- /generated -->
 
 ## Forbidden Actions

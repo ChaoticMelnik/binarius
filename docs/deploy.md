@@ -117,8 +117,9 @@ path.dirname(createRequire(import.meta.url).resolve('@binarius/<pkg>/package.jso
 From `src/` that is the package's self-reference; from a bundle it is the self-reference too
 (`apps/bot/dist` lies inside `apps/bot`) or the consumer's `node_modules` symlink, and Node
 returns the real path either way. The package lists `"./package.json": "./package.json"` in its
-`exports` (bot, web, db), or Node refuses the subpath. The bot's form is `botFile()` in
-`apps/bot/src/package-root.ts`, which also checks each file for read access when its module is
+`exports` (bot, web, db, shared), or Node refuses the subpath. The bot's form is `botFile()` in
+`apps/bot/src/package-root.ts` (`sharedFile()` beside it for `packages/shared/assets`, the wait's
+media, #859), which also checks each file for read access when its module is
 imported, so a wrong path stops the process at start, not at the first card; `web` reads its files
 at import already. The helper is not in `packages/shared`: that package compiles without Node's
 types (`types: []`, #6). A new file read at run time takes the same form: a unit test from `src/`

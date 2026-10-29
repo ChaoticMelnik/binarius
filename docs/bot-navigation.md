@@ -312,7 +312,7 @@ no repeat.
 | the amount screen (#476) | the presets three a row (green, ✅ on the one in effect) // from $10 two a row (red, «· риск») // ✏️ Ввести \| ↩️ К списку (or ↩️ К анализу); without presets the way back alone |
 | the stake picker (#297, #326) | the presets as on the amount screen // ✏️ Ввести \| 🔁 Минимум (with a saved stake) \| ↩️ Настройки (or ↩️ К анализу, ↩️ К запуску); its retry 💵 Сумма \| the way back; its prompt ↩️ Назад |
 | the signals list (#320, #685) | the pairs two a row, green ⬆️ / red ⬇️ // 🔄 Обновить \| 🧭 Вручную \| 🏠 В меню |
-| its empty screen, the wait for the signals (#664) | 🧭 Вручную \| 🏠 В меню |
+| its empty screen, the wait for the signals (#664; under the scanner's animation since #859, the keyboards of the waits unchanged) | 🧭 Вручную \| 🏠 В меню |
 | its refusals | 🔄 Повторить \| 🧭 Вручную \| 🏠 В меню |
 | the types (#685) | the types two a row; a catalog without one: 🔄 Повторить |
 | a type's page | its pairs two a row // ◀️ \| ↩️ Типы \| ▶️ (where pages exist) |
