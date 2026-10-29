@@ -158,12 +158,13 @@ export function checkNumbering(rules: readonly Rule[]): string[] {
 // check hold for every later one (the owner's decision: 55, the max on main that day).
 export const LEGACY_RULES_MAX = 55;
 export const NEW_RULE_MAX_BYTES = 1536;
-// History lives in audits.md → «Architecture Rules — история», not in a rule (#776). The
-// Cyrillic look-behind keeps «удаление», «удалённый» and the like out.
+// History lives in audits.md → «Architecture Rules — история», not in a rule (#776). `i`: a
+// sentence starts with a capital; the Cyrillic look-around keeps «удаление», «удалённый»,
+// «вес #1 до #2» and the like out.
 export const HISTORY_MARKERS: readonly { name: string; pattern: RegExp }[] = [
-  { name: 'с #N до #M', pattern: /(?<![а-яё])с #\d+ до #\d+/ },
-  { name: 'удалён', pattern: /(?<![а-яё])удал[её]н[аоы]?(?![а-яё])/ },
-  { name: 'до #N —', pattern: /(?<![а-яё])до #\d+ —/ },
+  { name: 'с #N до #M', pattern: /(?<![а-яё])с #\d+ до #\d+/i },
+  { name: 'удалён', pattern: /(?<![а-яё])удал[её]н[аоы]?(?![а-яё])/i },
+  { name: 'до #N —', pattern: /(?<![а-яё])до #\d+ —/i },
   { name: 'дата', pattern: /20\d\d-\d\d-\d\d/ },
 ];
 
