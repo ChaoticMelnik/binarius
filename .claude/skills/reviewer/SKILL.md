@@ -74,7 +74,7 @@ Merge the agents' results, collapse duplicates. Discard findings that just resta
 **Process docs consistency** — when the diff touches `.claude/**` or `audits.md`: (a) the skills (`architect`, `implementer`, `reviewer`, `tech-lead`, `github`, `manager`) describe the same status transition, step order and check command the same way; (b) they agree with `.claude/CLAUDE.md`; (c) `.claude/CLAUDE.md` against `~/.claude/CLAUDE.md` — where they differ the project section governs, so a (c) finding does not block the merge but goes into the proposed edit of the global file; (d) every `(= tech-lead → X)` paragraph of `manager/SKILL.md` matches its source in meaning — the night form differs only by the substitutions it names. Done by hand here and by Codex through the prompt's Process-docs block (6-pre).
 
 **Quoted evidence** — every command output the PR or an evidence comment quotes is re-run at the approved head before it is accepted (#68). Quoted test runs are covered by CI at the head (Runtime check). The mutation table (implementer Step 5 → Mutation evidence, #511):
-- Its header line (written by `tooling/mutations.ts`) has `head=` equal to the PR's current `headRefOid` — or, when the PR body carries «range-diff: только конфликты, <ссылка>» after a rebase-only, to the anchor — the `old-head` of the first comment in the unbroken chain of «только конфликты» rebases (tech-lead → «A rebase of a pushed branch»; implementer Step 5 → Mutation evidence).
+- Its header line (written by `tooling/mutations.ts`) has `head=` equal to the PR's current `headRefOid` — or, when the PR body carries «range-diff: только конфликты, <ссылка>» after a rebase-only, to the table's own anchor: a head from which an unbroken chain of «только конфликты» rebase comments — each `old-head` the previous one's `new-head` — leads to `headRefOid` (tech-lead → «A rebase of a pushed branch»; implementer Step 5 → Mutation evidence).
 - Save the list JSON from the comment's `<details>` block to `$SCRATCH/mutations.json`; `shasum -a 256 "$SCRATCH/mutations.json"` equals the header's `list-sha256=`.
 - Re-run, in one call, only the mutations that carry a finding or a doubt: `node tooling/mutations.ts "$SCRATCH/mutations.json" --out "$SCRATCH/mut" --only <ids> > "$SCRATCH/mut.log" 2>&1; echo "exit=$?"; cat "$SCRATCH/mut.log"`, from the review worktree at the PR head (the runner's root is the git toplevel of the current directory). Before the first local run in that worktree — this re-run, or the test files for a finding under Runtime check — run `pnpm install --offline --frozen-lockfile > "$SCRATCH/install.log" 2>&1; echo "exit=$?"` once: a worktree has no `node_modules`, so every row would be `no-report` or `not-run`.
 - A table without the script's header, no list, or mutations run one at a time by hand → a Minor process deviation in the review report.
@@ -111,7 +111,7 @@ Runs when Steps 3-5 found no Blocker/Major, and on round 3 whatever they found �
      - the owner's explicit skip (by day after two other failures): «Codex пропущен: решение владельца ДД.ММ.ГГГГ после <сбой> (job <id>)»;
      - a `/manager` session, no run at all (`.claude/skills/manager/SKILL.md` → Правила ночи → «Codex ночью не запускается»): «Codex не запускался: PR сессии менеджера, решение владельца 2026-10-15».
 
-The run must be at the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`): if commits land after it, run it again. No LGTM, and no round-3 verdict, without a completed run at the current head or the skip line — tech-lead's audit checks the marker's head and base by the job id (`tech-lead` → Mode 1).
+The run must be at the PR's current `headRefOid` (`gh pr view <N> --json headRefOid`) — or at its own anchor, a head from which only «только конфликты» rebase comments lead to the current one (tech-lead → «A rebase of a pushed branch»): new commits after the run, or a «сверх конфликтов» rebase, mean running it again; a «только конфликты» rebase does not. No LGTM, and no round-3 verdict, without a completed run at the current head or its anchor, or the skip line — tech-lead's audit checks the marker's head and base by the job id (`tech-lead` → Mode 1).
 
 ### Step 6a: Blocker/Major found — post comments, return to Todo
 
@@ -130,10 +130,10 @@ The same on round 3, the last one (`.claude/skills/tech-lead/SKILL.md` → Phase
 
 ### Step 6b: PR is clean — notify, merge only after an explicit yes
 
-Before posting LGTM, the Runtime check's CI result (Step 5) must be green at the head being approved; a new push since then means a new `gh pr checks <N> --watch`. Red or missing → a Blocker (name the failing checks, link the run), post it, move back to Todo per Step 6a — even if every manual/agent check passed.
+Before posting LGTM, the Runtime check's CI result (Step 5) must be green at the head being approved; a new push since then means a new `gh pr checks <N> --watch`. Red or missing → a Blocker (name the failing checks, link the run), post it, move back to Todo per Step 6a — even if every manual/agent check passed. The comment names the head it approves — the LGTM's own anchor (tech-lead → «A rebase of a pushed branch»).
 
 ```bash
-gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — ready to merge. <the skip line, when Codex was skipped>"
+gh pr comment <N> --repo ChaoticMelnik/binarius --body "Review passed. LGTM — ready to merge: head <sha>. <the skip line, when Codex was skipped>"
 ```
 
 Spawned, and the permission classifier refuses this comment: do not retry. Return the verdict with «ready-to-merge comment refused by the classifier» and the exact body; the spawner (tech-lead or `/manager`) posts it from its main context.
@@ -196,7 +196,7 @@ Return an issue to Todo (task mode) or flag as Blocker/Major (project mode) if t
 - Never wait for permission to post review comments — post immediately.
 - Never move an issue directly to In Progress — Todo only, the Architect updates the plan first.
 - Never approve a PR with outstanding Blocker or Major findings.
-- Never post LGTM or return a round-3 verdict without a 6-pre run at the current head or its skip line (Step 6-pre).
+- Never post LGTM or return a round-3 verdict without a 6-pre run at the current head — or at its anchor, after «только конфликты» rebases only — or its skip line (Step 6-pre).
 - Never review an iteration's delta instead of the whole PR diff.
 - Never skip reading the Architect's plan before reviewing an issue.
 - Never open GitHub issues during project review — present recommendations only.

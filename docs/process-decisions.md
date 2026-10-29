@@ -63,6 +63,8 @@
 
 ## tech-lead → A rebase of a pushed branch
 
+- 2026-10-29, #782 — у каждого доказательства свой якорь: голова, на которой его сняли (таблица — `head=`, прогоны `mut/` — голова, от которой отрезана ветка, Codex — `head=` маркера, LGTM — голова в комментарии ready-to-merge); якорь покрывает `headRefOid`, пока цепочка комментариев range-diff от него — сплошь «только конфликты»; новые коммиты между ребейзами — не дефект, а новая цепочка. Прецедент: PR #777, ревью 3-го круга, MJ1 — один якорь на все доказательства: после ребейза H0→H1, круга исправлений с таблицей и Codex на H2 и ребейза H2→H3 обход называл H0 и давал ложный Major «разорванная цепочка»; находка m7 1-го круга вернулась, когда потерялось уточнение «до первого ребейза после таблицы».
+- 2026-10-29, #782 — range-diff при ребейзе: новый диапазон — `<new base>..HEAD` (`origin/main` при ребейзе на `main`, новая голова родителя при ребейзе на открытую базу стека), в комментарии — обе головы базы. Прецедент: PR #777, ревью 3-го круга, MJ2 — с `origin/main..HEAD` коммиты открытого родителя попадали в строки `>`, и каждый ребейз на стек читался «сверх конфликтов» (проба: `-: ------- > 1: … a1`).
 - 2026-10-23, #769 — каждый ребейз запушенной ветки — rebase-only задача одного implementer-спавна; вердикт «только конфликты» / «сверх конфликтов» по range-diff, критерий — implementer → «A rebase-only task»: 38 rebase-only agents in one week ran the whole cascade.
 - 2026-10-18, #637 — tech-lead's own 6-pre run after a rebase: the "Known, moved open" field left empty made the run re-raise #643's Minor as a Major.
 - 2026-10-10, #152 — Mergeability right before the merge: #429 merged during the review and the PR turned `CONFLICTING`.
@@ -122,6 +124,7 @@
 
 ## tech-lead → Phase 5
 
+- 2026-10-29, #782 — Phase 5 — раз на триггер, не раз на сессию; продолжение сессии после аудита пишет вторую запись с суффиксом «(продолжение)» при том же `<start>`. Прецедент: PR #777, ревью 3-го круга, m2 — «once per session» и вторая запись под тем же заголовком.
 - 2026-10-23, #769 — аудит один раз за сессию, по первому из трёх триггеров; одна запись `audits.md` и один docs-PR без reviewer'а и Codex; ночь без записи записывает следующая сессия любого вида — before it, a task left three artifacts: a Phase 3 comment, a Phase 5 report comment, and an entry with its own docs PR.
 - 2026-10-23 — two sessions a day: manager sessions at 11:00 and 20:26.
 
