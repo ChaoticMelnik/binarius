@@ -214,38 +214,54 @@ export interface CachedAccessTokenSourceOptions {
   now?: () => number;
 }
 
+interface CacheEntry {
+  token?: { accessToken: string; expiresAt: number };
+  // the fingerprint of the token the account last reported refused; it outlives the storing of
+  // another token
+  refused?: string | undefined;
+}
+
 // The worker's token cache (#868, docs/trade-executor.md): an ok answer is reused for ttlMs, which
 // is held below the backend's ACCESS_SKEW_MS (intents/config.ts), so a cached token still has time
 // left when it goes out. A report of a refused token drops the entry before it asks, and an answer
-// to a request that started before the drop is not stored: it may carry the refused token.
-// Refusals and failures are never stored. An already aborted signal is not served from the entry,
-// so such a caller gets backend_unreachable from inner as it did without the cache.
+// to a request that started before the drop is not stored: it may carry the refused token. Nor is
+// an answer that carries the token the account last reported refused, whenever its request
+// started: the backend may handle a later request before the report, and another backend process
+// does not see the report's flight. Refusals and failures are never stored. An already aborted
+// signal is not served from the entry, so such a caller gets backend_unreachable from inner as it
+// did without the cache.
 export function createCachedAccessTokenSource(
   inner: AccessTokenSource,
   { ttlMs, maxEntries, now = Date.now }: CachedAccessTokenSourceOptions,
 ): AccessTokenSource {
-  const entries = new Map<string, { accessToken: string; expiresAt: number }>();
+  const entries = new Map<string, CacheEntry>();
   // per account while it has requests at inner: a drop moves the generation on
   const inFlight = new Map<string, { requests: number; generation: number }>();
 
-  // an entry is stored at the end, so the first one expires first: dropping it is also dropping
-  // the expired ones before any live one
-  function store(brokerAccountId: string, accessToken: string): void {
+  // an entry is set at the end, so the first one is the oldest: a token in it expires first, and
+  // an entry holding only a fingerprint never expires and goes in insertion order
+  function set(brokerAccountId: string, entry: CacheEntry): void {
     entries.delete(brokerAccountId);
     if (entries.size >= maxEntries) {
       const oldest = entries.keys().next();
       if (oldest.done !== true) entries.delete(oldest.value);
     }
-    entries.set(brokerAccountId, { accessToken, expiresAt: now() + ttlMs });
+    entries.set(brokerAccountId, entry);
+  }
+
+  function store(brokerAccountId: string, accessToken: string): void {
+    const refused = entries.get(brokerAccountId)?.refused;
+    if (refused !== undefined && refused === hashToken(accessToken)) return;
+    set(brokerAccountId, { token: { accessToken, expiresAt: now() + ttlMs }, refused });
   }
 
   return {
     async accessToken(brokerAccountId, options = {}) {
-      const refused = options.refusedToken !== undefined;
-      if (!refused && options.signal?.aborted !== true) {
-        const entry = entries.get(brokerAccountId);
-        if (entry !== undefined && entry.expiresAt > now()) {
-          return { ok: true, accessToken: entry.accessToken };
+      const { refusedToken } = options;
+      if (refusedToken === undefined && options.signal?.aborted !== true) {
+        const token = entries.get(brokerAccountId)?.token;
+        if (token !== undefined && token.expiresAt > now()) {
+          return { ok: true, accessToken: token.accessToken };
         }
       }
       let flight = inFlight.get(brokerAccountId);
@@ -253,8 +269,8 @@ export function createCachedAccessTokenSource(
         flight = { requests: 0, generation: 0 };
         inFlight.set(brokerAccountId, flight);
       }
-      if (refused) {
-        entries.delete(brokerAccountId);
+      if (refusedToken !== undefined) {
+        set(brokerAccountId, { refused: refusedToken });
         flight.generation += 1;
       }
       const generation = flight.generation;
