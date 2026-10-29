@@ -874,9 +874,13 @@ once in `SIGNAL_WAIT_CAPTION_MS` (4 s), the longest waiting first, at most
 users each caption moves once in max(4 s, N / 2 s). A screen drawn without the scanner's lines (the
 analysis reads no list; a door whose read failed) gets them at the first poll. Whatever ends a
 wait — a list, the next step, a refusal, the expiry, the bound, the stop, the user leaving by a
-button or a command — shows the still (`scan-still.png`) in one edit: `leave()` launches it for an
-animation outside the tick, at the edits' pace, no retry, awaited by `stop()`. The card is the
-photo of its direction, as before. The files' `file_id`s live in the process's memory
+button or a command — shows the still (`scan-still.png`) in one edit: `leave()` queues it for an
+animation, and the freezes go one at a time outside the tick, at the edits' shared pace, none in a
+429's pause — a pause is waited out, a 429 of the freeze itself waits its `retry_after` and tries
+again, another refusal is not retried (a file refusal forgets the still's id); `stop()` takes the
+queued ones into its drain and waits for the one in flight. The card is the photo of its
+direction, as before; a photo refused for its file forgets its id and puts the card's text onto the
+still (onto a text, as the text). The files' `file_id`s live in the process's memory
 (`telegram-file-ids.ts`); a media edit or send refused for its file (no 429, 403 or edit refusal)
 forgets the id and draws the same screen without new media: `editMessageCaption` under the
 media, the text path for a handler's send (the entry is then `text` and behaves as before #859).
@@ -893,7 +897,8 @@ The edit by the media the message has and the one it gets:
 (`editMessageTextByIdHtml`, `editMessagePhotoByIdHtml`, `editMessageAnimationByIdHtml`,
 `editMessageCaptionByIdHtml`), only when the whole screen differs — its media, its text and its
 keyboard: the render key, as the session tracker's (#568). Paced one every
-`SIGNAL_WAIT_EDIT_GAP_MS` (200 ms, 5 a second): with the session recovery's 4 and the backend's
+`SIGNAL_WAIT_EDIT_GAP_MS` (200 ms, 5 a second), one slot reserved per call, for the tick and the
+freezes alike: with the session recovery's 4 and the backend's
 20 + 9 a second on the same token the worst coincidence is about 38 a second, above Telegram's
 ~30 ([bot-session.md](bot-session.md)), so a 429 stops the tick's edits and pauses every edit for
 its `retry_after`. More than 5 resolutions in one second stretch over the next ones (accepted
@@ -903,7 +908,7 @@ risk 3).
 |---|---|
 | done, or «message is not modified» | drawn |
 | the message gone, the bot blocked (403) | ends, nothing sent |
-| 429 | unchanged; the tick's edits stop, none before `retry_after` |
+| 429 | unchanged; no edit of the wait — the tick's, a caption, a freeze, the stop's — goes before `retry_after`; a freeze tries again after it |
 | another refusal, a transport failure | retried by the next ticks; the third ends it |
 | anything else | `error`, ends |
 | a screen that throws (an override, Rule 30) | `error`, ends as drawn; the tick goes on with the others |
@@ -918,15 +923,16 @@ While the data socket is down the list is empty (`scanned: 0`): every entry wait
 
 **The stop.** `stop()` arms no more polls, waits for the tick in flight (at most
 `SIGNAL_WAIT_INFLIGHT_MS`, 26 s: an analysis's resolution) and meanwhile turns every remaining
-waiting message into `signalsExpired`: one edit launched every 200 ms inside
-`SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s, 100 messages), none after a 429 — neither of the stop nor
-of the last tick: the edits wait for its `retry_after` inside the window, and a pause past the
-window leaves every message «⏳…» — the launched ones awaited
+waiting message, and every wait left on the animation whose still has not gone yet, into
+`signalsExpired`: one edit launched every 200 ms inside `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s,
+100 messages), none after a 429 — of the stop, of the last tick, nor of a freeze in flight: the
+edits wait for its `retry_after` inside the window, and a pause past the window leaves every
+message «⏳…» — the launched ones awaited
 (each within `TELEGRAM_API_TIMEOUT_MS`). The step is `signal waiter` of `runBot`'s drain
 (`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
-Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), W23–W36 (#859: the
+Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), W6g, W23–W41 (#859: the
 live wait), `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
 W-shown1–6 (#829), `shown-signals.test.ts` SS1–SS7, `timing.test.ts` → the wait's bounds,
 `lifecycle.test.ts`. Stated: how the animation looks in Telegram's light and dark themes (the

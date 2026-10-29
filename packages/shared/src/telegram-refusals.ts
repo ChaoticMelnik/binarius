@@ -34,6 +34,12 @@ export function editRefusal(error: TelegramRefusal): 'shown' | 'gone' | undefine
   return undefined;
 }
 
+// A media edit or send refused for its file (#859): a bad file or a stale file_id, which Telegram
+// does not tell apart; neither a 429, a 403 nor a refusal editRefusal reads. Its file_id is to be
+// forgotten, so the next send uploads the file.
+export const fileRefusal = (error: TelegramRefusal): boolean =>
+  error.error_code !== 429 && error.error_code !== 403 && editRefusal(error) === undefined;
+
 // What a refused deleteMessage means, always as a 400: "message to delete not found" (the server's
 // check_message in telegram-bot-api Client.cpp) is a message already gone; the forbidden delete
 // comes in two spellings — the server's MESSAGE_DELETE_FORBIDDEN → "message can't be deleted" and

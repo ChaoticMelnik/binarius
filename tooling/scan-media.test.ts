@@ -1,7 +1,6 @@
-import { inflateSync } from 'node:zlib';
+import { crc32, inflateSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import {
-  crc32,
   encodePng,
   lzwEncode,
   PNG_SIGNATURE,

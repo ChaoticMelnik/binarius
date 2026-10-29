@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { deflateSync } from 'node:zlib';
+import { crc32, deflateSync } from 'node:zlib';
 
 // The media of the bot's wait for a signal (#859, Rule 58, docs/bot-demo.md → The wait for a
 // signal): a looping radar GIF, which Telegram's sendAnimation turns into a silent looping video,
@@ -210,18 +210,6 @@ export function encodeGif(frames: readonly Uint8Array[], delayCs: number): Buffe
   }
   parts.push(Buffer.from([0x3b]));
   return Buffer.concat(parts);
-}
-
-const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, n) => {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  return c >>> 0;
-});
-
-export function crc32(data: Uint8Array): number {
-  let c = 0xffffffff;
-  for (const byte of data) c = (CRC_TABLE[(c ^ byte) & 0xff] ?? 0) ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
 }
 
 const chunk = (type: string, data: Buffer): Buffer => {
