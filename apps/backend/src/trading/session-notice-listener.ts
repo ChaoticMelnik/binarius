@@ -5,7 +5,7 @@ import { SESSION_NOTICE_LISTEN_RETRY_MS } from '../timing';
 
 // docs/bot-session.md → Rate and timing → The wake (#723). One client of the backend's pool LISTENs
 // on the session notice channel for as long as the process runs and hands every notification to
-// onNotification (the sender's wake()). A refused connect or LISTEN and a lost connection are
+// onNotification (the sender's wake(sessionId), #870). A refused connect or LISTEN and a lost connection are
 // logged and tried again after retryMs; a notification sent meanwhile is lost, and the sender's
 // tick serves it. The client always leaves with release(true): a client still LISTENing must not
 // go back to the pool.

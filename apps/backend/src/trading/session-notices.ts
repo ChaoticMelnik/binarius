@@ -11,9 +11,11 @@ import {
   TRACKED_SESSIONS_MAX,
   TradingSessionStatus,
   TradingSessionStopReason,
+  UUID_PATTERN,
   type BotKeyboard,
   type TelegramHtml,
   type TradingSessionSettings,
+  type TradingSessionView,
   telegramErrorFields,
 } from '@binarius/shared';
 import {
@@ -23,6 +25,7 @@ import {
   claimSessionWaiting,
   claimSummaryFallback,
   clearSessionWaitingMessage,
+  readTradingSessionView,
   listPendingSessionNotices,
   listSessionWaitingCaptions,
   listSummaryFallback,
@@ -64,7 +67,7 @@ import {
   type SessionCycleNotice,
 } from './session-notice-messages';
 import type { ScanMedia } from './scan-media';
-import { readFinishedSessionView } from './session-view';
+import { finishedViewNeedsBalance, refreshFinishedBalance } from './session-view';
 
 // docs/bot-session.md → Trade messages (#464). One loop in the backend process sends every
 // settled trade of every session to the session's owner, without sound and in the trades' order,
@@ -95,11 +98,15 @@ import { readFinishedSessionView } from './session-view';
 // the other, and a delete neither waits for the gap nor marks the chat. A turn that threw holds its
 // session out of both lists for a while (#660), so a row that throws every tick cannot hold the
 // head of the list; both maps are in memory, and a restart tries at once.
-// A trade opened or settled wakes the sender (#723): transitionIntent notifies on the commit, the
-// listener (session-notice-listener.ts) calls wake(), and the woken tick is the same tick as the
-// interval's - the interval stays as the safety net for a lost notification. Woken ticks start at
-// least wakeGapMs apart, so a storm of notifications costs at most a few ticks a second; a step
-// skipped because its chat was cooling wakes the sender again at the end of that chat's gap.
+// A trade opened or settled wakes the sender (#723): transitionIntent notifies on the commit with
+// the session's id, the listener (session-notice-listener.ts) calls wake(sessionId), and the woken
+// tick reads both lists for the woken sessions only (#870); the interval's tick reads them whole
+// and stays as the safety net for a lost notification and for every change no notification names.
+// A payload that is not a session id, or more than `scan` sessions woken between two ticks, makes
+// the woken tick a whole one. Woken ticks start at least wakeGapMs apart, so a storm of
+// notifications costs at most a few ticks a second; a step skipped because its chat was cooling
+// wakes its session again at the end of that chat's gap. The fallback summary's balance refresh
+// is not waited for (#870): it starts once per session and the summary goes on a later tick.
 // The waiting message is the scanner's animation (#860, Rule 59), its caption the session pair's
 // scan from the H1 scanner's memory; a pass of its own, captions(), edits the caption to newer
 // figures every captionMs, serial with the ticks (one `ticking`) and inside the same pace and
@@ -168,15 +175,18 @@ export interface SessionNoticeSenderDeps {
 }
 
 export interface SessionNoticeSender {
+  // the interval's tick: both lists whole
   tick(): Promise<void>;
   // a tick now, or right after the one in flight, no sooner than wakeGapMs after the last tick's
-  // start; calls before that tick merge into it, and after stop() it does nothing (#723)
-  wake(): void;
+  // start, for the sessions woken (#870); calls before that tick merge into it, and after stop()
+  // it does nothing (#723)
+  wake(sessionId?: string): void;
   // The waiting messages' caption pass (#860): nothing while a tick or a pass runs, or after stop()
   captions(): Promise<void>;
   start(): void;
-  // Ends the loop and waits for the tick or the caption pass in flight: no claim and no fallback summary's balance read
-  // starts after it; the call in flight completes or times out (timing.ts).
+  // Ends the loop and waits for the tick or the caption pass in flight: no claim starts after it;
+  // the call in flight completes or times out (timing.ts). A fallback summary's balance refresh
+  // in flight is the reconciler's, which its own stop() aborts (#870).
   stop(): Promise<void>;
 }
 
@@ -266,6 +276,18 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   let coolingAt = Infinity;
   let lastCoolingFiredAt = -Infinity;
   let coolingUntil: number | undefined;
+  // the woken tick's scope (#870): the sessions woken since the last tick, or all of them (a
+  // payload that is no session id, more than `scan` ids), and the sessions skipped for a cooling
+  // chat, which its timer wakes; hints only, the lists' predicates decide
+  const wokenSessions = new Set<string>();
+  let wokenAll = false;
+  const coolingSessions = new Set<string>();
+  // the interval's tick came during a woken tick: a whole tick runs right after it
+  let scoped = false;
+  let wholeDue = false;
+  // the fallback summary's balance refresh by session (#870): started once, read on a later tick;
+  // at most config.scan entries, the oldest dropped
+  const balanceRefreshes = new Map<string, { done: boolean }>();
   // the caption pass (#860): it runs, an interval's tick waits for its end, the next pass starts
   // after the last session this pass skipped or called, its timer, and the caption each live
   // waiting message shows, at most config.captionMemo of them
@@ -284,10 +306,12 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   };
 
   const chatOf = (telegramUserId: bigint) => String(telegramUserId);
-  const cooling = (telegramUserId: bigint) => {
-    const until = chatNextAt.get(chatOf(telegramUserId)) ?? -Infinity;
+  const cooling = (session: Pick<PendingSessionNotice, 'sessionId' | 'telegramUserId'>) => {
+    const until = chatNextAt.get(chatOf(session.telegramUserId)) ?? -Infinity;
     if (now() >= until) return false;
     coolingUntil = Math.min(coolingUntil ?? Infinity, until);
+    // one past `scan` is enough: the timer's wakes then make a whole tick
+    if (coolingSessions.size <= config.scan) coolingSessions.add(session.sessionId);
     return true;
   };
   // after every send or edit to the chat, delivered or not
@@ -325,7 +349,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
     if (!session.telegramBlocked) {
-      if (cooling(session.telegramUserId)) return 'skip';
+      if (cooling(session)) return 'skip';
       await pace();
     }
     // after the pace, so a stop during its sleep claims nothing more
@@ -367,7 +391,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, intentId };
     if (!session.telegramBlocked) {
-      if (cooling(session.telegramUserId)) return 'skip';
+      if (cooling(session)) return 'skip';
       await pace();
     }
     if (stopped) return 'skip';
@@ -661,7 +685,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // over, #587).
   async function sendWaiting(session: PendingSessionNotice): Promise<Step> {
     const fields = { sessionId: session.sessionId };
-    if (cooling(session.telegramUserId)) return 'skip';
+    if (cooling(session)) return 'skip';
     await pace();
     if (stopped) return 'skip';
     const claim = await claimSessionWaiting(db, { sessionId: session.sessionId });
@@ -902,21 +926,61 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   // not track (no status message) or did not claim within the grace. The same claim the bot's
   // takes, so one of the two sends; a send Telegram certainly did not deliver takes back only this
   // claim's mark. A summary that cannot be built closes the step, so the row leaves the list.
+  // A view that needs the balance after the last trade (session-view.ts) starts its refresh and
+  // skips the session (#870): the summary goes on a later tick, with the snapshot the refresh
+  // wrote or the stored one and its age; the refresh never holds the tick.
   async function serveFallback(session: SummaryFallbackSession): Promise<Step> {
-    // its view reads the balance (up to TRADING_ACCESS_REFRESH_BUDGET_MS), which would add to the
-    // step in flight (timing.ts)
     if (stopped) return 'skip';
     const { sessionId } = session;
-    const fields = { sessionId };
     // nothing can be delivered (Rule 19): the claim alone - no view read, no balance GET
     if (session.telegramBlocked) {
       await claimSummaryFallback(db, { sessionId });
+      balanceRefreshes.delete(sessionId);
       return 'next';
     }
-    if (cooling(session.telegramUserId)) return 'skip';
+    if (cooling(session)) return 'skip';
     const telegramUserId = String(session.telegramUserId);
-    const view = await readFinishedSessionView({ db, balance }, sessionId, telegramUserId);
+    const view = await readTradingSessionView(db, sessionId, telegramUserId);
     if (view === undefined) return 'skip';
+    if (finishedViewNeedsBalance(view)) {
+      const refresh = balanceRefreshes.get(sessionId);
+      if (refresh === undefined) {
+        startRefresh(sessionId, telegramUserId);
+        return 'skip';
+      }
+      if (!refresh.done) return 'skip';
+    }
+    const step = await sendFallback(session, view);
+    if (step === 'next' || step === 'lost') balanceRefreshes.delete(sessionId);
+    return step === 'lost' ? 'skip' : step;
+  }
+
+  function startRefresh(sessionId: string, telegramUserId: string) {
+    const refresh = { done: false };
+    balanceRefreshes.set(sessionId, refresh);
+    const oldest = balanceRefreshes.keys().next();
+    if (balanceRefreshes.size > config.scan && oldest.done !== true) {
+      balanceRefreshes.delete(oldest.value);
+    }
+    void refreshFinishedBalance({ db, balance }, sessionId, telegramUserId)
+      .catch((error: unknown) => {
+        logger.warn(
+          { sessionId, ...errorLogFields(error) },
+          'session summary balance refresh failed',
+        );
+      })
+      .finally(() => {
+        refresh.done = true;
+      });
+  }
+
+  // the fallback's text, pace, claim and send; 'lost' when the claim lost
+  async function sendFallback(
+    session: SummaryFallbackSession,
+    view: TradingSessionView,
+  ): Promise<Step | 'lost'> {
+    const { sessionId } = session;
+    const fields = { sessionId };
     let message: ClientPushMessage;
     try {
       const assetId = view.settings?.assetId ?? view.lastIntent?.assetId ?? 0;
@@ -934,7 +998,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     if (stopped) return 'skip';
     const claim = await claimSummaryFallback(db, { sessionId });
     // the bot claimed first, or the row is no longer claimable
-    if (claim === undefined) return 'skip';
+    if (claim === undefined) return 'lost';
     const key = `${sessionId}:summary`;
     try {
       await push.sendSessionSummary(session.telegramUserId, message);
@@ -982,27 +1046,37 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     return session.waitingDue && waitingMayGo(session) ? sendWaiting(session) : 'next';
   }
 
-  async function runTick(): Promise<void> {
+  async function runTick(wokenTick: boolean): Promise<void> {
     // before the first await and before the pause: a wake() after this line is the next tick's
     lastTickAt = now();
     const woken = wakes;
     wakes = 0;
+    const only = wokenTick && !wokenAll ? [...wokenSessions] : undefined;
+    wokenSessions.clear();
+    wokenAll = false;
+    scoped = only !== undefined;
     coolingUntil = undefined;
+    const sessions = only?.length ?? 'all';
     if (now() < pausedUntil) {
-      logger.debug({ woken, paused: true }, 'session notice tick');
+      logger.debug({ woken, sessions, paused: true }, 'session notice tick');
+      return;
+    }
+    // the interval's tick took the woken sessions first
+    if (only?.length === 0) {
+      logger.debug({ woken, sessions }, 'session notice tick');
       return;
     }
     prune(chatNextAt);
     prune(heldUntil);
     const exclude = [...heldUntil.keys()];
-    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude });
+    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude, only });
     for (const session of pending) {
       if (stopped) return;
       let step: Step;
       try {
         step = await serve(session);
       } catch (error) {
-        // a statement or a refresh that threw: what was claimed stays claimed, the rest waits, and
+        // a statement that threw: what was claimed stays claimed, the rest waits, and
         // the session is held out of the lists for a while (#660)
         heldUntil.set(session.sessionId, now() + config.holdMs);
         logger.error(
@@ -1019,6 +1093,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       limit: config.scan,
       graceMs: config.summaryFallbackMs,
       exclude,
+      only,
     });
     for (const session of fallback) {
       if (stopped) return;
@@ -1036,7 +1111,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       if (step === 'pause') return;
     }
     logger.debug(
-      { pending: pending.length, fallback: fallback.length, woken },
+      { pending: pending.length, fallback: fallback.length, woken, sessions },
       'session notice tick',
     );
   }
@@ -1047,7 +1122,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     if (at <= now()) {
       clearTimeout(wakeTimer);
       wakeTimer = undefined;
-      void tick();
+      void startTick(true);
       return;
     }
     if (wakeTimer !== undefined && wakeAt <= at) return;
@@ -1056,7 +1131,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     wakeTimer = setTimeout(
       () => {
         wakeTimer = undefined;
-        void tick();
+        void startTick(true);
       },
       Math.max(0, Math.ceil(at - now())),
     );
@@ -1073,32 +1148,66 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       () => {
         coolingTimer = undefined;
         lastCoolingFiredAt = now();
-        wake();
+        if (stopped || coolingSessions.size === 0) return;
+        for (const sessionId of coolingSessions) note(sessionId);
+        coolingSessions.clear();
+        if (ticking === undefined) armWake(lastTickAt + config.wakeGapMs);
       },
       Math.max(0, Math.ceil(at - now())),
     );
   }
 
-  function wake() {
-    if (stopped) return;
+  // a payload is a boundary (Rule 17): only a session id narrows the woken tick
+  function note(sessionId: string | undefined) {
     wakes += 1;
+    if (sessionId !== undefined && UUID_PATTERN.test(sessionId)) {
+      wokenSessions.add(sessionId);
+      if (wokenSessions.size > config.scan) {
+        wokenAll = true;
+        wokenSessions.clear();
+      }
+    } else {
+      wokenAll = true;
+    }
+  }
+
+  function wake(sessionId?: string) {
+    if (stopped) return;
+    note(sessionId);
     if (ticking === undefined) armWake(lastTickAt + config.wakeGapMs);
   }
 
-  // a tick longer than its interval makes the next one a no-op; one that comes during a caption
-  // pass runs right after it without ending it (#860)
+  // the interval's tick: a whole tick longer than its interval makes the next one a no-op; one
+  // that comes during a woken tick runs whole right after it, and one that comes during a caption
+  // pass right after the pass without ending it (#860)
   function tick(): Promise<void> {
     if (stopped) return Promise.resolve();
     if (passing) {
       tickDue = true;
       return ticking ?? Promise.resolve();
     }
-    ticking ??= runTick()
+    if (ticking !== undefined && scoped) {
+      wholeDue = true;
+      const current = ticking;
+      return current.then(async () => {
+        await ticking;
+      });
+    }
+    return startTick(false);
+  }
+
+  function startTick(wokenTick: boolean): Promise<void> {
+    if (stopped) return Promise.resolve();
+    ticking ??= runTick(wokenTick)
       .catch((error: unknown) => logger.error(errorLogFields(error), 'session notice tick failed'))
       .finally(() => {
         ticking = undefined;
+        scoped = false;
         if (coolingUntil !== undefined) armCooling(coolingUntil);
-        if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
+        if (wholeDue) {
+          wholeDue = false;
+          void tick();
+        } else if (wakes > 0) armWake(lastTickAt + config.wakeGapMs);
       });
     return ticking;
   }

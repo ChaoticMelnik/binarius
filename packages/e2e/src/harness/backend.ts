@@ -282,7 +282,7 @@ export async function startE2eBackend(deps: {
     pool,
     channel: SESSION_NOTICE_CHANNEL,
     onNotification: (sessionId) => {
-      sessionNotices.wake();
+      sessionNotices.wake(sessionId);
       h1Driver.notice(sessionId);
     },
     logger: app.log,

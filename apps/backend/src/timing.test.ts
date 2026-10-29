@@ -588,16 +588,13 @@ describe('broker balance timing', () => {
     expect(TOKEN_NUDGE_AFTER_MS).toBe(0);
     expect(MAILING_MIN_OFFSET_MS).toBeGreaterThan(0);
     expect(MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBe(65_000);
-    // #464: the session notices share the bot's rate with the mailings; stop() waits for the gap,
-    // a summary's balance refresh and its send
+    // #464: the session notices share the bot's rate with the mailings
     expect(MAILING_SEND_PER_SECOND + SESSION_NOTICE_SEND_PER_SECOND).toBeLessThan(
       TELEGRAM_BOT_SENDS_PER_SECOND,
     );
-    expect(
-      1000 / SESSION_NOTICE_SEND_PER_SECOND +
-        TRADING_ACCESS_REFRESH_BUDGET_MS +
-        CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS,
-    ).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    // #870: stop() no longer waits for a summary's balance refresh, which is over before the tick
+    // after next
+    expect(TRADING_ACCESS_REFRESH_BUDGET_MS).toBeLessThanOrEqual(SESSION_NOTICE_TICK_MS);
   });
 
   it('switches after a deposit within its tick, skips a thrown candidate for whole ticks, and is no slower than the sender (#686)', () => {

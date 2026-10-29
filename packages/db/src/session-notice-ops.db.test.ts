@@ -28,6 +28,7 @@ import {
   clearSessionWaitingMessage,
   listPendingSessionNotices,
   listSessionWaitingCaptions,
+  pendingSessionNoticesQuery,
   readSessionWaitingMessage,
   recordSessionWaitingMessage,
   claimSummaryFallback,
@@ -55,7 +56,11 @@ import {
   transitionIntent,
   type TradeIntentRow,
 } from './trade-intent-ops';
-import { createSessionIntent, stopTradingSession } from './trading-session-ops';
+import {
+  createSessionIntent,
+  recordSessionStatusMessage,
+  stopTradingSession,
+} from './trading-session-ops';
 
 // The session notices' cursor and marks (#464, docs/bot-session.md → Trade messages), on a
 // temporary migrated database. Every case reads its own sessions only: the list scans them all.
@@ -715,6 +720,20 @@ describe('the fallback summary (#537)', () => {
     expect(excluded).toContain(other.session.id);
   });
 
+  it('N51 `only` lists the named sessions alone, nothing for none, and `exclude` wins over it (#870)', async () => {
+    const named = await closedWithTrade();
+    const other = await closedWithTrade();
+    const ids = async (only: readonly string[], exclude: readonly string[] = []) =>
+      (await listSummaryFallback(tmp.db, { limit: 10_000, graceMs: GRACE_MS, exclude, only })).map(
+        (row) => row.sessionId,
+      );
+    expect(await ids([named.session.id])).toEqual([named.session.id]);
+    expect(await ids([])).toEqual([]);
+    expect(await ids([named.session.id, other.session.id], [named.session.id])).toEqual([
+      other.session.id,
+    ]);
+  });
+
   it('N20 flags a user who blocked the bot', async () => {
     const target = await closedWithTrade();
     await tmp.db
@@ -850,6 +869,22 @@ describe('listPendingSessionNotices', () => {
     const excluded = await ids([held.session.id]);
     expect(excluded).not.toContain(held.session.id);
     expect(excluded).toContain(other.session.id);
+  });
+
+  it('N50 `only` lists the named sessions alone, nothing for none, and `exclude` wins over it (#870)', async () => {
+    const named = await seedSession();
+    await settled(named, '4.6');
+    const other = await seedSession();
+    await settled(other, '-5');
+    const list = (only: readonly string[], exclude: readonly string[] = []) =>
+      listPendingSessionNotices(tmp.db, { limit: 10_000, exclude, only });
+    expect(await list([named.session.id])).toEqual([await pendingOf(named.session)]);
+    expect(await list([])).toEqual([]);
+    expect(
+      (await list([named.session.id, other.session.id], [named.session.id])).map(
+        (row) => row.sessionId,
+      ),
+    ).toEqual([other.session.id]);
   });
 
   it('N7 lists the oldest first and stops at its limit', async () => {
@@ -1341,6 +1376,68 @@ describe('the waiting message (#536)', () => {
     });
   });
 
+  // #870: the list reads the latest decision by its lateral join, the claim and the captions' list
+  // by the scalar subquery - one answer in every state
+  it.each([
+    ['no decision', [], false, true],
+    ['the start row only', ['start'], false, true],
+    ['no signal', [SignalDecisionOutcome.NoSignal], true, true],
+    [
+      'no signal, then an intent',
+      [SignalDecisionOutcome.NoSignal, SignalDecisionOutcome.Intent],
+      false,
+      true,
+    ],
+    ['no signal, then the stop', [SignalDecisionOutcome.NoSignal, 'stop'], true, false],
+  ] as const)(
+    'N53 the list, the claim and the captions agree after %s',
+    async (_, steps, waits, active) => {
+      const apply = async (target: Awaited<ReturnType<typeof seedSession>>) => {
+        for (const step of steps) {
+          if (step === 'stop') await stop(target.session, TradingSessionStopReason.UserStopped);
+          else if (step === 'start') {
+            await recordSignalDecision(
+              tmp.db,
+              decisionFixture(
+                { sessionId: target.session.id, brokerAccountId: target.seed.brokerAccountId },
+                {
+                  context: SignalDecisionContext.SessionStart,
+                  outcome: SignalDecisionOutcome.Started,
+                  step: null,
+                },
+              ),
+            );
+          } else await decide(target, step);
+        }
+      };
+      const target = await seedSession();
+      await statusMessage(target.session, 7);
+      await apply(target);
+      const row = await pendingOf(target.session);
+      expect(row?.waitingForSignal ?? false).toBe(waits);
+      expect(row?.waitingDue ?? false).toBe(waits && active);
+      if (!active) expect(row).toMatchObject({ waitingForSignal: waits, waitingDue: false });
+      expect(await waitingClaim(target.session)).toEqual(waits && active ? { slot: 7 } : undefined);
+
+      // a live waiting message on its slot: the captions' list and the list's stale flag
+      const live = await seedSession();
+      await statusMessage(live.session, 7);
+      await tmp.db
+        .update(tradingSessions)
+        .set({ waitingMessageId: 50, waitingAfterMessage: 7 })
+        .where(eq(tradingSessions.id, live.session.id));
+      await apply(live);
+      const captions = await listSessionWaitingCaptions(tmp.db, {
+        after: undefined,
+        limit: 10_000,
+      });
+      expect(captions.some((caption) => caption.sessionId === live.session.id)).toBe(
+        waits && active,
+      );
+      expect((await pendingOf(live.session))?.waitingStale ?? false).toBe(!(waits && active));
+    },
+  );
+
   it('N20 a status message recorded after the cycle message (a relaunch) moves the slot (#587)', async () => {
     const target = await seedSession();
     await statusMessage(target.session, 7);
@@ -1423,6 +1520,59 @@ describe('the waiting message (#536)', () => {
     expect(await waitingClaim(recorded.session)).toEqual({ slot: 41 });
     expect(await waitingClaim(claimedOnly.session)).toEqual({ slot: 0 });
     expect(await waitingClaim(ended.session)).toBeUndefined();
+  });
+});
+
+// #870: the list's latest decision is one lateral join a row, not a subquery per fragment. The
+// plan is read by EXPLAIN ANALYZE over SCAN active sessions that wait for a signal under their
+// status message, every one of them listed.
+describe('the list reads the latest decision once a row (#870)', () => {
+  // = SESSION_NOTICE_SCAN of the backend (apps/backend/src/timing.ts)
+  const SCAN = 200;
+  interface PlanNode {
+    'Relation Name'?: string;
+    'Actual Loops'?: number;
+    Plans?: PlanNode[];
+  }
+  const nodesOf = (node: PlanNode): PlanNode[] => [
+    node,
+    ...(node.Plans ?? []).flatMap((child) => nodesOf(child)),
+  ];
+
+  it('N52 one read of signal_decisions in the SQL and in the plan, looped over every candidate', async () => {
+    for (let batch = 0; batch < SCAN / 20; batch += 1) {
+      await Promise.all(
+        Array.from({ length: 20 }, async (_, i) => {
+          const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
+          const session = await seedTradingSession(tmp.db, seed.brokerAccountId);
+          await recordSessionStatusMessage(tmp.db, {
+            id: session.id,
+            telegramUserId: seed.telegramUserId,
+            messageId: 100 + batch * 20 + i,
+          });
+          await recordSignalDecision(
+            tmp.db,
+            noSignalDecisionFixture(
+              { sessionId: session.id, brokerAccountId: seed.brokerAccountId },
+              { step: 1 },
+            ),
+          );
+        }),
+      );
+    }
+    const query = pendingSessionNoticesQuery(tmp.db, { limit: SCAN, exclude: [] });
+    const text = query.toSQL().sql;
+    expect(text.match(/from "signal_decisions"/g)).toHaveLength(1);
+    expect(text.match(/left join lateral/g)).toHaveLength(1);
+    const result = await tmp.db.execute(sql`explain (analyze, format json) ${query.getSQL()}`);
+    const [explained] = (result.rows[0] as { 'QUERY PLAN': { Plan: PlanNode }[] })['QUERY PLAN'];
+    const reads = nodesOf(explained!.Plan).filter(
+      (node) => node['Relation Name'] === 'signal_decisions',
+    );
+    expect(reads).toHaveLength(1);
+    expect(reads[0]!['Actual Loops']).toBeGreaterThanOrEqual(SCAN);
+    const rows = await query;
+    expect(rows).toHaveLength(SCAN);
   });
 });
 

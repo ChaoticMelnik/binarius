@@ -1,4 +1,16 @@
-import { and, asc, eq, gt, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  notInArray,
+  sql,
+  type SQL,
+} from 'drizzle-orm';
 import {
   SessionTradeResult,
   SignalDecisionContext,
@@ -115,30 +127,40 @@ const sessionSlotSql = sql<number>`greatest(coalesce(${tradingSessions.cycleMess
 // row, written in the intent's transaction, ends the wait; so does every other outcome (refused,
 // replayed, stake_stop). An H1 session's driver writes one no_signal row per waiting period (#775).
 // The start's row is `session_start` and does not count. No row at all is false, not NULL:
-// coalesce, so `not` of it in the stale fragment is true.
-const waitingForSignalSql = sql<boolean>`coalesce((
+// coalesce, so `not` of it in the stale fragment is true. One body for both forms (#870): the
+// list joins it once a row (left join lateral, pendingSessionNoticesQuery), the claim and the
+// captions' list - one subquery a row anyway - take it as the scalar below.
+const latestSessionDecisionWhereSql = sql`${signalDecisions.tradingSessionId} = ${tradingSessions.id} and ${signalDecisions.context} = ${literal(SignalDecisionContext.Session)}`;
+const latestSessionDecisionOrder = [desc(signalDecisions.recordedAt), desc(signalDecisions.id)];
+
+const waitingOf = (outcome: SQL) =>
+  sql<boolean>`coalesce(${outcome} = ${literal(SignalDecisionOutcome.NoSignal)}, false)`;
+
+const waitingForSignalSql = waitingOf(sql`(
   select ${signalDecisions.outcome} from ${signalDecisions}
-   where ${signalDecisions.tradingSessionId} = ${tradingSessions.id}
-     and ${signalDecisions.context} = ${literal(SignalDecisionContext.Session)}
-   order by ${signalDecisions.recordedAt} desc, ${signalDecisions.id} desc
+   where ${latestSessionDecisionWhereSql}
+   order by ${sql.join(latestSessionDecisionOrder, sql`, `)}
    limit 1
-) = ${literal(SignalDecisionOutcome.NoSignal)}, false)`;
+)`);
 
 // The fragment both the list and the claim take: an active session that waits for a signal, with
 // no live waiting message, whose slot was not claimed yet, under a message of the session - the
 // bot's recorded status message (#567), a claimed trade, whose message goes only after the
 // session's, recorded or not, or the cycle message of an open trade's block (#722) - so the
 // waiting message never stands above the session's message.
-const waitingClaimableSql = sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0 or ${tradingSessions.cycleMessageId} is not null) and ${waitingForSignalSql})`;
+const waitingClaimableSql = (waiting: SQL) =>
+  sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0 or ${tradingSessions.cycleMessageId} is not null) and ${waiting})`;
 
 // due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
-const waitingDueSql = sql<boolean>`(${waitingClaimableSql} and ${users.telegramBlockedAt} is null)`;
+const waitingDueSql = (waiting: SQL) =>
+  sql<boolean>`(${waitingClaimableSql(waiting)} and ${users.telegramBlockedAt} is null)`;
 
 // stale: the live waiting message is to be deleted - the session stopped, or a newer message of
 // the session went out under it, or the session no longer waits for a signal (#722), and the user
 // can be reached: a blocked user's active session keeps its waiting message's id until the user is
 // reachable again (#587), so it is not listed each tick
-const waitingStaleSql = sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or ((${tradingSessions.waitingAfterMessage} <> ${sessionSlotSql} or not ${waitingForSignalSql}) and ${users.telegramBlockedAt} is null)))`;
+const waitingStaleSql = (waiting: SQL) =>
+  sql<boolean>`(${tradingSessions.waitingMessageId} is not null and (${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)} or ((${tradingSessions.waitingAfterMessage} <> ${sessionSlotSql} or not ${waiting}) and ${users.telegramBlockedAt} is null)))`;
 
 export interface PendingSessionNotice {
   sessionId: string;
@@ -174,12 +196,25 @@ export interface PendingSessionNotice {
 // cursor, an open trade's block to claim (#700), a finished session, or a waiting message to send
 // or to delete. Oldest first, on
 // trading_sessions_notice_pending_idx. `exclude`: the sessions the sender holds back after a turn
-// that threw (#660), ids from its own lists.
-export async function listPendingSessionNotices(
+// that threw (#660), ids from its own lists. `only`: the woken tick's sessions (#870), at most the
+// sender's scan; `exclude` wins over it. The query is exported unawaited for its EXPLAIN test.
+export function pendingSessionNoticesQuery(
   db: Db,
-  { limit, exclude }: { limit: number; exclude: readonly string[] },
-): Promise<PendingSessionNotice[]> {
-  const rows = await db
+  {
+    limit,
+    exclude,
+    only,
+  }: { limit: number; exclude: readonly string[]; only?: readonly string[] | undefined },
+) {
+  const latest = db
+    .select({ outcome: signalDecisions.outcome })
+    .from(signalDecisions)
+    .where(latestSessionDecisionWhereSql)
+    .orderBy(...latestSessionDecisionOrder)
+    .limit(1)
+    .as('latest');
+  const waiting = waitingOf(sql`${latest.outcome}`);
+  return db
     .select({
       sessionId: tradingSessions.id,
       mode: tradingSessions.mode,
@@ -195,23 +230,31 @@ export async function listPendingSessionNotices(
       status: tradingSessions.status,
       stopReason: tradingSessions.stopReason,
       waitingMessageId: tradingSessions.waitingMessageId,
-      waitingDue: waitingDueSql,
-      waitingStale: waitingStaleSql,
-      waitingForSignal: waitingForSignalSql,
+      waitingDue: waitingDueSql(waiting),
+      waitingStale: waitingStaleSql(waiting),
+      waitingForSignal: waiting,
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
     .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .leftJoinLateral(latest, sql`true`)
     .where(
       and(
         isNull(tradingSessions.finalNoticeSentAt),
+        only === undefined ? undefined : inArray(tradingSessions.id, [...only]),
         exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
-        sql`(${sessionNoticeDueSql} or ${waitingDueSql} or ${waitingStaleSql})`,
+        sql`(${sessionNoticeDueSql} or ${waitingDueSql(waiting)} or ${waitingStaleSql(waiting)})`,
       ),
     )
     .orderBy(asc(tradingSessions.createdAt), asc(tradingSessions.id))
     .limit(limit);
-  return rows;
+}
+
+export async function listPendingSessionNotices(
+  db: Db,
+  options: { limit: number; exclude: readonly string[]; only?: readonly string[] | undefined },
+): Promise<PendingSessionNotice[]> {
+  return pendingSessionNoticesQuery(db, options);
 }
 
 export interface SessionWaitingCaption {
@@ -562,10 +605,20 @@ export interface SummaryFallbackSession {
 // status message the bot could track (status_message_id NULL: at once) or with the mark older
 // than `graceMs` by the database's clock, the bot not having claimed it. Oldest mark first, on
 // trading_sessions_summary_fallback_idx. Not scoped by a user: the sender's internal list.
-// `exclude` as listPendingSessionNotices's (#660).
+// `exclude` and `only` as listPendingSessionNotices's (#660, #870).
 export async function listSummaryFallback(
   db: Db,
-  { limit, graceMs, exclude }: { limit: number; graceMs: number; exclude: readonly string[] },
+  {
+    limit,
+    graceMs,
+    exclude,
+    only,
+  }: {
+    limit: number;
+    graceMs: number;
+    exclude: readonly string[];
+    only?: readonly string[] | undefined;
+  },
 ): Promise<SummaryFallbackSession[]> {
   return db
     .select({
@@ -580,6 +633,7 @@ export async function listSummaryFallback(
     .where(
       and(
         summaryFallbackClaimableSql,
+        only === undefined ? undefined : inArray(tradingSessions.id, [...only]),
         exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
         sql`(${tradingSessions.statusMessageId} is null or ${tradingSessions.finalNoticeSentAt} < now() - make_interval(secs => ${graceMs / 1000}))`,
       ),
@@ -639,7 +693,7 @@ export async function claimSessionWaiting(
     .where(
       and(
         eq(tradingSessions.id, sessionId),
-        waitingClaimableSql,
+        waitingClaimableSql(waitingForSignalSql),
         isNull(tradingSessions.finalNoticeSentAt),
       ),
     )

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { eq, isNull, sql } from 'drizzle-orm';
 import { HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
@@ -393,6 +394,16 @@ const rowOf = async (target: Target) =>
   (
     await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, target.session.id))
   )[0]!;
+// The fallback summary's balance refresh is not waited for (#870): a tick starts it and skips the
+// session, a later tick sends the summary. `ticks` until the summary step of `target` is closed.
+async function untilSummary(target: Target, ticks: () => Promise<unknown>) {
+  await ticks();
+  await until('the fallback summary', async () => {
+    if ((await rowOf(target)).summarySentAt !== null) return true;
+    await ticks();
+    return false;
+  });
+}
 const telegramError = (error_code: number, retry_after?: number): ApiError => ({
   ok: false,
   error_code,
@@ -497,7 +508,7 @@ describe('the session notices (#464)', () => {
     for (const profit of ['0', '4.6', '-5']) await settled(target, profit);
     await stop(target);
     const second = sender();
-    await second.notices.tick();
+    await untilSummary(target, () => second.notices.tick());
     const cycles = [
       ...textsTo(first.captured.calls, target),
       ...textsTo(second.captured.calls, target),
@@ -511,7 +522,9 @@ describe('the session notices (#464)', () => {
     await stop(target);
     const a = sender();
     const b = sender();
-    await Promise.all([a.notices.tick(), b.notices.tick(), a.notices.tick(), b.notices.tick()]);
+    await untilSummary(target, () =>
+      Promise.all([a.notices.tick(), b.notices.tick(), a.notices.tick(), b.notices.tick()]),
+    );
     const texts = [...textsTo(a.captured.calls, target), ...textsTo(b.captured.calls, target)];
     expect(texts).toHaveLength(4);
     expect(new Set(texts).size).toBe(4);
@@ -600,7 +613,7 @@ describe('the session notices (#464)', () => {
         }),
       }),
     );
-    await notices.tick();
+    await untilSummary(target, () => notices.tick());
     const texts = textsTo(captured.calls, target);
     expect(texts).toHaveLength(3);
     expect(texts[1]).toContain('⚡ Цикл 2 Шаг 1\n<pre>🔴');
@@ -638,12 +651,18 @@ describe('the session notices (#464)', () => {
     await stop(target);
     const { notices, captured, refreshCalls } = sender();
     await notices.tick();
+    await until('the refresh', () => refreshCalls.length > 0);
     expect(refreshCalls).toHaveLength(1);
     expect(refreshCalls[0]![0]).toBe(target.seed.brokerAccountId);
     expect(refreshCalls[0]![1]).toMatchObject({ mayRefresh: false });
     expect(refreshCalls[0]![1]).not.toHaveProperty('requested');
-    // the refresh did not answer 'ok': the stored balance with its age
+    // the tick did not wait for it (#870): the trade, no summary yet
+    expect(textsTo(captured.calls, target)).toHaveLength(1);
+    expect((await rowOf(target)).summarySentAt).toBeNull();
+    await untilSummary(target, () => notices.tick());
+    // the refresh did not answer 'ok': the stored balance with its age, and no second GET
     expect(textsTo(captured.calls, target).at(-1)).toMatch(/🧪 Демобаланс: .*\n🕒/);
+    expect(refreshCalls).toHaveLength(1);
   });
 });
 
@@ -1181,7 +1200,7 @@ describe('a martingale cycle is one message (#551)', () => {
     ]);
 
     const next = sender();
-    await next.notices.tick();
+    await untilSummary(target, () => next.notices.tick());
     const summaries = sendsTo(next.captured.calls, target);
     expect(summaries).toHaveLength(1);
     expect(summaries[0]!.payload.disable_notification).toBeUndefined();
@@ -1327,7 +1346,7 @@ describe('the summary of a no_signal_timeout stop (#509)', () => {
     await settled(target, '4.6');
     await stop(target, TradingSessionStopReason.NoSignalTimeout);
     const { notices, captured } = sender();
-    await notices.tick();
+    await untilSummary(target, () => notices.tick());
     const sends = sendsTo(captured.calls, target);
     expect(sends).toHaveLength(2);
     const summary = sends[1]!;
@@ -1400,7 +1419,7 @@ describe('the final mark and the fallback summary (#537)', () => {
   it('F2 a tracked session with a fresh mark gets nothing; F3 past the grace, the text summary once', async () => {
     const target = await noSignal();
     await tracked(target);
-    const { notices, captured } = sender();
+    const { notices, captured, refreshCalls } = sender();
     await notices.tick();
     await markAgo(target, 29);
     await notices.tick();
@@ -1413,6 +1432,8 @@ describe('the final mark and the fallback summary (#537)', () => {
     expect(pushedText(sends[0]!.payload).split('\n')[0]).toBe('📈 EUR/USD');
     expect(inlineButtons(sends[0]!.payload).at(-1)).toEqual(MENU);
     expect((await rowOf(target)).summarySentAt).toBeInstanceOf(Date);
+    // a stop without a trade has no balance after a trade to ask for
+    expect(refreshCalls).toEqual([]);
     await notices.tick();
     expect(sendsTo(captured.calls, target)).toHaveLength(1);
   });
@@ -1568,6 +1589,176 @@ describe('the final mark and the fallback summary (#537)', () => {
     expect(sendsTo(captured.calls, newer)).toHaveLength(0);
     await notices.tick();
     expect(sendsTo(captured.calls, newer)).toHaveLength(1);
+  });
+
+  // #870: the summary's balance refresh is not waited for in the tick
+  // a finished session without a status message whose balance predates its trade (D9)
+  async function needsBalance(): Promise<Target> {
+    const target = await seedSession();
+    await snapshot(target);
+    await settled(target, '4.6');
+    await stop(target);
+    return target;
+  }
+  // a finished session without a status message, its balance after its trade
+  async function current(): Promise<Target> {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await stop(target);
+    await snapshot(target);
+    return target;
+  }
+  const summaryOf = (calls: readonly ApiCall[], target: Target) =>
+    textsTo(calls, target).find((text) => text.startsWith('📈'));
+  const AGED = /🧪 Демобаланс: .*\n🕒/;
+  // a broker GET as the reconciler's: answers when the test releases it, or 'aborted' by its
+  // signal
+  function heldBalance() {
+    const calls: string[] = [];
+    const pending: ((outcome: BalanceRefreshOutcome) => void)[] = [];
+    let answered = 0;
+    const balance: SessionNoticeSenderDeps['balance'] = {
+      refresh: (accountId, options) => {
+        calls.push(accountId);
+        return new Promise<BalanceRefreshOutcome>((resolve) => {
+          const answer = (outcome: BalanceRefreshOutcome) => {
+            answered += 1;
+            resolve(outcome);
+          };
+          pending.push(answer);
+          options?.signal?.addEventListener('abort', () => answer('aborted'), { once: true });
+        });
+      },
+    };
+    const release = (outcome: BalanceRefreshOutcome) => {
+      for (const answer of pending.splice(0)) answer(outcome);
+    };
+    return { calls, balance, release, answered: () => answered };
+  }
+
+  it('F14 a slow broker holds no other summary: the tick returns, the summary goes after the answer', async () => {
+    const slow = await needsBalance();
+    const other = await current();
+    const held = heldBalance();
+    const { notices, captured } = sender({ balance: held.balance });
+    await notices.tick();
+    await until('the refresh', () => held.calls.length === 1);
+    expect(held.calls).toEqual([slow.seed.brokerAccountId]);
+    expect(summaryOf(captured.calls, other)).toBeDefined();
+    expect(held.answered()).toBe(0);
+    await notices.tick();
+    expect(summaryOf(captured.calls, slow)).toBeUndefined();
+    held.release('aborted');
+    await untilSummary(slow, () => notices.tick());
+    expect(summaryOf(captured.calls, slow)).toMatch(AGED);
+    expect(held.calls).toHaveLength(1);
+  });
+
+  it("F15 a refresh that answers 'ok': the summary with the balance it wrote, no age", async () => {
+    const target = await needsBalance();
+    const refreshCalls: string[] = [];
+    const balance: SessionNoticeSenderDeps['balance'] = {
+      refresh: async (accountId) => {
+        refreshCalls.push(accountId);
+        await upsertBalanceSnapshot(tmp.db, {
+          brokerAccountId: accountId,
+          user: brokerUser,
+          requested: false,
+        });
+        return 'ok';
+      },
+    };
+    const { notices, captured } = sender({ balance });
+    await untilSummary(target, () => notices.tick());
+    const summary = summaryOf(captured.calls, target);
+    expect(summary).toMatch(/🧪 Демобаланс: /);
+    expect(summary).not.toContain('🕒');
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('F16 a 429 after the refresh: the claim back, the pause, then the summary - no second GET', async () => {
+    const clock = { now: 1_000_000 };
+    const target = await needsBalance();
+    const { notices, captured, refreshCalls } = sender({}, clock);
+    await notices.tick();
+    await until('the refresh', () => refreshCalls.length === 1);
+    failFirst(captured, 1, telegramError(429, 5));
+    await until('the refused summary', async () => {
+      await notices.tick();
+      return callsTo(captured.calls, 'sendMessage').length === 2;
+    });
+    expect((await rowOf(target)).summarySentAt).toBeNull();
+    clock.now += 5_000;
+    await untilSummary(target, () => notices.tick());
+    expect(summaryOf(captured.calls, target)).toMatch(AGED);
+    expect(refreshCalls).toHaveLength(1);
+  });
+
+  it('F17 a refresh that rejects: a warning, no hold, the summary with the stored balance', async () => {
+    const target = await needsBalance();
+    const balance: SessionNoticeSenderDeps['balance'] = {
+      refresh: () => Promise.reject(new Error('refresh refused by the test')),
+    };
+    const { notices, captured, logs } = sender({ balance });
+    await notices.tick();
+    await until('the warning', () =>
+      logs().some((entry) => entry.msg === 'session summary balance refresh failed'),
+    );
+    expect(
+      logs().find((entry) => entry.msg === 'session summary balance refresh failed'),
+    ).toMatchObject({ level: WARN, sessionId: target.session.id });
+    await untilSummary(target, () => notices.tick());
+    expect(summaryOf(captured.calls, target)).toMatch(AGED);
+    expect(logs().filter((entry) => entry.msg === 'session notices failed for a session')).toEqual(
+      [],
+    );
+  });
+
+  it('F18 stop() with the refresh in flight: it waits for no answer, claims nothing; a new sender asks again', async () => {
+    const target = await needsBalance();
+    const held = heldBalance();
+    const first = sender({ balance: held.balance });
+    await first.notices.tick();
+    await until('the refresh', () => held.calls.length === 1);
+    await first.notices.stop();
+    expect(held.answered()).toBe(0);
+    held.release('unavailable');
+    expect((await rowOf(target)).summarySentAt).toBeNull();
+    expect(summaryOf(first.captured.calls, target)).toBeUndefined();
+    const next = sender();
+    await untilSummary(target, () => next.notices.tick());
+    expect(next.refreshCalls).toHaveLength(1);
+    expect(summaryOf(next.captured.calls, target)).toMatch(AGED);
+  });
+
+  it('F19 the refreshes kept are at most scan: the oldest dropped asks again, both summaries go', async () => {
+    const first = await needsBalance();
+    const second = await needsBalance();
+    const held = heldBalance();
+    const { notices, captured } = sender({ balance: held.balance, config: { scan: 1 } });
+    await notices.tick();
+    await until('the first refresh', () => held.calls.length === 1);
+    await notices.tick();
+    expect(held.calls).toHaveLength(1);
+    // the second's mark the oldest: it is listed next and its refresh drops the first's
+    await markAgo(second, 1);
+    await notices.tick();
+    await until('the second refresh', () => held.calls.length === 2);
+    held.release('unavailable');
+    await untilSummary(second, () => notices.tick());
+    await until('the first refresh again', async () => {
+      await notices.tick();
+      return held.calls.length === 3;
+    });
+    held.release('unavailable');
+    await untilSummary(first, () => notices.tick());
+    expect(held.calls).toEqual([
+      first.seed.brokerAccountId,
+      second.seed.brokerAccountId,
+      first.seed.brokerAccountId,
+    ]);
+    expect(summaryOf(captured.calls, first)).toMatch(AGED);
+    expect(summaryOf(captured.calls, second)).toMatch(AGED);
   });
 });
 
@@ -3517,47 +3708,60 @@ describe('the hold-back of a thrown turn (#660)', () => {
     logs.filter(
       (entry) => entry.level === ERROR && entry.msg === 'session notices failed for a session',
     );
-  // a finished session without a status message whose balance is older than its trade: the
-  // fallback summary reads the balance, and this refresh throws
+  // two finished sessions without a status message, their balances current: each gets the
+  // fallback summary; once their notices are closed, every UPDATE of `held`'s row throws, so its
+  // summary's claim does. A rejected balance refresh no longer throws in the turn (#870, F17).
   async function throwingSummary() {
     const held = await seedSession();
     await settled(held, '4.6');
     await stop(held);
+    await snapshot(held);
     const other = await seedSession();
     await settled(other, '-5');
     await stop(other);
     await snapshot(other);
-    const calls = { refresh: 0 };
-    const balance: SessionNoticeSenderDeps['balance'] = {
-      refresh: () => {
-        calls.refresh += 1;
-        return Promise.reject(new Error('refresh refused by the test'));
-      },
+    const failHeld = async () => {
+      await tmp.db.execute(sql`
+        create function test_fail_summary() returns trigger language plpgsql as $$
+        begin raise exception 'summary claim refused by the test'; end $$`);
+      await tmp.db.execute(
+        sql.raw(`create trigger test_fail_summary before update on trading_sessions
+        for each row when (old.id = '${held.session.id}') execute function test_fail_summary()`),
+      );
     };
-    return { held, other, calls, balance };
+    const unfail = async () => {
+      await tmp.db.execute(sql`drop trigger if exists test_fail_summary on trading_sessions`);
+      await tmp.db.execute(sql`drop function if exists test_fail_summary()`);
+    };
+    return { held, other, failHeld, unfail };
   }
 
   it('HB1 a fallback summary that throws holds its session out of the lists; a newer session goes on; tried again after the hold', async () => {
     const clock = { now: 1_000_000 };
-    const { held, other, calls, balance } = await throwingSummary();
-    const { notices, captured, logs } = sender({ config: { chatGapMs: GAP }, balance }, clock);
+    const { held, other, failHeld, unfail } = await throwingSummary();
+    const { notices, captured, logs } = sender({ config: { chatGapMs: GAP } }, clock);
     await notices.tick();
-    expect(calls.refresh).toBe(0);
-    clock.now += GAP;
-    await notices.tick();
-    expect(calls.refresh).toBe(1);
-    expect(failed(logs())).toEqual([
-      expect.objectContaining({ sessionId: held.session.id, holdMs: SESSION_NOTICE_HOLD_MS }),
-    ]);
-    expect(sequenceOf(captured.calls, other)).toEqual(['trade', 'summary']);
-    clock.now += GAP;
-    await notices.tick();
-    clock.now += SESSION_NOTICE_HOLD_MS - 2 * GAP - 1;
-    await notices.tick();
-    expect(calls.refresh).toBe(1);
-    clock.now += 1 + GAP;
-    await notices.tick();
-    expect(calls.refresh).toBe(2);
+    expect((await rowOf(held)).finalNoticeSentAt).toBeInstanceOf(Date);
+    await failHeld();
+    try {
+      clock.now += GAP;
+      await notices.tick();
+      expect(failed(logs())).toEqual([
+        expect.objectContaining({ sessionId: held.session.id, holdMs: SESSION_NOTICE_HOLD_MS }),
+      ]);
+      expect(sequenceOf(captured.calls, other)).toEqual(['trade', 'summary']);
+      clock.now += GAP;
+      await notices.tick();
+      clock.now += SESSION_NOTICE_HOLD_MS - 2 * GAP - 1;
+      await notices.tick();
+      expect(failed(logs())).toHaveLength(1);
+      clock.now += 1 + GAP;
+      await notices.tick();
+      expect(failed(logs())).toHaveLength(2);
+    } finally {
+      await unfail();
+    }
+    expect(sequenceOf(captured.calls, held)).toEqual(['trade']);
   });
 
   it('HB2 a statement that throws in the first pass holds its session; a newer session’s trade goes in the same tick; after the hold the trade goes', async () => {
@@ -3597,23 +3801,27 @@ describe('the hold-back of a thrown turn (#660)', () => {
 
   it('HB3 the hold is in memory: a new sender tries at once; a throw after the hold holds the session again for the whole hold', async () => {
     const clock = { now: 1_000_000 };
-    const { calls, balance } = await throwingSummary();
-    const first = sender({ config: { chatGapMs: GAP }, balance }, clock);
+    const { failHeld, unfail } = await throwingSummary();
+    const first = sender({ config: { chatGapMs: GAP } }, clock);
     await first.notices.tick();
-    clock.now += GAP;
-    await first.notices.tick();
-    expect(calls.refresh).toBe(1);
-    const restarted = sender({ config: { chatGapMs: GAP }, balance }, clock);
-    await restarted.notices.tick();
-    expect(calls.refresh).toBe(2);
+    await failHeld();
+    try {
+      clock.now += GAP;
+      await first.notices.tick();
+      expect(failed(first.logs())).toHaveLength(1);
+      const restarted = sender({ config: { chatGapMs: GAP } }, clock);
+      await restarted.notices.tick();
+      expect(failed(restarted.logs())).toHaveLength(1);
 
-    clock.now += SESSION_NOTICE_HOLD_MS;
-    await first.notices.tick();
-    expect(calls.refresh).toBe(3);
-    expect(failed(first.logs())).toHaveLength(2);
-    clock.now += SESSION_NOTICE_HOLD_MS - 1;
-    await first.notices.tick();
-    expect(calls.refresh).toBe(3);
+      clock.now += SESSION_NOTICE_HOLD_MS;
+      await first.notices.tick();
+      expect(failed(first.logs())).toHaveLength(2);
+      clock.now += SESSION_NOTICE_HOLD_MS - 1;
+      await first.notices.tick();
+      expect(failed(first.logs())).toHaveLength(2);
+    } finally {
+      await unfail();
+    }
   });
 });
 
@@ -3649,7 +3857,7 @@ describe('the wake (#723)', () => {
     const listener = createSessionNoticeListener({
       pool: tmp.pool,
       channel: SESSION_NOTICE_CHANNEL,
-      onNotification: () => built.notices.wake(),
+      onNotification: (sessionId) => built.notices.wake(sessionId),
       logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
     });
     made.push({ notices: built.notices, listener });
@@ -3674,6 +3882,8 @@ describe('the wake (#723)', () => {
     // a tick's line follows its calls
     await until('the line of the woken tick', () => ticks().length === 2);
     expect(ticks().map((line) => line.woken)).toEqual([0, 1]);
+    // the woken tick read its session alone (#870)
+    expect(ticks().map((line) => line.sessions)).toEqual(['all', 1]);
   });
 
   it('K2 an accept wakes the sender: the open block is sent within a second, no tick called', async () => {
@@ -3685,6 +3895,7 @@ describe('the wake (#723)', () => {
     expect(Date.now() - acceptedAt).toBeLessThan(1_000);
     await until('the line of the woken tick', () => ticks().length === 1);
     expect(ticks().map((line) => line.woken)).toEqual([1]);
+    expect(ticks().map((line) => line.sessions)).toEqual([1]);
   });
 
   it('K3 wakes during a tick merge into one more tick right after it', async () => {
@@ -3707,7 +3918,8 @@ describe('the wake (#723)', () => {
     release();
     await inFlight;
     await until('the woken tick', () => ticks().length === 2);
-    expect(ticks()[1]).toMatchObject({ woken: 3, pending: 0 });
+    // a wake without a session's id reads the lists whole (#870)
+    expect(ticks()[1]).toMatchObject({ woken: 3, pending: 0, sessions: 'all' });
     expect(captured.calls).toHaveLength(1);
   });
 
@@ -3752,6 +3964,8 @@ describe('the wake (#723)', () => {
     // follows its edit
     await until('the line of the tick that edited', () => ticks().length === 3);
     expect(ticks().map((line) => line.woken)).toEqual([0, 1, 1]);
+    // the end of the gap woke the skipped session by its id (#870)
+    expect(ticks().map((line) => line.sessions)).toEqual(['all', 1, 1]);
   });
 
   it('K6 woken ticks while Telegram asked to wait are empty, and stop once the wakes stop', async () => {
@@ -3826,6 +4040,107 @@ describe('the wake (#723)', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     // the tick stop() ended returned before its line, and its finally armed nothing
     expect(ticks()).toEqual([]);
+  });
+
+  // #870: a woken tick reads the woken sessions only; the interval's tick reads every session
+  it("K9 a wake by one session's id serves that session alone; the interval's tick the other", async () => {
+    const woken = await seedSession();
+    await opened(woken);
+    const other = await seedSession();
+    await opened(other);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    notices.wake(woken.session.id);
+    await until('the woken tick', () => ticks().length === 1);
+    expect(ticks()[0]).toMatchObject({ woken: 1, sessions: 1, pending: 1 });
+    expect(openSendsTo(captured.calls, woken)).toHaveLength(1);
+    expect(sequenceOf(captured.calls, other)).toEqual([]);
+    await notices.tick();
+    expect(openSendsTo(captured.calls, other)).toHaveLength(1);
+    expect(ticks()[1]).toMatchObject({ sessions: 'all' });
+  });
+
+  it("K10 a settle that finishes a session: its woken tick closes its notices and lists its fallback by id; another finished session waits for the interval's tick", async () => {
+    const finishing = await seedSession();
+    const trade = await opened(finishing);
+    const waiting = await seedSession();
+    await settled(waiting, '-5');
+    await stop(waiting);
+    const { notices, captured, ticks, refreshCalls } = await wakeful();
+    await stop(finishing);
+    await settle(trade, '4.6');
+    await until('the woken tick', () => ticks().length === 1);
+    expect(ticks()[0]).toMatchObject({ woken: 1, sessions: 1, pending: 1, fallback: 1 });
+    expect((await rowOf(finishing)).finalNoticeSentAt).toBeInstanceOf(Date);
+    await until('the refresh', () => refreshCalls.length === 1);
+    expect(refreshCalls[0]![0]).toBe(finishing.seed.brokerAccountId);
+    expect(sequenceOf(captured.calls, waiting)).toEqual([]);
+    expect((await rowOf(waiting)).finalNoticeSentAt).toBeNull();
+    await notices.tick();
+    expect(textsTo(captured.calls, waiting)).toHaveLength(1);
+    expect((await rowOf(waiting)).finalNoticeSentAt).toBeInstanceOf(Date);
+  });
+
+  it('K11 a payload that is no session id, or more than scan sessions woken, reads the lists whole', async () => {
+    const { notices, ticks, logs } = await wakeful({ scan: 2 }, false);
+    notices.wake('x');
+    await until('the tick of a foreign payload', () => ticks().length === 1);
+    notices.wake('');
+    await until('the tick of an empty payload', () => ticks().length === 2);
+    notices.wake(randomUUID());
+    notices.wake(randomUUID());
+    await until('the tick of two', () => ticks().length === 3);
+    for (let i = 0; i < 3; i += 1) notices.wake(randomUUID());
+    await until('the tick of three', () => ticks().length === 4);
+    expect(ticks().map((line) => line.sessions)).toEqual(['all', 'all', 2, 'all']);
+    expect(logs().filter((entry) => entry.msg === 'session notice tick failed')).toEqual([]);
+  });
+
+  it('K12 a wake by id during the tick that served the session: one more tick by id, nothing to send', async () => {
+    const target = await seedSession();
+    await opened(target);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    let release: () => void = () => {};
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', (payload) => {
+      const result = answer(payload);
+      return new Promise((resolve) => {
+        release = () => resolve(result);
+      });
+    });
+    const inFlight = notices.tick();
+    await until('the held send', () => openSendsTo(captured.calls, target).length === 1);
+    notices.wake(target.session.id);
+    release();
+    await inFlight;
+    await until('the woken tick', () => ticks().length === 2);
+    expect(ticks()[1]).toMatchObject({ woken: 1, sessions: 1, pending: 0 });
+    expect(captured.calls).toHaveLength(1);
+  });
+
+  it("K13 the interval's tick during a woken tick runs whole right after it", async () => {
+    const woken = await seedSession();
+    await opened(woken);
+    const other = await seedSession();
+    await opened(other);
+    const { notices, captured, ticks } = await wakeful({}, false);
+    let release: () => void = () => {};
+    const answer = captured.answers.get('sendMessage')!;
+    captured.answers.set('sendMessage', (payload) => {
+      const result = answer(payload);
+      return new Promise((resolve) => {
+        release = () => {
+          captured.answers.set('sendMessage', answer);
+          resolve(result);
+        };
+      });
+    });
+    notices.wake(woken.session.id);
+    await until('the held send', () => openSendsTo(captured.calls, woken).length === 1);
+    const whole = notices.tick();
+    release();
+    await whole;
+    expect(ticks().map((line) => line.sessions)).toEqual([1, 'all']);
+    expect(openSendsTo(captured.calls, other)).toHaveLength(1);
   });
 });
 
