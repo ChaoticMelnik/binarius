@@ -955,7 +955,7 @@ export function expandedKeyboard(
   ]);
 }
 
-// its own row: the session's trades follow the orchestrator's signal at each trade, not this
+// its own row: the session's trades follow the H1 driver's signal at each trade (#707), not this
 // screen's direction
 function sessionButtons(
   assetId: number,

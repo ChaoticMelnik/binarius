@@ -655,8 +655,8 @@ out of pooling.
 - #667: the H1 detector and `stand h1`. #669: the R1 grid and point, and the live 1s series from
   ticks with the shadow's rows ([h1.md](h1.md)); #681 reports the shadow; #670 runs H1 sessions on
   a marked account; the shadow and the mark were removed in #830.
-- Since #828 no v2 session trade is written (every session is H1's; the candle path of the
-  orchestrator trades only the v3 rows active at #830's deploy, gone with #835), so `calibrate`
+- Since #828 no v2 session trade is written (every session is H1's; #835 removed the
+  orchestrator's candle path, which traded only the v3 rows active at #830's deploy), so `calibrate`
   compares the candle journal with session trades only before that; the shadow's `h1_shadow` lines
   end with #830 (7-day retention).
 - #313: 5 s and 15 s trades are analysed on their own candles, never on `1m`. `v2+1m` adds the

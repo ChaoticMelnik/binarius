@@ -45,7 +45,7 @@ carries `version` (`STAKE_ALGORITHM_VERSION`, `'v1'`) but not the parameters, so
 | `payout` | number | `BinaryPair.payout` of the pair about to be traded; `fixed` does not read it |
 | `minTradeAmount` | `DecimalString` | `broker_balance_snapshots.min_trade_amount` of the account |
 | `available` | `DecimalString` | `broker_balance_snapshots.<mode>_available` |
-| `sessionStartedAtMs`, `nowMs` | number | the session's `started_at` (database clock); the worker's clock, clamped to `started_at` so a worker clock behind the database's never throws (`orchestrator.db.test.ts` E11) |
+| `sessionStartedAtMs`, `nowMs` | number | the session's `started_at` (database clock); the worker's clock, clamped to `started_at` so a worker clock behind the database's never throws (`orchestrator.db.test.ts` E11′) |
 
 `SessionTrade` is the module's own shape, so the module does not depend on the `trade_intents`
 statuses:
@@ -239,12 +239,12 @@ and its pin in `trading-session.test.ts`; then at 80-86 % step 4 stops as `max_s
 
 Rules of a session that the defaults do not change (#450 clarify; the length since #552):
 
-- A tie leaves the series as it is: the next stake is the same step (`orchestrator.db.test.ts` G2,
+- A tie leaves the series as it is: the next stake is the same step (`orchestrator.db.test.ts` H1-O2c,
   `steps-parity.test.ts`); the trade's message shows it as the next step of the same cycle
   (#551).
 - The session ends at its N-th closed cycle (#552, owner 2026-10-16), never in the middle of a
   series: under martingale a win closes the cycle, a loss or a tie does not (`orchestrator.db.test.ts`
-  G9′, G12); under fixed every settled trade is a cycle (G11). Only a technical reason cuts a
+  H1-O2, H1-O2c); under fixed every settled trade is a cycle (H1-O2b). Only a technical reason cuts a
   series short: the limits above, `timeout`, `kill_switch`, `manual_review`, `rejected_twice`,
   `account_unavailable`, `pair_unavailable`, `balance_unavailable`, `stake_stop`,
   `no_signal_timeout`, and `user_stopped` (at once, an open trade plays out). The start refuses a

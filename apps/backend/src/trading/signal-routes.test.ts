@@ -25,7 +25,6 @@ import type { AuthRoutesDeps } from '../auth/routes';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
 import { createScanPacer } from '../signal/pacer';
-import { createTickStore } from '../market-data/ticks';
 import type { SignalRoutesDeps } from './signal-routes';
 import {
   fakeCatalog,
@@ -99,7 +98,6 @@ function appWith(
   // null: the cache holds no snapshot
   catalog: PairsCatalogView | null = catalogOf(),
   lastAnalysis: SignalRoutesDeps['lastAnalysis'] = recordingLastAnalysis().lastAnalysis,
-  ticks: SignalRoutesDeps['ticks'] = undefined,
   h1: SignalRoutesDeps['h1'] = undefined,
 ): FastifyInstance {
   lines = [];
@@ -124,7 +122,6 @@ function appWith(
       catalog: fakeCatalog(catalog ?? undefined),
       internalApiToken: PAIRS_TEST_TOKEN,
       lastAnalysis,
-      ticks,
       h1,
       now: () => T,
     },
@@ -202,61 +199,6 @@ describe('POST /trading/signal', () => {
     });
     expect(safeParseTradingSignalResponse(body).success).toBe(true);
     expect(calls).toStrictEqual([{ assetId: 101, interval: '1m', digits: 5 }]);
-  });
-
-  // #666: a session's worker asks for the decision's record
-  it('R19 record: true answers the whole entry and the pair\'s newest tick', async () => {
-    const { feed } = fakeSignalFeed(decidedEvaluation);
-    const store = createTickStore();
-    store.push(101, { price: 1.15, timestamp: T - 300 }, T - 280);
-    store.push(202, { price: 9.5, timestamp: T - 100 }, T - 90);
-    const response = await post(appWith(feed, catalogOf(), undefined, store), {
-      assetId: 101,
-      interval: '1m',
-      record: true,
-    });
-    expect(response.statusCode).toBe(200);
-    const body: unknown = response.json();
-    expect(body).toStrictEqual({
-      outcome: 'decided',
-      params: DEFAULT_SIGNAL_PARAMS,
-      decision: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry.decision,
-      record: {
-        entry: decidedEvaluation.outcome === 'decided' && decidedEvaluation.entry,
-        lastTick: { price: 1.15, timestamp: T - 300, receivedAtMs: T - 280 },
-      },
-      h1: null,
-    });
-    expect(safeParseTradingSignalResponse(body).success).toBe(true);
-  });
-
-  it('R20 without the flag the answer carries no record, whatever the tick store holds', async () => {
-    const { feed } = fakeSignalFeed(decidedEvaluation);
-    const store = createTickStore();
-    store.push(101, { price: 1.15, timestamp: T - 300 }, T - 280);
-    const response = await post(appWith(feed, catalogOf(), undefined, store), {
-      assetId: 101,
-      interval: '1m',
-    });
-    expect(response.json()).not.toHaveProperty('record');
-  });
-
-  it('R21 without the data socket or a tick of the pair the record has no tick; a fetch failure none', async () => {
-    const { feed } = fakeSignalFeed(decidedEvaluation);
-    const request = { assetId: 101, interval: '1m', record: true };
-    const withoutSocket = await post(appWith(feed), request);
-    expect(withoutSocket.json<{ record: unknown }>().record).toMatchObject({ lastTick: null });
-    await app?.close();
-    const withoutTick = await post(appWith(feed, catalogOf(), undefined, createTickStore()), request);
-    expect(withoutTick.json<{ record: unknown }>().record).toMatchObject({ lastTick: null });
-    await app?.close();
-    const failed = fakeSignalFeed({ outcome: 'fetch_failed', code: 'unavailable' } as SignalEvaluation);
-    const response = await post(appWith(failed.feed), request);
-    expect(response.json()).toStrictEqual({
-      outcome: 'fetch_failed',
-      code: 'unavailable',
-      h1: null,
-    });
   });
 
   // #482: the card's indicators ride next to the decision; a response without them stays valid
@@ -530,7 +472,7 @@ describe('POST /trading/signal with analysis', () => {
       order.push('set');
       return Promise.resolve(true);
     });
-    const target = appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1);
+    const target = appWith(feed, catalogOf(), lastAnalysis, h1Of(H1_SIGNAL).h1);
     const response = await post(target, body);
     expect(response.statusCode).toBe(200);
     expect(calls).toStrictEqual([[7001n, { assetId: 101, durationSec: 15 }]]);
@@ -543,10 +485,7 @@ describe('POST /trading/signal with analysis', () => {
   it('R11 no H1 signal records none, though the candles signal', async () => {
     const { feed } = fakeSignalFeed(signalEvaluation);
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(
-      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(null).h1),
-      body,
-    );
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis, h1Of(null).h1), body);
     expect(response.statusCode).toBe(200);
     expect(calls).toStrictEqual([[7001n, null]]);
     expect(response.json()).toMatchObject({ outcome: 'decided', h1: null });
@@ -560,10 +499,7 @@ describe('POST /trading/signal with analysis', () => {
       status: 503,
     });
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(
-      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1),
-      body,
-    );
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis, h1Of(H1_SIGNAL).h1), body);
     expect(response.statusCode).toBe(200);
     expect(calls).toStrictEqual([[7001n, { assetId: 101, durationSec: 15 }]]);
     expect(response.json()).toStrictEqual({
@@ -577,10 +513,10 @@ describe('POST /trading/signal with analysis', () => {
   it('R13 a request without analysis records nothing', async () => {
     const { feed } = fakeSignalFeed(signalEvaluation);
     const { lastAnalysis, calls } = recordingLastAnalysis();
-    const response = await post(
-      appWith(feed, catalogOf(), lastAnalysis, undefined, h1Of(H1_SIGNAL).h1),
-      { assetId: 101, interval: '15s' },
-    );
+    const response = await post(appWith(feed, catalogOf(), lastAnalysis, h1Of(H1_SIGNAL).h1), {
+      assetId: 101,
+      interval: '15s',
+    });
     expect(response.statusCode).toBe(200);
     expect(calls).toHaveLength(0);
   });
@@ -600,7 +536,7 @@ describe('POST /trading/signal with analysis', () => {
       order.push(`feed after ${reads.length} reads`);
       return Promise.resolve(decidedEvaluation);
     });
-    const response = await post(appWith(feed, catalogOf(), undefined, undefined, h1), body);
+    const response = await post(appWith(feed, catalogOf(), undefined, h1), body);
     expect(order).toStrictEqual(['feed after 0 reads']);
     expect(reads).toStrictEqual([[101, T]]);
     expect(response.json()).toMatchObject({ h1: H1_SIGNAL });

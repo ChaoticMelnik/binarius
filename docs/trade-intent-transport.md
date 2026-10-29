@@ -57,7 +57,7 @@ bot ──GET /trading/intents/:id?telegramUserId=…──▶ backend ──▶
    `broker_account_not_found`), or the user's single active account (0 → 404, more than one →
    409 `ambiguous_broker_account`).
 3a. **The stake bounds (#297, #326)**, for an intent of either mode, only when the caller passes
-   `{ checkStake: true }` — today `POST /trading/intents` alone (stated; the orchestrator's
+   `{ checkStake: true }` — today `POST /trading/intents` alone (stated; the driver's
    session intents rely on the sizer, Rule 23). One plain `select` of the resolved account's
    `broker_balance_snapshots` row, no lock, any age: none → 409 `balance_unavailable`; otherwise
    `checkStake(amount, { minTradeAmount, available })` with `available` = `real_available` for a
@@ -666,8 +666,8 @@ spellings) that refuses real intents and sessions in it, read at start
   travels in a button's callback data ([GET /trading/intents/:id](#get-tradingintentsid-127));
   a notification dedupe key (#29) should be derived from the intent id and status.
 - `trading_session_id` is set only by `createSessionIntent` (#130, [trading-session.md](trading-session.md));
-  the route's and the bot's single trades keep `NULL`. The orchestrator that calls it is
-  `apps/trading-worker/src/trading-session/orchestrator.ts` (#287).
+  the route's and the bot's single trades keep `NULL`. Its caller is the backend's H1 driver
+  (`apps/backend/src/h1/driver.ts`, #707); the worker's orchestrator called it until #835.
   A session is started, read and stopped through `POST /trading/sessions`,
   `GET /trading/sessions/:id` and `POST /trading/sessions/:id/stop` (#283), all of a user's
   stopped at once through `POST /trading/sessions/stop` (#122), and its summary card claimed

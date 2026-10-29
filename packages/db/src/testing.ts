@@ -17,7 +17,8 @@ import {
   MomentumDirection,
   TradeTransport,
   TrendDirection,
-  type SignalRecord,
+  type LastTick,
+  type SignalJournalEntryWire,
   type TradingSessionSettings,
   SignalDecisionContext,
   SignalDecisionOutcome,
@@ -54,11 +55,7 @@ import {
 import { closedTradeFor, openTradeFor } from '@binarius/shared/testing';
 import { tradingSwitch } from './schema/trading-switch';
 import { upsertBalanceSnapshot } from './balance-snapshot-ops';
-import {
-  signalDecisionInput,
-  type SignalDecisionFacts,
-  type SignalDecisionInput,
-} from './signal-decision-ops';
+import type { SignalDecisionInput } from './signal-decision-ops';
 
 export interface TempDatabase {
   url: string;
@@ -323,9 +320,9 @@ export const sessionSettings = (
   ...patch,
 });
 
-// Settings v3 (#552) as the start route wrote them until #830: no writer is left, the
-// orchestrator's candle path still reads the rows until #835. A stake the schema refuses is a
-// failed parse, as before.
+// Settings v3 (#552) as the start route wrote them until #830: since #835 no process trades them:
+// the view, the admin, sessionProgress and sessionStakeParams read them, the orchestrator stops an
+// active one invalid_settings. A stake the schema refuses is a failed parse, as before.
 export function buildSessionSettingsV3(input: {
   assetId: number;
   durationSec: number;
@@ -368,9 +365,54 @@ export async function seedTradingSession(
 
 // --- Trade log fixtures (#666) -----------------------------------------------------------------
 
+// The record of a v2 decision row as POST /trading/signal answered it to the worker's orchestrator
+// until #835: the journal entry and the last tick.
+export interface SignalRecordV2 {
+  entry: SignalJournalEntryWire;
+  lastTick: LastTick | null;
+}
+
+// the writer's facts beside the record's entry
+export interface SignalDecisionFactsV2 {
+  context: SignalDecisionContext;
+  tradingSessionId: string | null;
+  brokerAccountId: string;
+  step: number | null;
+  payout: number | null;
+  takenAtMs: number;
+  outcome: SignalDecisionOutcome;
+  detail: string | null;
+}
+
+// The v2 rows of the orchestrator and of the start route until #835; historical, built only here.
+// The row holds the entry as the backend answered it, so journalEntryOf rebuilds exactly what
+// replaySignalJournalEntry needs.
+export function signalDecisionInputV2(
+  { entry, lastTick }: SignalRecordV2,
+  facts: SignalDecisionFactsV2,
+): SignalDecisionInput {
+  const { decision } = entry;
+  return {
+    ...facts,
+    assetId: entry.assetId,
+    interval: entry.interval,
+    version: entry.version,
+    decidedAtMs: entry.nowMs,
+    kind: decision.kind,
+    action: decision.kind === SignalKind.Signal ? decision.action : null,
+    digits: entry.digits,
+    params: entry.params,
+    decision,
+    source: entry.source,
+    series: entry.series,
+    lastTick,
+    ticksUntilMs: null,
+  };
+}
+
 // A v2 socket entry with an `up` signal on 15s candles, and its last tick: the shape the backend
 // answers; the decision is not the decider's own (a suite that replays builds its entry with it)
-export const signalRecordFixture = (nowMs = 1_760_000_007_000): SignalRecord => ({
+export const signalRecordFixture = (nowMs = 1_760_000_007_000): SignalRecordV2 => ({
   entry: {
     assetId: 101,
     interval: '15s',
@@ -423,10 +465,10 @@ export const signalRecordFixture = (nowMs = 1_760_000_007_000): SignalRecord => 
 // a session decision of the fixture record, taken 50 ms after it, with its intent
 export const decisionFixture = (
   session: { sessionId: string; brokerAccountId: string },
-  facts: Partial<SignalDecisionFacts> = {},
-  record: SignalRecord = signalRecordFixture(),
+  facts: Partial<SignalDecisionFactsV2> = {},
+  record: SignalRecordV2 = signalRecordFixture(),
 ): SignalDecisionInput =>
-  signalDecisionInput(record, {
+  signalDecisionInputV2(record, {
     context: SignalDecisionContext.Session,
     tradingSessionId: session.sessionId,
     brokerAccountId: session.brokerAccountId,
@@ -438,11 +480,12 @@ export const decisionFixture = (
     ...facts,
   });
 
-// the orchestrator's «no signal» row of a session (#722): the fixture record with a no_signal
-// decision, no action, outcome no_signal - the row that makes the session wait for a signal
+// a v2 «no signal» row of a session (the orchestrator's until #835; #722): the fixture record with
+// a no_signal decision, no action, outcome no_signal - the row that makes the session wait for a
+// signal
 export const noSignalDecisionFixture = (
   session: { sessionId: string; brokerAccountId: string },
-  facts: Partial<SignalDecisionFacts> = {},
+  facts: Partial<SignalDecisionFactsV2> = {},
 ): SignalDecisionInput => {
   const record = signalRecordFixture();
   return decisionFixture(

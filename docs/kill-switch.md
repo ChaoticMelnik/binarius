@@ -14,9 +14,9 @@ While the switch is closed:
   nothing reaches the broker;
 - `createTradingSession` refuses with `trading_paused`, and `stopPausedSessions` stops every
   active session with `stop_reason = kill_switch`. The orchestrator's tick runs it first, so the
-  next tick stops a session before its signal call; an attempt already under way in the running
-  tick still calls the signal, and its intent creation refuses `trading_paused`, which stops the
-  session as `kill_switch` too. How long that takes is not bounded by `TRADING_SESSION_TICK_MS`:
+  next tick stops a session before its catalog read; an intent the driver creates in that window
+  is refused `trading_paused` and the driver stops the session `kill_switch`
+  ([h1.md](h1.md)); the orchestrator creates no intent since #835. How long that takes is not bounded by `TRADING_SESSION_TICK_MS`:
   a tick runs its attempts one after another, and the sweep stops at most
   `TRADING_SESSION_BATCH_SIZE` sessions per tick ([trading-session.md](trading-session.md));
 - trades already open, the broker sockets, reconciliation, settlement catch-up, the balance tick
@@ -183,7 +183,7 @@ The readers and what each does with the flag on:
 | `POST /trading/intents` (backend) | a real intent answers 409 `demo_only`. The check runs after the replay (a retry still gets a real intent an earlier process created) and before the switch, the account and the reserve: nothing is read, reserved or woken |
 | `POST /trading/sessions` (backend) | `createTradingSession` refuses a real session `demo_only` before `mode_not_allowed` and before its transaction: a real session of a user whose `trading_mode` is `real` (set before the flag, or by hand) reaches it (#327, `session-routes.db.test.ts` R27) |
 | the intent job (worker) | a queued real intent is rejected before `takeIntent`: `queued → rejected`, `last_error = demo_only`, the token released, the executor never called (it never becomes `submitting`). This holds however the intent got into the queue, including one an earlier process without the flag created. The flag wins over the age: an old real intent is `demo_only`, not `expired`. A `submitting` intent left by an earlier process goes the stale path as before (`unknown` → reconciliation, which only reads) |
-| the session orchestrator (worker) | the attempt's intent creation refuses `demo_only` and the session stops as `account_unavailable`, logged `trading session stopped` with `code: demo_only`; no intent, no reserve |
+| the H1 driver (backend) | `createSessionIntent` refuses `demo_only` → the driver stops the session `account_unavailable` (`h1 driver intent refused`); no intent, no reserve. The orchestrator's own line was removed in #835: it creates no intent |
 | the CLI `h1 session start` (backend) | reads the flag and refuses a user in real mode before any broker read, then passes it to `createTradingSession`; the worker's `session-start` was removed in #830 |
 
 So the stand has two lines, as the switch does: creation in the backend and the take in the worker.
@@ -215,7 +215,7 @@ Both processes log the flag at start, in both states:
 {"level":30,…,"concurrency":5,"sessions":false,"demoOnly":true,"msg":"trading-worker started"}
 ```
 
-The lines are a report, not the gate: the flag is in the processor's and the orchestrator's
+The lines are a report, not the gate: the flag is in the processor's
 configuration from the moment `createWorker` builds them, and the backend's routes from the moment
 `buildApp` registers them. To check a stand before working on it:
 
@@ -248,6 +248,6 @@ both services can come from one of them, while recreation (`up -d`) starts a fre
 - `DEMO_ONLY` (#396): `packages/shared/src/env.test.ts` and both apps' `env.test.ts` (the
   spellings), `trade-intent-ops.db.test.ts` F1–F4, `trading-session-ops.db.test.ts` F1–F2,
   `apps/backend/src/trading/routes.db.test.ts` → DEMO_ONLY, `processor.db.test.ts` F1–F6,
-  `orchestrator.db.test.ts` F1–F2, `cli/h1-session.db.test.ts` H1-R5, `worker.handoff.db.test.ts`
-  H5–H6 (the started line) and H7–H8 (the flag through `createWorker`: a queued real intent
-  rejected, a real session stopped), `intents/config.test.ts` (the compose entry).
+  `cli/h1-session.db.test.ts` H1-R5, `worker.handoff.db.test.ts`
+  H5–H6 (the started line) and H7 (the flag through `createWorker`: a queued real intent
+  rejected), `intents/config.test.ts` (the compose entry).

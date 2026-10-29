@@ -12,7 +12,6 @@ import {
   decimalStringSchema,
   h1ShadowEntrySchema,
   type DecimalString,
-  type SignalRecord,
   type TradingSessionSettings,
 } from '@binarius/shared';
 import {
@@ -28,7 +27,6 @@ import {
   readTradeLogPage,
   readTradeReportStats,
   recordSignalDecision,
-  signalDecisionInput,
   TradeReportOrigin,
   type TradeLogRow,
   type TradeReportStats,
@@ -44,7 +42,9 @@ import {
   seedUserWithAccount,
   sessionSettings,
   shadowDecisionFixture,
+  signalDecisionInputV2,
   signalRecordFixture,
+  type SignalRecordV2,
   type TempDatabase,
 } from './testing';
 import type { SignalDecisionInput } from './signal-decision-ops';
@@ -179,7 +179,7 @@ describe('recordSignalDecision (#666)', () => {
         detail: { closedCandles: 2, required: 50 },
       },
     };
-    const input = signalDecisionInput(
+    const input = signalDecisionInputV2(
       { entry, lastTick: null },
       {
         context: SignalDecisionContext.SessionStart,
@@ -533,7 +533,7 @@ describe('readTradeReportStats (#502)', () => {
       .set({ createdAt: at })
       .where(inArray(tradeIntents.id, [...ids]));
 
-  const withParams = (patch: Record<string, unknown>): SignalRecord => {
+  const withParams = (patch: Record<string, unknown>): SignalRecordV2 => {
     const record = signalRecordFixture();
     return { ...record, entry: { ...record.entry, params: { ...record.entry.params, ...patch } } };
   };
@@ -542,7 +542,7 @@ describe('readTradeReportStats (#502)', () => {
   interface StepSpec {
     outcome: Outcome;
     assetId?: number;
-    record?: SignalRecord | null;
+    record?: SignalRecordV2 | null;
   }
 
   // a session's steps in order: each intent created from its decision row (record null: none),

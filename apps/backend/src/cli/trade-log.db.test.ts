@@ -21,7 +21,6 @@ import {
   h1ShadowEntrySchema,
   type Candle,
   type DecimalString,
-  type SignalRecord,
   type TradeLogLine,
 } from '@binarius/shared';
 import {
@@ -45,6 +44,7 @@ import {
   seedBrokerTradeFor,
   seedTradingSession,
   seedUserWithAccount,
+  type SignalRecordV2,
   type TempDatabase,
 } from '@binarius/db/testing';
 import {
@@ -129,7 +129,7 @@ type Session = Awaited<ReturnType<typeof seedSession>>;
 const sessionIntent = (
   session: Session,
   step: number,
-  { amount = '1', record }: { amount?: string; record?: SignalRecord } = {},
+  { amount = '1', record }: { amount?: string; record?: SignalRecordV2 } = {},
 ) =>
   createSessionIntent(tmp.db, {
     sessionId: session.sessionId,
@@ -149,7 +149,7 @@ const SERIES_INTERVAL_MS = 15_000;
 const SERIES_NOW_MS = SERIES_START + 60 * SERIES_INTERVAL_MS + 2_000;
 
 // a real decision of the current decider on 15 s candles, as the feed would record it
-function decidedRecord(candles: Candle[], lastTick: SignalRecord['lastTick']): SignalRecord {
+function decidedRecord(candles: Candle[], lastTick: SignalRecordV2['lastTick']): SignalRecordV2 {
   const decider = createSignalDecider();
   const decision = decider.decide({
     candles,
@@ -178,7 +178,7 @@ function decidedRecord(candles: Candle[], lastTick: SignalRecord['lastTick']): S
 }
 
 // a climb in alternating steps: the decider's signal (up)
-function signalRecord(): SignalRecord {
+function signalRecord(): SignalRecordV2 {
   let close = 1.1;
   const candles: Candle[] = Array.from({ length: 60 }, (_, index) => {
     const open = close;
@@ -199,7 +199,7 @@ function signalRecord(): SignalRecord {
 }
 
 // a steady climb: no_signal (rsi_overbought)
-function noSignalRecord(): SignalRecord {
+function noSignalRecordV2(): SignalRecordV2 {
   const candles: Candle[] = Array.from({ length: 60 }, (_, index) => {
     const close = 1.1 + index * 0.0002 + (index % 3 === 0 ? -0.00015 : 0.0001);
     return {
@@ -711,7 +711,7 @@ describe('trade-log export (#666)', () => {
 
   it('X9 lines without a trade: a start decision without a session, a refusal with its detail and result', async () => {
     const seed = await seedUserWithAccount(tmp.db, { balance: 50n });
-    const quiet = noSignalRecord();
+    const quiet = noSignalRecordV2();
     expect(quiet.entry.decision.kind).toBe(SignalKind.NoSignal);
     const start = await recordSignalDecision(
       tmp.db,

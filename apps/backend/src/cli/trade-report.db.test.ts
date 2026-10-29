@@ -11,7 +11,6 @@ import {
   verdictOf,
   wilson,
   type DecimalString,
-  type SignalRecord,
 } from '@binarius/shared';
 import {
   brokerTrades,
@@ -29,6 +28,7 @@ import {
   seedTradingSession,
   seedUserWithAccount,
   signalRecordFixture,
+  type SignalRecordV2,
   type TempDatabase,
 } from '@binarius/db/testing';
 import { ALL_PAIRS, NO_PAYOUT, NO_TRADES } from './report';
@@ -64,7 +64,7 @@ const placeAt = (ids: readonly string[], at: Date) =>
     .set({ createdAt: at })
     .where(inArray(tradeIntents.id, [...ids]));
 
-const withParams = (patch: Record<string, unknown>): SignalRecord => {
+const withParams = (patch: Record<string, unknown>): SignalRecordV2 => {
   const record = signalRecordFixture();
   return { ...record, entry: { ...record.entry, params: { ...record.entry.params, ...patch } } };
 };
@@ -74,7 +74,7 @@ interface StepSpec {
   outcome: Outcome;
   assetId?: number;
   // null: an intent without a decision row; h1: the H1 driver's row shape (interval NULL, symbol)
-  record?: SignalRecord | null | 'h1';
+  record?: SignalRecordV2 | null | 'h1';
 }
 
 // the H1 driver's decision row (docs/h1.md → The driver): version h1, no interval, ticks source

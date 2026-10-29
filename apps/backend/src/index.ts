@@ -298,7 +298,6 @@ const app = buildApp({
     lastAnalysis: {
       set: (telegramUserId, analysis) => setLastAnalysis(db, telegramUserId, analysis),
     },
-    ticks: candleStore?.ticks,
     // marketData is built after the app: read at the request (#828)
     h1:
       candleStore === undefined

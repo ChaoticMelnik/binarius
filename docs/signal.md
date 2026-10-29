@@ -13,8 +13,8 @@ journal line. Its caller is the backend's `POST /trading/signal` (#258,
 the bot's analysis prints its rows, while the direction the bot shows and trades is H1's
 ([h1.md → The scanner and the signals list](h1.md#the-scanner-and-the-signals-list-828)). The
 background candle scanner behind `GET /trading/signals` (#343) and the session start's candle check
-(step 4c, #509) were removed by #828. The worker never calls the feed itself: a v3 session's
-orchestrator (#287, [trading-session.md](trading-session.md)) asks `POST /trading/signal`.
+(step 4c, #509) were removed by #828. The worker never calls the feed, and since #835 nothing of the worker
+calls the route: its callers are the bot's analysis card and the signals' `h1`.
 
 Nobody has shown that this algorithm makes money. It is a technical baseline: the defaults are not
 tuned; the stand (#381, [signal-stand.md](signal-stand.md)) backtests it on the broker's candle
@@ -66,8 +66,8 @@ A wrong `intervalMs`, `nowMs` or `digits` throws a `RangeError`; `digits` above
 `MAX_PAIR_DIGITS` too (D25): the catalog's live range is 2–7, and at 10 `atr × 10^digits` stays
 finite and exact, where `10^309` would be `Infinity`, pass the tick floor and print `null` in the
 journal. The wire schema of a pair does not bound it — that would drop the whole catalog for one
-pair — so such a pair is refused per pair: the route's 500 (the candle scanner's `signal scan failed` until #828),
-the worker's `backend_status` hold. So do wrong parameters, at `createSignalDecider`. A bad candle
+pair — so such a pair is refused per pair: the route's 500 (the candle scanner's `signal scan failed` until #828;
+the worker's `backend_status` hold until #835). So do wrong parameters, at `createSignalDecider`. A bad candle
 never throws.
 
 ## Data policy
@@ -495,14 +495,11 @@ no error (`signal-routes.test.ts` R10–R17, R22).
 ([h1.md](h1.md#the-scanner-and-the-signals-list-828)), read right after the feed answered (an H1
 signal lives a second, the feed may take up to `SIGNAL_FETCH_BUDGET_MS`; R23); null without a
 signal on the current second or without the data socket (no scanner). The bot's card takes its
-direction from it and its rows from the candle decision. `record: true` is sent only by a trading session's worker (#666,
-[trade-log.md](trade-log.md#the-record-of-post-tradingsignal)): a `decided` answer then carries
-`record: { entry, lastTick }` — the whole journal entry the decision was computed from and the
-pair's newest data-socket tick when the route answered (`null` without `BROKER_WS_URL` or before
-the pair's first tick); without the flag the body is exactly as before (`signal-routes.test.ts`
-R19–R21). The worker reads `record` apart from the answer: a record that fails its schema or is not
-the answer's decision, pair and interval is dropped with a `warn` and the answer still trades
-(`backend.test.ts` B7). Any other value of `record` is a 400. Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
+direction from it and its rows from the candle decision. `record: true` and the record of the answer (#666,
+[trade-log.md](trade-log.md#the-record-of-post-tradingsignal-removed-in-835)) were removed in #835
+with the worker's candle path: an older worker's `record` is an unknown key, dropped like any other
+(`signal.test.ts` S-rec1′); a `record` in an answer is refused by the response schema (S-rec2′).
+Unknown keys are dropped (`z.object`), so an older bot's or backend's body passes
 (R3). After the shape, the route looks the pair up in the
 backend's pairs cache (the one `GET /trading/pairs` serves) for its `digits` (#379), before any
 chart GET; neither refusal below is journalled, no decision was made. Whether the pair is open or
@@ -510,7 +507,7 @@ accepts a duration stays the caller's check: an analysis of a closed pair is all
 
 | Evaluation | Status | Body (`tradingSignalResponseSchema`) |
 |---|---|---|
-| `decided` | 200 | `{ outcome: 'decided', params, decision, indicators?, record?, h1 }` (`record` only for `record: true`, #666; `h1` always, #828): the decider's parameters, so the screen names `EMA9`/`EMA21` from them, the decision, and the [display indicators](#display-indicators-482), absent when the unbroken tail of the response did not pass the candle checks (`signal-routes.test.ts` R3b, R6) |
+| `decided` | 200 | `{ outcome: 'decided', params, decision, indicators?, h1 }` (`h1` always, #828): the decider's parameters, so the screen names `EMA9`/`EMA21` from them, the decision, and the [display indicators](#display-indicators-482), absent when the unbroken tail of the response did not pass the candle checks (`signal-routes.test.ts` R3b, R6) |
 | `fetch_failed` | 200 | `{ outcome: 'fetch_failed', code, retryAfterSec?, h1 }`; `status` and the request facts stay in the feed's `warn` line |
 | a body that fails the schema | 400 | `{ error: 'validation', issues }` |
 | no catalog snapshot, or not `fresh` | 503 | `{ error: 'catalog_unavailable' }` (`TradingSignalErrorCode.CatalogUnavailable`, the pairs route's string); the feed is not called (`signal-routes.test.ts` R7) |
@@ -520,8 +517,8 @@ accepts a duration stays the caller's check: an analysis of a closed pair is all
 
 A broker failure is a 200 with an outcome, not an HTTP error: the bot's client keeps only `error`
 from a non-2xx body, and `retryAfterSec` has to reach the user. The body is built from named
-fields; the journal series leaves the backend only in a session's `record` (#666), which the
-worker stores in `signal_decisions`.
+fields; the journal series leaves the backend only in the trade log's own rows (the driver's and the
+start route's, [trade-log.md](trade-log.md)); the `record` of #666 is gone since #835.
 
 | Outcome | What the caller (#126, [bot-demo.md](bot-demo.md#the-analysis)) does |
 |---|---|
@@ -529,7 +526,7 @@ worker stores in `signal_decisions`.
 | `h1` null | the wait for a signal (#664), with the feature lines when the candle decision has them |
 | `fetch_failed` `rate_limited` | as by `h1`; no log line |
 | any other `fetch_failed` code | as by `h1`, and logs `warn` `signal not evaluated` with `signalCode` |
-| 400, 401, 409, 500, 503, a timeout, a broken body | the bot shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error; the worker's session holds back `TRADING_SESSION_RETRY_MS` (`backend_status`), and its next attempt's pairs read stops `pair_unavailable` if the pair is gone. Both read a fresh catalog before asking, so the 503 and the 409 are races |
+| 400, 401, 409, 500, 503, a timeout, a broken body | the bot shows the analysis as unavailable and logs `warn` `signal not evaluated` with the error. The bot reads a fresh catalog before asking, so the 503 and the 409 are races |
 
 `intervalForDuration(durationSec)` (shared) picks the interval for a trade's duration: the longest
 table interval not above it, the shortest (`5s`) below it. A 5 s trade gets `5s` and a 15 s trade

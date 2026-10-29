@@ -1,12 +1,10 @@
 import {
   BROKER_BALANCE_SLA_MS,
-  CANDLE_CLOSE_SLACK_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_NO_SIGNAL_CANDLES,
   SIGNAL_CHART_INTERVAL_MS,
   SIGNAL_SCAN_INTERVALS,
   SIGNAL_SHORTEST_INTERVAL_MS,
-  TRADING_SIGNAL_BUDGET_MS,
 } from '@binarius/shared';
 import { BROKER_REST_TIMEOUT_MS } from '@binarius/broker-rest';
 import { isTimerMs } from '@binarius/broker-socket';
@@ -15,18 +13,10 @@ import { isTimerMs } from '@binarius/broker-socket';
 // bounding one thing:
 //   TRADING_SESSION_TICK_MS             — the scan interval: the three stop sweeps, the scan, the attempts
 //   TRADING_SESSION_BATCH_SIZE          — runnable sessions attempted per tick, one after another
-//   TRADING_SESSION_ATTEMPT_TIMEOUT_MS  — how long the tick waits for one attempt: the pairs GET,
-//                                         the signal POST, the statements
+//   TRADING_SESSION_ATTEMPT_TIMEOUT_MS  — how long the tick waits for one attempt: the pairs GET
+//                                         and the statements
 //   TRADING_SESSION_PAIRS_TIMEOUT_MS    — the pairs GET (a cache read on the backend)
 //   TRADING_SESSION_RETRY_MS            — the hold-back after a transient failure or a throw
-//   CANDLE_CLOSE_SLACK_MS (shared)      — how long after a candle boundary the signal is asked
-//                                         again after no_signal: the scanner's own
-//                                         scan moment (#697). That hold is not rounded up to a
-//                                         tick; a one-off timer wakes the tick at its end. The
-//                                         backend's cache keeps a decision until the boundary on
-//                                         its own clock; both processes run on one host (one
-//                                         kernel clock), so the two boundaries agree within the
-//                                         slack
 //   SESSION_MAX_DURATION_MS (shared)    — the session's deadline from started_at (database clock);
 //                                         the start route and the CLI refuse a session that
 //                                         cannot fit it in its strategy's worst case
@@ -35,20 +25,19 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         orchestrator's checks: its driver opens the trades, the
 //                                         orchestrator only stops it (cycles, the sizer, the
 //                                         pair, no_signal_timeout - #775)
-//   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its signal interval a session waits
-//                                         for a signal before it stops with no_signal_timeout
-//                                         (#509, in candles since #637), from the later of
-//                                         started_at and its last intent's change (database clock)
-// The chain: both backend calls fit one attempt (PAIRS + SIGNAL_BUDGET < ATTEMPT); a held-back
-// session skips at least one tick (TICK < RETRY); an H1 session is checked again no sooner than
-// the next tick and before a hold-back would end (TICK <= H1_CHECK < RETRY); the candle wait never skips a candle
-// (SLACK < the shortest interval, 5s since #313); the no-signal count is an integer >= 2, so a
+//   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its duration a session waits on a
+//                                         closed pair (the attempt) and without an H1 signal (the
+//                                         driver) before no_signal_timeout (#509, in candles since
+//                                         #637), from the later of started_at and its last
+//                                         intent's change (database clock)
+// The chain: the pairs GET fits one attempt (PAIRS < ATTEMPT); a held-back session skips at least
+// one tick (TICK < RETRY); an H1 session is checked again no sooner than the next tick and before
+// a hold-back would end (TICK <= H1_CHECK < RETRY); the no-signal count is an integer >= 2, so a
 // session gets several decisions before the limit; a hold-back never outlives the shortest limit
 // (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (5 s since #685, the one
-// duration the bot offers) the limit comes before the deadline (NO_SIGNAL x 5 s < MAX_DURATION); a
-// 15 s session of the CLI or from before #685 waits 20 x 15 s, still before it; on 5m and longer
-// it does not, and the deadline ends the session (accepted risk, docs/trading-session.md -> The
-// no-signal limit); NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
+// duration an H1 session has) the limit comes before the deadline (NO_SIGNAL x 5 s <
+// MAX_DURATION); other durations exist only on v1-v3 rows, which the orchestrator stops
+// invalid_settings since #835; NO_SIGNAL x the longest candle (1h) stays a timer value, the bound of the
 // SQL ::int cast; the balance wait after a settlement (#696) ends at the no-signal limit counted
 // from that settlement, and the backend's REST refresh (its interval at most the SLA) and one GET
 // fit before it (BROKER_BALANCE_SLA + BROKER_REST_TIMEOUT < NO_SIGNAL x the shortest candle);
@@ -66,7 +55,6 @@ export interface SessionOrchestratorConfig {
   batchSize: number;
   attemptTimeoutMs: number;
   retryMs: number;
-  candleSlackMs: number;
   h1CheckMs: number;
   maxDurationMs: number;
   noSignalCandles: number;
@@ -77,7 +65,6 @@ export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Objec
   batchSize: TRADING_SESSION_BATCH_SIZE,
   attemptTimeoutMs: TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
   retryMs: TRADING_SESSION_RETRY_MS,
-  candleSlackMs: CANDLE_CLOSE_SLACK_MS,
   h1CheckMs: TRADING_SESSION_H1_CHECK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
@@ -96,17 +83,15 @@ export function sessionOrchestratorConfigHolds(
     isTimerMs(config.tickMs) &&
     isTimerMs(config.attemptTimeoutMs) &&
     isTimerMs(config.retryMs) &&
-    isTimerMs(config.candleSlackMs) &&
     isTimerMs(config.h1CheckMs) &&
     isTimerMs(config.maxDurationMs) &&
     isTimerMs(pairsTimeoutMs) &&
     Number.isSafeInteger(config.batchSize) &&
     config.batchSize >= 1 &&
-    pairsTimeoutMs + TRADING_SIGNAL_BUDGET_MS < config.attemptTimeoutMs &&
+    pairsTimeoutMs < config.attemptTimeoutMs &&
     config.tickMs < config.retryMs &&
     config.tickMs <= config.h1CheckMs &&
     config.h1CheckMs < config.retryMs &&
-    config.candleSlackMs < SIGNAL_SHORTEST_INTERVAL_MS &&
     Number.isSafeInteger(config.noSignalCandles) &&
     config.noSignalCandles >= 2 &&
     config.retryMs < config.noSignalCandles * SIGNAL_SHORTEST_INTERVAL_MS &&

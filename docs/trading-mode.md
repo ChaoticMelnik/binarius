@@ -71,11 +71,10 @@ statement that locks the `users` row (`trading-session-ops.db.test.ts` C6, C6b, 
 committed before the creation's lock is seen by the comparison, one after it waits and then stops
 the new session.
 
-The orchestrator maps `real_mode_off` to a stop `account_unavailable` with `code:
-real_mode_off` (`orchestrator.db.test.ts` E9i: a `trading_mode` written by hand under a real
-session). A switch through `setTradingMode` during an attempt stops the session `user_stopped`
-first; the attempt's reserve then meets `real_mode_off`, whose stop finds the row already stopped
-and logs nothing (E9j). A demo session after a switch to real is ended by the switch itself.
+The driver maps `real_mode_off` through `SESSION_INTENT_REFUSALS` to a stop `account_unavailable`
+(the orchestrator did until #835; `trade-intent-ops.db.test.ts` for the refusal). A switch through
+`setTradingMode` stops the session `user_stopped` itself. A demo session after a switch to real is
+ended by the switch itself.
 
 ## The route
 
@@ -365,8 +364,8 @@ Against the mock broker only, `DEMO_ONLY` unset, with the stand of
 2. `/menu` shows REAL, the real hint and «🚀 Торговать»; «Сигналы сейчас»
    has no «запустит цикл».
 3. A pair opens the launch screen with «🚀 Запустить цикл · REAL» and the real stake; the press
-   starts a real session («💼 Реальная сессия», the worker's `trading session intent created`
-   lines with `mode: real`, the mock broker's trades `is_demo: false`). The analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
+   starts a real session («💼 Реальная сессия», `trade_intents.mode = 'real'` of the session's
+   intents, the mock broker's trades `is_demo: false`). The analysis ends with «Реальный режим: сделка идёт на реальные деньги»; «➕ Ещё» shows
    «… · $1.00 · REAL» and «💵 Сумма»; the press gives «💼 Реальная сделка». The manual choice
    reads «🧭 Выбор пары». The real stake (#326): «💵 Сумма» or «💼 Реал» in `/settings` opens the
    real picker («💼 Сумма реальной сделки», «Реальный баланс»); after `$5` is saved the hint reads

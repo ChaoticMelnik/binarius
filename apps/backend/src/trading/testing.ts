@@ -1,14 +1,7 @@
 // Test-only fixtures for the trading routes. Compiled by `tsc -b` alongside the *.test.ts files
 // next to it and imported by no runtime module.
 
-import { signalRecordFixture } from '@binarius/db/testing';
-import {
-  NoSignalReason,
-  SessionStakeStrategy,
-  SignalKind,
-  TradeAction,
-  type PairsCatalogView,
-} from '@binarius/shared';
+import { SessionStakeStrategy, type PairsCatalogView } from '@binarius/shared';
 import type { SignalEvaluation } from '@binarius/signal';
 import type { H1Driver, H1Reading } from '../h1/driver';
 import type { PairsRoutesDeps } from './pairs-routes';
@@ -53,30 +46,6 @@ export function fakeSignalFeed(answer: SignalEvaluation | (() => Promise<SignalE
   return { feed, calls };
 }
 
-// A decided evaluation of `kind` for the session start's signal step (#509), which reads the
-// decision's kind and a signal's direction (#568), and records the whole entry (#666)
-export const sessionSignalEvaluation = (
-  kind: SignalKind,
-  action: TradeAction = TradeAction.Up,
-): SignalEvaluation => {
-  const { entry } = signalRecordFixture();
-  return {
-    outcome: 'decided',
-    entry: {
-      ...entry,
-      decision:
-        kind === SignalKind.Signal
-          ? { ...entry.decision, kind, action }
-          : {
-              kind,
-              version: 'v2',
-              reason: NoSignalReason.InsufficientCandles,
-              detail: { closedCandles: 2, required: 50 },
-            },
-    },
-  } as SignalEvaluation;
-};
-
 // for suites that never call POST /trading/signal
 export const unusedSignalDeps = (): SignalRoutesDeps => ({
   feed: {
@@ -87,7 +56,6 @@ export const unusedSignalDeps = (): SignalRoutesDeps => ({
   catalog: fakeCatalog(undefined),
   internalApiToken: PAIRS_TEST_TOKEN,
   lastAnalysis: recordingLastAnalysis().lastAnalysis,
-  ticks: undefined,
   h1: undefined,
 });
 

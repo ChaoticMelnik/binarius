@@ -486,9 +486,9 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
   (docs/trade-intent-transport.md). #274 shipped (`not_found` on a proven absence, demo). #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
   keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open
-  while the next attempt comes within `BALANCE_WATCH_WINDOW_MS` (10 min): a CLI `fixed` session
-  with `DURATION_SEC` ≥ 900 waits for a 15m–1h candle after `no_signal` and can drop out, its next
-  stake then sized on the stored snapshot and sent over REST
-  ([trading-session.md → The orchestrator](trading-session.md#the-orchestrator)).
+  while the next attempt comes within `BALANCE_WATCH_WINDOW_MS` (10 min); its hold of
+  `TRADING_SESSION_H1_CHECK_MS` keeps it inside (the candle waits of 15m–1h sessions that could
+  drop out ended with the candle path in #835;
+  [trading-session.md → The orchestrator](trading-session.md#the-orchestrator)).
 - The worker's sessions do not read `price.update`; the backend's data socket does (#404), and the
   signal feed reads its candles (#405). E2 proves the subscription pipe only.
