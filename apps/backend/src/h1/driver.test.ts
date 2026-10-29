@@ -159,8 +159,8 @@ interface Harness {
   series: ReturnType<typeof scriptedSeries>;
   listed: ActiveH1Session[];
   histories: Map<string, SessionHistory | undefined>;
-  // the session's balance read (#775): undefined is no snapshot
-  balance: { read: SessionBalanceRead | undefined };
+  // the session's balance read (#775): undefined is no snapshot; onRead runs at each read
+  balance: { read: SessionBalanceRead | undefined; onRead?: () => void };
   creates: CreateSessionIntentInput[];
   records: SignalDecisionInput[];
   stops: { id: string; reason: string }[];
@@ -214,7 +214,7 @@ async function harness(
   const stopAnswers: (() => Promise<unknown>)[] = [];
   const historyReads = { n: 0 };
   const listAnswers: (() => Promise<ActiveH1Session[]>)[] = [];
-  const balance: { read: SessionBalanceRead | undefined } = {
+  const balance: { read: SessionBalanceRead | undefined; onRead?: () => void } = {
     read: {
       available: decimalStringSchema.parse('1000'),
       minTradeAmount: decimalStringSchema.parse('1'),
@@ -280,7 +280,10 @@ async function harness(
         historyReads.n += 1;
         return Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory());
       },
-      balance: () => Promise.resolve(balance.read),
+      balance: () => {
+        balance.onRead?.();
+        return Promise.resolve(balance.read);
+      },
       createIntent: (input) => {
         creates.push(input);
         const answer = answers.shift();
@@ -1572,17 +1575,37 @@ describe('the entry hold of an H1 intent (#836)', () => {
     return reading.facts;
   };
 
-  it("H1-DR51: a start on an old reading holds to the second's close + 1 s; the deadline runs from the creation", async () => {
+  it("H1-DR51: a start on an old reading holds to the second's close + 1 s; the deadline runs from the reading's taken_at, not from the creation", async () => {
     const h = await harness({ sessions: [] });
     h.feed(A, T, ramp(1));
-    // the second closed at F + 300; the reading is taken 1.5 s after F, past the hold
+    // the second closed at F + 300; the reading is taken 1.5 s after F, past the hold, and the
+    // creation comes 1.5 s after the reading
     clock.now = F + 1_500;
+    h.balance.onRead = () => {
+      clock.now += 1_500;
+    };
     h.driver.adopt(sessionOf('s1'), { facts: readingAt(h), pair: { payout: 96, symbol: `P${A}` } });
     await flush();
     expect(h.creates).toHaveLength(1);
     expect(h.creates[0]).toMatchObject({
       submitNotBeforeAt: new Date(F + 1_300),
       submitDeadlineAt: new Date(F + 1_500 + BUDGET_MS),
+    });
+  });
+
+  it('H1-DR55: the deadline runs from the decision, not from a slow creation', async () => {
+    const h = await harness();
+    // the second closes at F + 300, its decision is taken at F + 320; the creation comes after a
+    // balance read that takes 1.5 s
+    h.balance.onRead = () => {
+      clock.now += 1_500;
+    };
+    h.feed(A, T, ramp(1));
+    await flush();
+    expect(h.creates).toHaveLength(1);
+    expect(h.creates[0]).toMatchObject({
+      submitNotBeforeAt: new Date(F + 1_300),
+      submitDeadlineAt: new Date(F + 1_300 + BUDGET_MS),
     });
   });
 

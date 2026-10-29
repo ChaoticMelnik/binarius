@@ -2397,7 +2397,7 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
         action: 'up',
         signalDecisionId: intentRow.id,
         // #836: the series' clock closed F at F + 500 (advance), held 1 s; the budget from the
-        // hold's end, ahead of the creation at F + 600
+        // hold's end, ahead of the reading's taken_at
         submitNotBeforeAt: new Date(F + 1_500),
         submitDeadlineAt: new Date(F + 1_500 + BUDGET_MS),
       });

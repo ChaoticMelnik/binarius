@@ -252,11 +252,12 @@ export const H1_SERIES_TICK_MS = 100;
 export const H1_SERIES_CAPACITY_SEC = 320;
 
 // --- The H1 driver (#707, docs/h1.md -> The driver) -----------------------------------------------
-// H1_SUBMIT_BUDGET_MS: an intent's submit_deadline_at is max(submit_not_before_at, its creation) +
-// this (#836: the budget runs from the end of the entry's hold); the worker's take after it
-// rejects the intent entry_window_missed without a broker call. It bounds only the wait before the
-// take; the submit after the take runs under the worker's own timeouts. The cap is the entry
-// window's width: a take at the budget's end after the hold stays inside +2 s
+// H1_SUBMIT_BUDGET_MS: an intent's submit_deadline_at is max(submit_not_before_at, its decision's
+// taken_at_ms) + this (#836: the budget runs from the later of the hold's end and the decision,
+// never from the creation); the worker's take after it rejects the intent entry_window_missed
+// without a broker call. It bounds only the wait before the take; the submit after the take runs
+// under the worker's own timeouts. The cap is the entry window's width: a take at the budget's end
+// after the hold stays inside +2 s
 export const DEFAULT_H1_SUBMIT_BUDGET_MS = 700;
 export const MIN_H1_SUBMIT_BUDGET_MS = 100;
 export const MAX_H1_SUBMIT_BUDGET_MS = (H1_ENTRY_WINDOW_SEC.to - H1_ENTRY_WINDOW_SEC.from) * 1_000;

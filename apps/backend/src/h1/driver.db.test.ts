@@ -241,11 +241,11 @@ describe('the H1 driver on the database (#707)', () => {
       params: expect.objectContaining({ set: 'session', entryDelaySec: 1, expirySec: 5 }),
     });
     // #836: the second closed at f + 300, held 1 s; the budget runs from the later of the hold
-    // and the creation (the real clock here)
+    // and the decision's taken_at
     expect(intent!.submitNotBeforeAt!.getTime()).toBe(f + 1_300);
-    const budgetFrom = intent!.submitDeadlineAt!.getTime() - BUDGET_MS;
-    expect(budgetFrom).toBeGreaterThanOrEqual(f + 1_300);
-    expect(budgetFrom).toBeLessThanOrEqual(Math.max(f + 1_300, Date.now()));
+    expect(intent!.submitDeadlineAt!.getTime()).toBe(
+      Math.max(f + 1_300, row!.takenAtMs) + BUDGET_MS,
+    );
     const events = await tmp.db
       .select({ id: outboxEvents.id })
       .from(outboxEvents)

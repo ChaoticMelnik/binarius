@@ -83,7 +83,8 @@ export interface H1DriverConfig {
   // the period of series.advance(): the driver's tick alone closes quiet seconds
   tickMs: number;
   logMs: number;
-  // submit_deadline_at = max(submit_not_before_at, the creation) + this (H1_SUBMIT_BUDGET_MS, #836)
+  // submit_deadline_at = max(submit_not_before_at, the decision's taken_at_ms) + this
+  // (H1_SUBMIT_BUDGET_MS, #836)
   submitBudgetMs: number;
   // current() reads the newest closed second f only while now - f is at most this
   // (H1_START_SECOND_MAX_AGE_MS, #796)
@@ -809,13 +810,15 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
         durationSec: settings.durationSec,
         decision: row(SignalDecisionOutcome.Intent, null),
         ...(notBeforeMs === null ? {} : { submitNotBeforeAt: new Date(notBeforeMs) }),
-        // the deadline is the signal's (#670): the budget from the earliest moment the worker may
-        // take, the hold's end or the creation when the hold is already behind (an old reading);
-        // the repeat, as a regular session's Шаг 2, and the shown direction, which has no live
-        // entry to protect, have none
+        // the deadline is the signal's (#670): the budget from the later of the hold's end and the
+        // decision's moment (signal.takenAtMs: the second's decision, or the start's reading), never
+        // this trade's own clock, read after the awaits above; the repeat, as a regular session's
+        // Шаг 2, and the shown direction, which has no live entry to protect, have none
         ...(signal !== null
           ? {
-              submitDeadlineAt: new Date(Math.max(notBeforeMs!, takenAtMs) + config.submitBudgetMs),
+              submitDeadlineAt: new Date(
+                Math.max(notBeforeMs!, signal.takenAtMs) + config.submitBudgetMs,
+              ),
             }
           : {}),
       });

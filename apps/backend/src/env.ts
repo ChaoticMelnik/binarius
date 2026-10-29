@@ -88,8 +88,8 @@ export interface Env {
   // the stake strategy frozen into every new session's settings (#450); martingale by default
   sessionStakeStrategy: SessionStakeStrategy;
   // the H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): an intent's
-  // submit_deadline_at is max(submit_not_before_at, its creation) + this (#836); an empty value
-  // stops the start
+  // submit_deadline_at is max(submit_not_before_at, its decision's taken_at_ms) + this (#836); an
+  // empty value stops the start
   h1SubmitBudgetMs: number;
   // the origins the cashier widget may be served from (#11); default: the broker platform's origin
   depositWidgetOrigins: string[];
