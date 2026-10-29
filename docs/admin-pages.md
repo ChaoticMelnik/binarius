@@ -365,7 +365,8 @@ An empty value is shown as «—»; the trader id, the payment id and the amount
 **The raw postback is not shown.** Since #141 a deposit is one row per payment and each delivery's
 query is a row of `postback_deliveries` ([docs/postbacks.md](postbacks.md)), which no admin read
 selects; the row's strict schema (`adminDepositViewSchema`) has no key for it. The journal is read
-with `psql` ([docs/postbacks.md](postbacks.md) → Visibility).
+with `psql` ([docs/postbacks.md](postbacks.md) → Visibility). Neither is `verification` (#142):
+every row the route writes carries `url_secret`, so the column would say nothing on the page.
 
 **The owner is `deposit_events.user_id` alone.** An unattributed postback has neither a user nor an
 account, only its trader id — the account that trader confirms later takes it over

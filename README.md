@@ -411,10 +411,12 @@ failed publish, for example). The bot also publishes them at every start. What t
 ## Postbacks
 
 The broker's Deposit and FTD postbacks arrive on `GET /postbacks/binodex/<secret>`, a route the
-backend registers only while `POSTBACK_URL_SECRET` is set. Each delivery is journaled and each
-payment becomes one deposit; nothing is credited yet (#386). Deposits are on the admin page
+backend registers only while `POSTBACK_URL_SECRET` is set; the secret is the authenticity
+mechanism (#142). Each delivery is journaled and each payment becomes one deposit; nothing is
+credited yet (#386). Deposits are on the admin page
 «Депозиты»; what each delivery carried is in the `postback_deliveries` journal. The route, its
-answers, how to read the journal, the cabinet setup and the migration's precondition are in
+answers, authenticity and the secret's rotation, how to read the journal, the cabinet setup and
+the migrations are in
 [docs/postbacks.md](docs/postbacks.md).
 
 ## Backups

@@ -138,7 +138,7 @@ describe('GET /postbacks/binodex/:secret', () => {
     ]);
   });
 
-  it('logs one line per delivery with the outcome, never the secret or the url', async () => {
+  it('S3 logs one line per delivery with the outcome and the key id, never the secret or the url', async () => {
     const keys = fresh();
     lines.length = 0;
 

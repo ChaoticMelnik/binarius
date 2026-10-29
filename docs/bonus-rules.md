@@ -91,8 +91,9 @@ bonus-rule new-version deposit_bonus --kind deposit_bonus --params '{"tokensPerU
 - The CLI is the only writer besides the seed. SQL by hand passes it, but not the triggers.
 
 **The deposit rule.** No `deposit_bonus` version exists until the owner creates one with
-`new-version` above. Activate it only after #142 (postback authenticity) and #386 (the deposit
-credit) are in: before them nothing reads it.
+`new-version` above. Activate it only after #386 (the deposit credit) is in; the authenticity
+(#142) is the URL secret ([postbacks.md](postbacks.md) → Authenticity). Before #386 nothing reads
+it.
 
 ## Migration 0059 and the deploy
 
