@@ -59,8 +59,10 @@ const query = (
     Object.entries(full).filter((entry): entry is [string, string] => entry[1] !== undefined),
   );
 };
-const record = (q: PostbackQuery) =>
-  recordPostback(tmp.db, { source: PostbackSource.Binodex, query: q });
+const KEY_ID = '0123abcd';
+const OTHER_KEY_ID = '4567ef01';
+const record = (q: PostbackQuery, secretKeyId = KEY_ID) =>
+  recordPostback(tmp.db, { source: PostbackSource.Binodex, query: q, secretKeyId });
 
 const deliveriesOf = (column: 'postbackId' | 'depositEventId', value: string) =>
   tmp.db
@@ -268,6 +270,37 @@ describe('recordPostback — attribution', () => {
       client.release();
     }
     expect((await depositsOf(keys.paymentId))[0]).toMatchObject({ userId: owner.userId });
+  });
+});
+
+describe('recordPostback — authenticity (#142)', () => {
+  it('V1 journals the admitting key id and marks the deposit verified; a repeat keeps the deposit', async () => {
+    const keys = fresh();
+    const first = await record(query(keys));
+    expect(first).toMatchObject({ outcome: 'recorded' });
+    const [deposit] = await depositsOf(keys.paymentId);
+    expect(deposit).toMatchObject({ verification: 'url_secret' });
+
+    const repeat = await record(
+      query({ ...keys, postbackId: `${keys.postbackId}-again` }, { amount: '11' }),
+      OTHER_KEY_ID,
+    );
+    expect(repeat).toMatchObject({ outcome: 'repeated' });
+    expect(await depositsOf(keys.paymentId)).toEqual([deposit]);
+    const journal = await deliveriesOf('depositEventId', deposit!.id);
+    expect(journal.map((d) => [d.outcome, d.secretKeyId])).toEqual([
+      ['recorded', KEY_ID],
+      ['repeated', OTHER_KEY_ID],
+    ]);
+  });
+
+  it('V2 journals the key id on a rejected delivery', async () => {
+    const keys = fresh();
+    expect(await record(query(keys, { amount: '' }))).toMatchObject({ outcome: 'rejected' });
+    expect(
+      (await deliveriesOf('postbackId', keys.postbackId)).map((d) => [d.outcome, d.secretKeyId]),
+    ).toEqual([['rejected', KEY_ID]]);
+    expect(await depositsOf(keys.paymentId)).toEqual([]);
   });
 });
 

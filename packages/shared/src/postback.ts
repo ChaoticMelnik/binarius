@@ -30,6 +30,12 @@ export const PostbackRejectReason = {
 } as const;
 export type PostbackRejectReason = (typeof PostbackRejectReason)[keyof typeof PostbackRejectReason];
 
+// How the delivery that created a deposit_events row was authenticated (#142, docs/postbacks.md
+// -> Authenticity); packages/db builds the CHECK from it. NULL on a row means no authenticated
+// receipt wrote it.
+export const DepositVerification = { UrlSecret: 'url_secret' } as const;
+export type DepositVerification = (typeof DepositVerification)[keyof typeof DepositVerification];
+
 export const PostbackResponseOutcome = {
   Recorded: 'recorded',
   Repeated: 'repeated',
@@ -63,6 +69,10 @@ export const POSTBACK_URL_SECRET_MAX_LENGTH = 100;
 export const POSTBACK_URL_SECRET_PATTERN = new RegExp(
   `^[A-Za-z0-9_-]{32,${POSTBACK_URL_SECRET_MAX_LENGTH}}$`,
 );
+
+// The first 8 hex of the sha256 of the secret that admitted a delivery (secretKeyId in backend):
+// names the secret without being any part of it.
+export const POSTBACK_SECRET_KEY_ID_PATTERN = /^[0-9a-f]{8}$/;
 
 export const POSTBACK_QUERY_MAX_KEYS = 64;
 export const POSTBACK_QUERY_KEY_MAX = 64;

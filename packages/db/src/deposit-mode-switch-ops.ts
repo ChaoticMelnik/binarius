@@ -9,7 +9,10 @@ import type { DbExecutor } from './trade-intent-ops';
 // once, only where mode_switch is NULL, so one payment — one row (deposit_events_source_payment_idx)
 // — switches the mode at most once whatever its postbacks and passes.
 
-// Attributed rows with no outcome yet, oldest first (deposit_events_mode_switch_pending_idx).
+// Attributed rows with no outcome yet, oldest first (deposit_events_mode_switch_pending_idx: the
+// query's predicate implies the index's). Only rows an authenticated receipt wrote (#142,
+// docs/postbacks.md → Authenticity); verification never changes after the insert, so the pass need
+// not re-read it under the lock.
 export async function listDepositsAwaitingModeSwitch(
   db: Db,
   { limit }: { limit: number },
@@ -17,7 +20,13 @@ export async function listDepositsAwaitingModeSwitch(
   const rows = await db
     .select({ id: depositEvents.id })
     .from(depositEvents)
-    .where(and(isNotNull(depositEvents.userId), isNull(depositEvents.modeSwitch)))
+    .where(
+      and(
+        isNotNull(depositEvents.userId),
+        isNull(depositEvents.modeSwitch),
+        isNotNull(depositEvents.verification),
+      ),
+    )
     .orderBy(asc(depositEvents.createdAt), asc(depositEvents.id))
     .limit(limit);
   return rows.map((row) => row.id);

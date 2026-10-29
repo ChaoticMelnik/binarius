@@ -5,6 +5,7 @@ import {
   AuditAction,
   BrokerAccountStatus,
   DepositModeSwitch,
+  DepositVerification,
   NotificationLevel,
   PostbackSource,
   TradeMode,
@@ -804,6 +805,9 @@ describe('switchTradingModeOnDeposit (#686)', () => {
     userId: string | null,
     accountId: string | null,
     brokerUserId: string,
+    {
+      verification = DepositVerification.UrlSecret,
+    }: { verification?: DepositVerification | null } = {},
   ): Promise<string> => {
     const [row] = await tmp.db
       .insert(depositEvents)
@@ -814,6 +818,7 @@ describe('switchTradingModeOnDeposit (#686)', () => {
         brokerUserId,
         paymentId: `mode-pay-${String(++n)}`,
         amount: '10' as DecimalString,
+        verification,
       })
       .returning({ id: depositEvents.id });
     return row!.id;
@@ -941,6 +946,7 @@ describe('switchTradingModeOnDeposit (#686)', () => {
         a: brokerUserId,
         amount: '10',
       },
+      secretKeyId: '0123abcd',
     });
     expect(recorded.outcome).toBe('recorded');
     const [row] = await tmp.db
@@ -1141,6 +1147,21 @@ describe('switchTradingModeOnDeposit (#686)', () => {
       );
       expect(listed).not.toContain(unattributed);
       expect(listed).not.toContain(closed.depositEventId);
+    });
+
+    it('L4 skips a row no authenticated receipt wrote (verification NULL)', async () => {
+      const seeded = await seed();
+      const unverified = await depositRow(seeded.userId, seeded.accountId, seeded.brokerUserId, {
+        verification: null,
+      });
+      expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 })).not.toContain(
+        unverified,
+      );
+      await tmp.db
+        .update(depositEvents)
+        .set({ verification: DepositVerification.UrlSecret })
+        .where(eq(depositEvents.id, unverified));
+      expect(await listDepositsAwaitingModeSwitch(tmp.db, { limit: 1000 })).toContain(unverified);
     });
 
     it('L3 takes at most `limit` rows', async () => {

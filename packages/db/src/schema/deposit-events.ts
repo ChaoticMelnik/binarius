@@ -1,4 +1,9 @@
-import { DepositEventStatus, DepositModeSwitch, PostbackSource } from '@binarius/shared';
+import {
+  DepositEventStatus,
+  DepositModeSwitch,
+  DepositVerification,
+  PostbackSource,
+} from '@binarius/shared';
 import { sql } from 'drizzle-orm';
 import {
   check,
@@ -47,6 +52,10 @@ export const depositEvents = pgTable(
     // the pass and setTradingMode write it only where it is NULL
     modeSwitch: text('mode_switch').$type<DepositModeSwitch>(),
     modeSwitchAt: timestamp('mode_switch_at', { withTimezone: true }),
+    // how the delivery that created the row was authenticated (#142, docs/postbacks.md →
+    // Authenticity): `url_secret` from recordPostback; NULL — no authenticated receipt wrote the
+    // row, so the switch to real (#686) skips it and crediting (#386) must. Never updated.
+    verification: text('verification').$type<DepositVerification>(),
     createdAt: createdAt(),
   },
   (t) => [
@@ -82,6 +91,7 @@ export const depositEvents = pgTable(
     index('deposit_events_broker_user_id_idx').on(t.brokerUserId),
     inList('deposit_events_status_check', t.status, DepositEventStatus),
     inList('deposit_events_mode_switch_check', t.modeSwitch, DepositModeSwitch),
+    inList('deposit_events_verification_check', t.verification, DepositVerification),
     check(
       'deposit_events_mode_switch_pair_check',
       sql`(${t.modeSwitch} is null) = (${t.modeSwitchAt} is null)`,

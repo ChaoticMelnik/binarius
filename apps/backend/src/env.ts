@@ -95,6 +95,9 @@ export interface Env {
   depositWidgetOrigins: string[];
   // the postback route's path secret (#141); absent = the route is not registered
   postbackUrlSecret?: string;
+  // the previous secret, accepted beside the current one while a rotation lasts (#142,
+  // docs/postbacks.md -> Rotation)
+  postbackUrlSecretPrevious?: string;
   // the broker's Socket.IO URL (#404); absent = no market data socket
   brokerWsUrl?: string;
 }
@@ -165,11 +168,7 @@ export function parseEnv(source: EnvSource): Env {
       source,
       new URL(readEnv(source, 'BROKER_OAUTH_AUTHORIZE_URL')).origin,
     ),
-    // readEnv refuses '', while an absent variable leaves the route off
-    postbackUrlSecret:
-      source.POSTBACK_URL_SECRET === undefined
-        ? undefined
-        : parsePostbackSecret(readEnv(source, 'POSTBACK_URL_SECRET'), 'POSTBACK_URL_SECRET'),
+    ...parsePostbackSecrets(source),
     // as the worker reads it: readEnv refuses '', an absent variable leaves the source off
     brokerWsUrl:
       source.BROKER_WS_URL === undefined
@@ -304,6 +303,25 @@ function parsePostbackSecret(raw: string, name: string): string {
     );
   }
   return raw;
+}
+
+// readEnv refuses '', while an absent POSTBACK_URL_SECRET leaves the route off. The previous
+// secret (#142, docs/postbacks.md -> Rotation): equal values hide that no rotation happened, and a
+// previous secret with the route off is a mistake.
+function parsePostbackSecrets(
+  source: EnvSource,
+): Pick<Env, 'postbackUrlSecret' | 'postbackUrlSecretPrevious'> {
+  const read = (name: string) =>
+    source[name] === undefined ? undefined : parsePostbackSecret(readEnv(source, name), name);
+  const current = read('POSTBACK_URL_SECRET');
+  const previous = read('POSTBACK_URL_SECRET_PREVIOUS');
+  if (previous !== undefined && current === undefined) {
+    throw new Error('Env POSTBACK_URL_SECRET_PREVIOUS needs POSTBACK_URL_SECRET');
+  }
+  if (previous !== undefined && previous === current) {
+    throw new Error('Env POSTBACK_URL_SECRET_PREVIOUS must differ from POSTBACK_URL_SECRET');
+  }
+  return { postbackUrlSecret: current, postbackUrlSecretPrevious: previous };
 }
 
 const parsePort = (raw: string, name: string): number =>

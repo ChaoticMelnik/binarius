@@ -890,6 +890,7 @@ describe('late attachment of postbacks at activation (#141)', () => {
         a: traderId,
         amount: '5',
       },
+      secretKeyId: '0123abcd',
     });
     if (result.outcome !== 'recorded') throw new Error(`postback not recorded: ${result.outcome}`);
     return result.depositEventId;
