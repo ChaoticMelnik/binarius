@@ -154,10 +154,10 @@ describe('sessionCycleMessage (#551)', () => {
     expect(notice).toMatchObject({ kind: 'edit', messageId: 42, from: 1 });
     expect(textOf(notice)).toBe(
       [
-        '⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 2.00000 → 2.50000</pre>',
+        '⚡ Цикл 2 Шаг 1\n<pre>🔴 $5.00 → -$5.00\n📊 2.00000 → 2.50000</pre>',
         '🔄 Адаптивная ставка включена',
-        '⚡ Цикл 2 Шаг 2\n<pre>⚪ Ставка: $5.00 → $0.00, ставка вернулась\n📊 Цена: 3.00000 → 3.50000</pre>',
-        '⚡ Цикл 2 Шаг 3\n<pre>🟢 Ставка: $5.00 → +$9.60\n📊 Цена: 4.00000 → 4.50000</pre>',
+        '⚡ Цикл 2 Шаг 2\n<pre>⚪ $5.00 → $0.00\n↩️ ставка вернулась\n📊 3.00000 → 3.50000</pre>',
+        '⚡ Цикл 2 Шаг 3\n<pre>🟢 $5.00 → +$9.60\n📊 4.00000 → 4.50000</pre>',
       ].join('\n\n'),
     );
   });
@@ -196,15 +196,15 @@ describe('sessionCycleMessage (#551)', () => {
 
   it('prints the prices as the broker sent them when the catalog has no digits', () => {
     expect(textOf(sessionCycleMessage(claimed([W]), null, null, BotLanguage.Ru))).toContain(
-      '📊 Цена: 1 → 1.5',
+      '📊 1 → 1.5',
     );
   });
 
   describe('the length limit, under an override the registry accepts', () => {
-    // a loss's block of about 440 characters: eight losses of a cycle with the adaptive line fit in
+    // a loss's block of about 450 characters: eight losses of a cycle with the adaptive line fit in
     // BOT_TEXT_LIMIT, nine do not — 4079, inside the Bot API's 4096; the line under step 1 (#718)
     // is as long as it was above step 2
-    const PAD = 'ж'.repeat(380);
+    const PAD = 'ж'.repeat(394);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
         key === 'sessionTradeLost'
@@ -300,7 +300,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       split: false,
     });
     expect(textOf(notice)).toBe(
-      '⚡ Цикл 2 Шаг 1\n<pre>⏳ Ставка: $11.50 · ⬇️ Вниз · сделка открыта\n📊 Цена: 7.00000 → …</pre>',
+      '⚡ Цикл 2 Шаг 1\n<pre>⏳ $11.50 · ⬇️ Вниз\n📊 7.00000 → …</pre>',
     );
     // the first trade of the session
     expect(sessionCycleMessage(withOpen([]), martingale, 5, BotLanguage.Ru)).toMatchObject({
@@ -323,7 +323,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       '⚡ Цикл 2 Шаг 2',
       '⚡ Цикл 2 Шаг 3',
     ]);
-    expect(textOf(notice).split('\n\n').at(-1)).toContain('сделка открыта');
+    expect(textOf(notice).split('\n\n').at(-1)).toContain('<pre>⏳');
     // step 2 open after a lost step 1: the line under step 1, above the open block
     expect(
       heads(
@@ -347,7 +347,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
     );
     expect(result).toMatchObject({ kind: 'edit', messageId: 50, from: 2 });
     expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка включена']);
-    expect(textOf(result)).not.toContain('сделка открыта');
+    expect(textOf(result)).not.toContain('<pre>⏳');
   });
 
   it('a cycle message of another cycle, or none: a new message with the cycle so far', () => {
@@ -384,7 +384,8 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
   });
 
   describe('the length limit', () => {
-    const PAD = 'ж'.repeat(380);
+    // eight padded losses and the padded open block: 4074, past BOT_TEXT_LIMIT
+    const PAD = 'ж'.repeat(394);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
         key === 'sessionTradeLost' || key === 'sessionTradeOpen'
@@ -404,7 +405,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       );
       expect(split).toMatchObject({ kind: 'send', from: 8, split: true });
       expect(heads(split)).toEqual(['⚡ Цикл 1 Шаг 9']);
-      expect(textOf(split)).toContain('сделка открыта');
+      expect(textOf(split)).toContain('<pre>⏳');
     });
   });
 });
@@ -420,7 +421,7 @@ describe('sessionCycleMessage: the adaptive line (#718)', () => {
     const notice = sessionCycleMessage(claimed([W, L]), martingale, 5, BotLanguage.Ru);
     expect(notice).toMatchObject({ kind: 'send', from: 1 });
     expect(textOf(notice)).toBe(
-      `⚡ Цикл 2 Шаг 1\n<pre>🔴 Ставка: $5.00 → -$5.00\n📊 Цена: 2.00000 → 2.50000</pre>\n\n${ADAPTIVE}`,
+      `⚡ Цикл 2 Шаг 1\n<pre>🔴 $5.00 → -$5.00\n📊 2.00000 → 2.50000</pre>\n\n${ADAPTIVE}`,
     );
   });
 
@@ -672,10 +673,10 @@ describe('the session notices in English (#633)', () => {
     const text = `${settled}\n${opened}`;
     for (const line of [
       '⚡ Cycle 1 Step 1',
-      '<pre>🔴 Stake: $5.00 → -$5.00',
-      '<pre>⚪ Stake: $5.00 → $0.00, the stake returned',
-      '<pre>🟢 Stake: $5.00 → +$9.60',
-      `<pre>⏳ Stake: $11.50 · ${BOT_TEXT_SOURCES_EN.actionDown} · trade open`,
+      '<pre>🔴 $5.00 → -$5.00',
+      '<pre>⚪ $5.00 → $0.00\n↩️ the stake returned',
+      '<pre>🟢 $5.00 → +$9.60',
+      `<pre>⏳ $11.50 · ${BOT_TEXT_SOURCES_EN.actionDown}\n`,
       BOT_TEXT_SOURCES_EN.sessionAdaptiveStake,
     ]) {
       expect(text).toContain(line);

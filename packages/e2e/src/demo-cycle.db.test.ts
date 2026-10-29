@@ -128,7 +128,7 @@ const isSummary = (call: ApiCall) =>
 const isWaiting = (call: ApiCall) =>
   call.method === 'sendMessage' &&
   inlineButtons(call.payload).some((button) => /:w$/.test(button.callback_data ?? ''));
-const OPEN_MARK = 'сделка открыта';
+const OPEN_MARK = '<pre>⏳';
 
 it('runs /start → the email login → a demo session → its result', async () => {
   const reads = e2eReads(tmp.db);
@@ -407,7 +407,7 @@ it('runs /start → the email login → a demo session → its result', async ()
     ['🔴', '⏳'],
     ['🔴', '🟢'],
   ]);
-  expect(textOf(cycles[0]!)).toContain('сделка открыта');
+  expect(textOf(cycles[0]!)).toContain(OPEN_MARK);
   // the lost step 1 carries the adaptive line at once; the cycle's last text holds it once, between
   // the loss and the win (#718)
   const ADAPTIVE = '🔄 Адаптивная ставка включена';
