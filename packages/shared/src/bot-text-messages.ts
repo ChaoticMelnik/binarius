@@ -677,6 +677,14 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     limit: TELEGRAM_CAPTION_LIMIT,
     body: [k('pairWaiting'), pairScan, oneOf([], ['\n\n', k('pairWaitingAlternatives')])],
   },
+  // the session's wait for a signal (#860, session-notice-messages.ts → sessionWaitingMessage): a
+  // caption under the scanner's animation, with the session pair's scan block
+  {
+    id: 'sessionWaiting',
+    title: 'Сессия: сообщение ожидания',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [k('sessionWaitingSignal'), pairScan],
+  },
   // the list's wait (#859, scan-summary.ts → scanSummaryLines): a caption under the animation
   {
     id: 'signalsScanning',
@@ -804,10 +812,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   },
   {
     // the reply to «⏹» and to /stop of one session (#536, texts.ts → sessionStopReplyText): the
-    // session's end line, and the last trade's line by its status (texts.ts → LAST_TRADE_LINE)
+    // session's end line, and the last trade's line by its status (texts.ts → LAST_TRADE_LINE); a
+    // caption on the scanner's still under the session's wait since #860
     id: 'sessionStopReply',
     title: 'Ответ на остановку сессии',
-    limit: BOT_TEXT_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [
       anyOf(
         'sessionCompleted',

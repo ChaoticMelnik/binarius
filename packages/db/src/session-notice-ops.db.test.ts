@@ -27,6 +27,7 @@ import {
   claimSessionWaiting,
   clearSessionWaitingMessage,
   listPendingSessionNotices,
+  listSessionWaitingCaptions,
   readSessionWaitingMessage,
   recordSessionWaitingMessage,
   claimSummaryFallback,
@@ -1260,6 +1261,84 @@ describe('the waiting message (#536)', () => {
       .set({ telegramBlockedAt: null })
       .where(eq(users.id, blocked.seed.userId));
     expect(await pendingOf(blocked.session)).toMatchObject({ waitingStale: true });
+  });
+
+  // #860: the live waiting messages whose caption the sender's pass edits
+  describe('listSessionWaitingCaptions', () => {
+    const all = () => listSessionWaitingCaptions(tmp.db, { after: undefined, limit: 10_000 });
+    const captionOf = async (session: { id: string }) =>
+      (await all()).find((row) => row.sessionId === session.id);
+    // a live waiting message on its own slot, the session waiting for a signal
+    const live = async (target: Awaited<ReturnType<typeof seedSession>>) => {
+      await statusMessage(target.session, 7);
+      await tmp.db
+        .update(tradingSessions)
+        .set({ waitingMessageId: 50, waitingAfterMessage: 7 })
+        .where(eq(tradingSessions.id, target.session.id));
+      await noSignal(target);
+    };
+
+    it('N46 lists an active waiting session with a live id and a reachable user, nothing else', async () => {
+      const waits = await seedSession();
+      await live(waits);
+      expect(await captionOf(waits.session)).toMatchObject({ waitingMessageId: 50 });
+
+      const stale = await seedSession();
+      await live(stale);
+      await statusMessage(stale.session, 8);
+      expect(await captionOf(stale.session)).toBeUndefined();
+
+      const decided = await seedSession();
+      await live(decided);
+      await decide(decided, SignalDecisionOutcome.Intent);
+      expect(await captionOf(decided.session)).toBeUndefined();
+
+      const blocked = await seedSession();
+      await live(blocked);
+      await tmp.db
+        .update(users)
+        .set({ telegramBlockedAt: sql`now()` })
+        .where(eq(users.id, blocked.seed.userId));
+      expect(await captionOf(blocked.session)).toBeUndefined();
+
+      const stopped = await seedSession();
+      await live(stopped);
+      await stop(stopped.session, TradingSessionStopReason.UserStopped);
+      expect(await captionOf(stopped.session)).toBeUndefined();
+
+      const closed = await seedSession();
+      await live(closed);
+      await tmp.db
+        .update(tradingSessions)
+        .set({ finalNoticeSentAt: sql`now()` })
+        .where(eq(tradingSessions.id, closed.session.id));
+      expect(await captionOf(closed.session)).toBeUndefined();
+
+      const none = await seedSession();
+      await statusMessage(none.session, 7);
+      await noSignal(none);
+      expect(await captionOf(none.session)).toBeUndefined();
+    });
+
+    it('N47 pages by id: after a cursor, at most the limit, in id order', async () => {
+      for (let i = 0; i < 3; i += 1) await live(await seedSession());
+      const ids = (await all()).map((row) => row.sessionId);
+      expect(ids.length).toBeGreaterThanOrEqual(3);
+      expect(ids).toEqual([...ids].sort());
+      const page = await listSessionWaitingCaptions(tmp.db, { after: ids[0], limit: 2 });
+      expect(page.map((row) => row.sessionId)).toEqual(ids.slice(1, 3));
+    });
+
+    it('N48 carries the owner by the account, the language and the raw settings (Rule 13)', async () => {
+      const settings = { assetId: 7, anything: 'raw' };
+      const target = await seedSession(settings);
+      await live(target);
+      await tmp.db.update(users).set({ language: 'en' }).where(eq(users.id, target.seed.userId));
+      const row = await captionOf(target.session);
+      expect(String(row?.telegramUserId)).toBe(String(target.seed.telegramUserId));
+      expect(row?.language).toBe('en');
+      expect(row?.settings).toEqual(settings);
+    });
   });
 
   it('N20 a status message recorded after the cycle message (a relaunch) moves the slot (#587)', async () => {

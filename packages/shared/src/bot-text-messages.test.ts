@@ -139,6 +139,11 @@ describe('the assembled messages', () => {
     }
   });
 
+  // #860: the session's wait and the reply to its «⏹» are captions under the scanner's media
+  it.each(['sessionWaiting', 'sessionStopReply'])('bounds %s by the caption limit', (id) => {
+    expect(message(id).limit).toBe(TELEGRAM_CAPTION_LIMIT);
+  });
+
   it('#709 bounds the summary by the caption limit', () => {
     expect(message('sessionSummary').limit).toBe(TELEGRAM_CAPTION_LIMIT);
     expect(BOT_TEXT_MESSAGES.some((m) => m.id === 'sessionSummaryCaption')).toBe(false);

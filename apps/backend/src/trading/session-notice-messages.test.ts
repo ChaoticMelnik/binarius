@@ -600,14 +600,59 @@ describe('sessionSummaryMessage (#464)', () => {
   });
 });
 
-describe('sessionWaitingMessage (#536)', () => {
-  it('is the wait for a signal under the stop button marked as pressed under it', () => {
-    const id = '00000000-0000-4000-8000-000000000001';
+describe('sessionWaitingMessage (#536, #860)', () => {
+  const id = '00000000-0000-4000-8000-000000000001';
+  const PAIR = { assetId: 101, symbol: 'EUR/JPY' };
+  const list = (closeness: { assetId: number; pct: number }[]) => ({
+    scanned: 12,
+    summary: { streaming: true, scanning: 101, closeness },
+  });
+
+  it('SM1 without a scan: the header alone under the stop button marked as pressed under it', () => {
     const message = sessionWaitingMessage(id, BotLanguage.Ru);
     expect(message.text.value).toBe(RU_TEXTS.sessionWaitingSignal.value);
     expect(inlineButtons({ reply_markup: message.reply_markup })).toEqual([
       { text: RU_LABELS.sessionStopButton, callback_data: `session:stop:${id}:w` },
     ]);
+  });
+
+  it("SM2 with a scan: the header, the pair's closeness and the stages; a pair without a move waits for one", () => {
+    const close = sessionWaitingMessage(id, BotLanguage.Ru, {
+      list: list([
+        { assetId: 7, pct: 90 },
+        { assetId: 101, pct: 64 },
+      ]),
+      pair: PAIR,
+    });
+    expect(close.text.value).toBe(
+      '🔎 Ждём сигнал для следующей сделки…\n\n' +
+        '🛰 <b>Сканирую EUR/JPY</b> · движение 64 % от порога сигнала\n' +
+        '✅ Котировки  ✅ Движение цены  ⏳ Отбор сигнала',
+    );
+    expect(inlineButtons({ reply_markup: close.reply_markup })).toEqual([
+      { text: RU_LABELS.sessionStopButton, callback_data: `session:stop:${id}:w` },
+    ]);
+    const still = sessionWaitingMessage(id, BotLanguage.Ru, {
+      list: { scanned: 0, summary: { streaming: false, scanning: null, closeness: [] } },
+      pair: PAIR,
+    });
+    expect(still.text.value).toBe(
+      '🔎 Ждём сигнал для следующей сделки…\n\n' +
+        '🛰 <b>Сканирую EUR/JPY</b> · жду движение цены\n' +
+        '⏳ Котировки  ⏳ Движение цены  ⏳ Отбор сигнала',
+    );
+  });
+
+  it('SM3 with a scan in English', () => {
+    const message = sessionWaitingMessage(id, BotLanguage.En, {
+      list: list([{ assetId: 101, pct: 64 }]),
+      pair: PAIR,
+    });
+    expect(message.text.value).toBe(
+      `${BOT_TEXT_SOURCES_EN.sessionWaitingSignal}\n\n` +
+        '🛰 <b>Scanning EUR/JPY</b> · movement at 64 % of the signal threshold\n' +
+        '✅ Quotes  ✅ Price movement  ⏳ Signal selection',
+    );
   });
 });
 

@@ -148,6 +148,7 @@ export const BOT_TEXT_CATALOG = {
     g.Start,
     'Любой экран, когда backend не ответил: общий текст сбоя.',
     `⚠️ Сервис временно недоступен. Попробуй позже.`,
+    caption,
   ),
   blocked: html(
     g.Start,
@@ -1536,6 +1537,7 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: сообщение ожидания под сообщениями сессии, с кнопкой остановки, только пока сессия ждёт сигнал (последнее решение — «сигнала нет»); шлёт backend.',
     `🔎 Ждём сигнал для следующей сделки…`,
+    caption,
   ),
   sessionCompleted: html(
     g.Session,
@@ -1590,6 +1592,7 @@ export const BOT_TEXT_CATALOG = {
     g.Session,
     'Сессия: статус недоступен.',
     `⚠️ Статус сессии недоступен.`,
+    caption,
   ),
   sessionNoneActive: html(g.Session, '/stop: активных сессий нет.', `Активных сессий нет.`),
   sessionsStopped: html(

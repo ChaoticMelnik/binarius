@@ -2,11 +2,13 @@ import {
   BOT_TEXT_DEFAULT_SOURCES,
   BotLanguage,
   createBotTexts,
+  createScanTexts,
   createSessionTexts,
   type BotHtmlTexts,
   type BotPlainTexts,
   type BotTextKey,
   type BotTextSource,
+  type ScanTexts,
   type SessionTexts,
 } from '@binarius/shared';
 
@@ -29,10 +31,16 @@ interface ClientTexts {
   html: BotHtmlTexts;
   plain: BotPlainTexts;
   session: SessionTexts;
+  scan: ScanTexts;
 }
 const textsOf = (language: BotLanguage, source: BotTextSource<BotTextKey>): ClientTexts => {
   const { html, plain } = createBotTexts(source);
-  return { html, plain, session: createSessionTexts({ html, plain, language }) };
+  return {
+    html,
+    plain,
+    session: createSessionTexts({ html, plain, language }),
+    scan: createScanTexts({ html, plain, language }),
+  };
 };
 const liveTextsOf = (language: BotLanguage): ClientTexts =>
   textsOf(language, { sourceOf: (key) => active[language].sourceOf(key) });
@@ -45,3 +53,5 @@ export const clientTextsOf = (language: BotLanguage): BotHtmlTexts => TEXTS[lang
 export const clientLabelsOf = (language: BotLanguage): BotPlainTexts => TEXTS[language].plain;
 export const clientSessionTextsOf = (language: BotLanguage): SessionTexts =>
   TEXTS[language].session;
+// the scanner's lines of the session's wait (#860), the same builders as the bot's wait (#859)
+export const clientScanTextsOf = (language: BotLanguage): ScanTexts => TEXTS[language].scan;

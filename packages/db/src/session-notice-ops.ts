@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, notInArray, sql } from 'drizzle-orm';
 import {
   SessionTradeResult,
   SignalDecisionContext,
@@ -212,6 +212,53 @@ export async function listPendingSessionNotices(
     .orderBy(asc(tradingSessions.createdAt), asc(tradingSessions.id))
     .limit(limit);
   return rows;
+}
+
+export interface SessionWaitingCaption {
+  sessionId: string;
+  // the owner's, by the session's account (Rule 13), and the owner's language (#633)
+  telegramUserId: bigint;
+  language: BotLanguage;
+  // raw: the sender parses it
+  settings: unknown;
+  waitingMessageId: number;
+}
+
+// The live waiting messages whose caption the sender's pass may edit (#860, docs/bot-session.md →
+// The waiting message): an active session that still waits for a signal, its waiting message on
+// its current slot (not stale), notices not closed, and a reachable user (Rule 19). By id from
+// `after` on, so the pass goes round every session however many there are; at most `limit`.
+export async function listSessionWaitingCaptions(
+  db: Db,
+  { after, limit }: { after: string | undefined; limit: number },
+): Promise<SessionWaitingCaption[]> {
+  const rows = await db
+    .select({
+      sessionId: tradingSessions.id,
+      telegramUserId: users.telegramUserId,
+      language: users.language,
+      settings: sql<unknown>`${tradingSessions.settings}`,
+      waitingMessageId: tradingSessions.waitingMessageId,
+    })
+    .from(tradingSessions)
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .where(
+      and(
+        isNull(tradingSessions.finalNoticeSentAt),
+        eq(tradingSessions.status, TradingSessionStatus.Active),
+        isNotNull(tradingSessions.waitingMessageId),
+        isNull(users.telegramBlockedAt),
+        sql`${tradingSessions.waitingAfterMessage} = ${sessionSlotSql}`,
+        waitingForSignalSql,
+        after === undefined ? undefined : gt(tradingSessions.id, after),
+      ),
+    )
+    .orderBy(asc(tradingSessions.id))
+    .limit(limit);
+  return rows.flatMap(({ waitingMessageId, ...row }) =>
+    waitingMessageId === null ? [] : [{ ...row, waitingMessageId }],
+  );
 }
 
 // A settled trade as its message needs it. `outcome` is the figure after «→»: a win's stake plus

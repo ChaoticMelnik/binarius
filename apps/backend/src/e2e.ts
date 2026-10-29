@@ -11,6 +11,7 @@ export { createBrokerOAuthClient } from './broker/oauth-client';
 export { createBullmqPublisher } from './outbox/bullmq';
 export { OutboxPublisher } from './outbox/publisher';
 export { createSessionNoticeListener } from './trading/session-notice-listener';
+export { createScanMedia } from './trading/scan-media';
 export { createSessionNoticeSender } from './trading/session-notices';
 export type { TradingRoutesDeps } from './trading/routes';
 export { createScanPacer } from './signal/pacer';

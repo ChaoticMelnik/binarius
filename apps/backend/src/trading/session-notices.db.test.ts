@@ -1,5 +1,5 @@
 import { eq, isNull, sql } from 'drizzle-orm';
-import { HttpError } from 'grammy';
+import { HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -67,6 +67,7 @@ import {
   type CapturedApi,
 } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
+import { createScanMedia } from './scan-media';
 import { clientLabelsOf, clientTextsOf, setBotTextSources } from '../auth/texts';
 import type { BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import {
@@ -298,7 +299,14 @@ function sender(
     edited.add(payload);
     return true;
   });
+  // the waiting message (#860): the animation answered with its id and the file's id
+  captured.answers.set('sendAnimation', (payload) => {
+    messageIds += 1;
+    answered.set(payload, messageIds);
+    return { message_id: messageIds, animation: { file_id: RADAR_FILE_ID } };
+  });
   const lines: string[] = [];
+  const logger = pino(logOptions(level), { write: (line: string) => void lines.push(line) });
   const refreshCalls: Parameters<SessionNoticeSenderDeps['balance']['refresh']>[] = [];
   const notices = createSessionNoticeSender({
     db: tmp.db,
@@ -310,7 +318,8 @@ function sender(
         return Promise.resolve<BalanceRefreshOutcome>('unavailable');
       },
     },
-    logger: pino(logOptions(level), { write: (line: string) => void lines.push(line) }),
+    media: createScanMedia(logger),
+    logger,
     now: () => clock.now,
     sleep: async () => {},
     ...patch,
@@ -330,6 +339,7 @@ afterEach(async () => {
 });
 
 let messageIds = 0;
+const RADAR_FILE_ID = 'radar-file-id';
 // the id each answered send got, by its recorded payload
 const answered = new WeakMap<object, number>();
 // the edits Telegram applied (a refused one is recorded as a call too)
@@ -351,7 +361,7 @@ const sendsTo = (calls: readonly ApiCall[], target: Target) =>
     (call) => call.payload.chat_id === target.seed.telegramUserId && !isWaiting(call),
   );
 const waitingTo = (calls: readonly ApiCall[], target: Target) =>
-  callsTo(calls, 'sendMessage').filter(
+  callsTo(calls, 'sendAnimation').filter(
     (call) => call.payload.chat_id === target.seed.telegramUserId && isWaiting(call),
   );
 const deletesTo = (calls: readonly ApiCall[], target: Target) =>
@@ -415,13 +425,13 @@ const sequenceOf = (calls: readonly ApiCall[], target: Target) =>
   calls
     .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
     .map((call) =>
-      call.method === 'sendMessage'
-        ? isWaiting(call)
-          ? 'waiting'
-          : /Цикл/.test(pushedText(call.payload))
+      call.method === 'sendAnimation'
+        ? 'waiting'
+        : call.method === 'sendMessage'
+          ? /Цикл/.test(pushedText(call.payload))
             ? 'trade'
             : 'summary'
-        : call.method,
+          : call.method,
     );
 // each method's next calls answer these failures, in order; the rest go through
 function failNext(captured: CapturedApi, plan: Partial<Record<string, (ApiError | HttpError)[]>>) {
@@ -549,7 +559,8 @@ describe('the session notices (#464)', () => {
     // and each its own waiting message (#536) under them
     expect(waitingTo(captured.calls, first)).toHaveLength(1);
     expect(waitingTo(captured.calls, second)).toHaveLength(1);
-    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(5);
+    expect(callsTo(captured.calls, 'sendMessage')).toHaveLength(3);
+    expect(callsTo(captured.calls, 'sendAnimation')).toHaveLength(2);
   });
 
   it('D7 a trade on manual review: the trades before it, no summary; once settled, it and then the summary', async () => {
@@ -663,8 +674,10 @@ describe('the session notices in English (#633)', () => {
       '<pre>🟢 Stake: $5.00 → +$9.60',
     );
     const [waiting] = waitingTo(captured.calls, target);
-    expect(pushedText(waiting!.payload)).toBe(
-      clientTextsOf(BotLanguage.En).sessionWaitingSignal.value,
+    expect(waiting!.payload.caption).toBe(
+      `${clientTextsOf(BotLanguage.En).sessionWaitingSignal.value}\n\n` +
+        '🛰 <b>Scanning EUR/USD</b> · waiting for the price to move\n' +
+        '⏳ Quotes  ⏳ Price movement  ⏳ Signal selection',
     );
     expect(inlineButtons(waiting!.payload)[0]?.text).toBe(EN_LABELS.sessionStopButton);
 
@@ -687,6 +700,7 @@ describe('the session notices in English (#633)', () => {
       if (call.payload.chat_id !== target.seed.telegramUserId) continue;
       expect(pushedText(call.payload)).not.toMatch(CYRILLIC);
     }
+    expect(String(waiting!.payload.caption)).not.toMatch(CYRILLIC);
   });
 });
 
@@ -1563,6 +1577,11 @@ describe('the waiting message (#536)', () => {
   // every trade here is followed by a no_signal decision, so the session waits under it (#722);
   // the #722 describe below takes the other decisions
   const settled = settledWaiting;
+  // the caption without a scanner (#860): the session pair waits for a move, no stage passed
+  const WAITING_CAPTION =
+    `${RU_TEXTS.sessionWaitingSignal.value}\n\n` +
+    '🛰 <b>Сканирую EUR/USD</b> · жду движение цены\n' +
+    '⏳ Котировки  ⏳ Движение цены  ⏳ Отбор сигнала';
   const STOP = (target: Target) => ({
     text: RU_LABELS.sessionStopButton,
     callback_data: `session:stop:${target.session.id}:w`,
@@ -1614,8 +1633,8 @@ describe('the waiting message (#536)', () => {
     await notices.tick();
     const sent = waitingTo(captured.calls, target);
     expect(sent).toHaveLength(1);
-    expect({ ...sent[0]!.payload, text: pushedText(sent[0]!.payload) }).toMatchObject({
-      text: RU_TEXTS.sessionWaitingSignal.value,
+    expect(sent[0]!.payload).toMatchObject({
+      caption: WAITING_CAPTION,
       parse_mode: 'HTML',
       disable_notification: true,
     });
@@ -1829,7 +1848,7 @@ describe('the waiting message (#536)', () => {
       await statusMessage(target);
       await noSignal(target);
       const { notices, captured, logs } = sender();
-      failNext(captured, { sendMessage: [failure()] });
+      failNext(captured, { sendAnimation: [failure()] });
       await notices.tick();
       await notices.tick();
       expect(await waitingOf(target)).toEqual({ messageId: null, slot: STATUS_ID });
@@ -1848,7 +1867,7 @@ describe('the waiting message (#536)', () => {
     await noSignal(target);
     const { notices, captured, logs } = sender({ config: { maxAttempts: 3 } });
     failNext(captured, {
-      sendMessage: [telegramError(400), telegramError(400), telegramError(400)],
+      sendAnimation: [telegramError(400), telegramError(400), telegramError(400)],
     });
     for (let tick = 0; tick < 4; tick += 1) await notices.tick();
     expect(waitingTo(captured.calls, target)).toHaveLength(3);
@@ -1866,7 +1885,7 @@ describe('the waiting message (#536)', () => {
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured } = sender({}, clock);
-    failNext(captured, { sendMessage: [telegramError(429, 5)] });
+    failNext(captured, { sendAnimation: [telegramError(429, 5)] });
     await notices.tick();
     expect(await waitingOf(target)).toEqual({ messageId: null, slot: null });
     clock.now += 5_000;
@@ -1881,7 +1900,7 @@ describe('the waiting message (#536)', () => {
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured, logs } = sender();
-    failNext(captured, { sendMessage: [telegramError(403)] });
+    failNext(captured, { sendAnimation: [telegramError(403)] });
     await notices.tick();
     await notices.tick();
     expect(waitingTo(captured.calls, target)).toHaveLength(1);
@@ -1902,8 +1921,8 @@ describe('the waiting message (#536)', () => {
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured, logs } = sender();
-    const answer = captured.answers.get('sendMessage')!;
-    captured.answers.set('sendMessage', async (payload) => {
+    const answer = captured.answers.get('sendAnimation')!;
+    captured.answers.set('sendAnimation', async (payload) => {
       if (inlineButtons(payload).length > 0) {
         await stop(target, TradingSessionStopReason.UserStopped);
       }
@@ -2279,9 +2298,9 @@ describe('the waiting message (#536)', () => {
       arm: async () => {
         await statusMessage(a);
         await noSignal(a);
-        const answer = b.run.captured.answers.get('sendMessage')!;
+        const answer = b.run.captured.answers.get('sendAnimation')!;
         let done = false;
-        b.run.captured.answers.set('sendMessage', async (payload) => {
+        b.run.captured.answers.set('sendAnimation', async (payload) => {
           const toA = payload.chat_id === a.seed.telegramUserId;
           if (!done && toA && inlineButtons(payload).length > 0) {
             done = true;
@@ -2367,10 +2386,10 @@ describe('the waiting message (#536)', () => {
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured, logs } = sender();
-    const answer = captured.answers.get('sendMessage')!;
-    captured.answers.set('sendMessage', (payload) =>
+    const answer = captured.answers.get('sendAnimation')!;
+    captured.answers.set('sendAnimation', (payload) =>
       inlineButtons(payload).length > 0 && waitingTo(captured.calls, target).length === 1
-        ? { message_id: 0 }
+        ? { message_id: 0, animation: { file_id: RADAR_FILE_ID } }
         : answer(payload),
     );
     await notices.tick();
@@ -2390,8 +2409,8 @@ describe('the waiting message (#536)', () => {
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured, logs } = sender();
-    const answer = captured.answers.get('sendMessage')!;
-    captured.answers.set('sendMessage', async (payload) => {
+    const answer = captured.answers.get('sendAnimation')!;
+    captured.answers.set('sendAnimation', async (payload) => {
       if (inlineButtons(payload).length > 0) {
         await stop(target, TradingSessionStopReason.UserStopped);
       }
@@ -2438,8 +2457,8 @@ describe('the waiting message (#536)', () => {
       clock,
     );
     const sentAt = new Map<unknown, number>();
-    const answer = run.captured.answers.get('sendMessage')!;
-    run.captured.answers.set('sendMessage', (payload) => {
+    const answer = run.captured.answers.get('sendAnimation')!;
+    run.captured.answers.set('sendAnimation', (payload) => {
       if (inlineButtons(payload).length > 0) sentAt.set(payload.chat_id, clock.now);
       return answer(payload);
     });
@@ -2629,13 +2648,13 @@ describe("the open trade's block (#700)", () => {
     calls
       .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
       .map((call) =>
-        call.method === 'sendMessage'
-          ? isWaiting(call)
-            ? 'waiting'
-            : pushedText(call.payload).includes(OPEN_MARK)
+        call.method === 'sendAnimation'
+          ? 'waiting'
+          : call.method === 'sendMessage'
+            ? pushedText(call.payload).includes(OPEN_MARK)
               ? 'open'
               : 'trade'
-          : call.method,
+            : call.method,
       );
   async function blocked(target: Target) {
     await tmp.db
@@ -3031,15 +3050,15 @@ describe('the waiting message by the decision log, «⏹» under the open block 
     calls
       .filter((call) => call.payload.chat_id === target.seed.telegramUserId)
       .map((call) =>
-        call.method === 'sendMessage'
-          ? isWaiting(call)
-            ? 'waiting'
-            : pushedText(call.payload).includes(OPEN_MARK)
+        call.method === 'sendAnimation'
+          ? 'waiting'
+          : call.method === 'sendMessage'
+            ? pushedText(call.payload).includes(OPEN_MARK)
               ? 'open'
               : 'trade'
-          : call.method === 'editMessageText' && pushedText(call.payload).includes(OPEN_MARK)
-            ? 'edit-open'
-            : call.method,
+            : call.method === 'editMessageText' && pushedText(call.payload).includes(OPEN_MARK)
+              ? 'edit-open'
+              : call.method,
       );
   const block = (target: Target) =>
     tmp.db
@@ -3209,9 +3228,9 @@ describe('the waiting message by the decision log, «⏹» under the open block 
     await statusMessage(target);
     await noSignal(target);
     const { notices, captured } = sender();
-    const answer = captured.answers.get('sendMessage')!;
-    captured.answers.set('sendMessage', async (payload) => {
-      if (isWaiting({ method: 'sendMessage', payload } as ApiCall)) {
+    const answer = captured.answers.get('sendAnimation')!;
+    captured.answers.set('sendAnimation', async (payload) => {
+      if (isWaiting({ method: 'sendAnimation', payload } as ApiCall)) {
         await decide(target, SignalDecisionOutcome.Intent);
       }
       return answer(payload);
@@ -3807,5 +3826,382 @@ describe('the wake (#723)', () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     // the tick stop() ended returned before its line, and its finally armed nothing
     expect(ticks()).toEqual([]);
+  });
+});
+
+// The waiting message's caption (#860, docs/bot-session.md → The waiting message): the scanner's
+// animation with the session pair's scan, and the pass that edits its caption.
+describe("the waiting message's caption (#860)", () => {
+  const STATUS_ID = 1;
+  const listOf = (pct?: number) => ({
+    scanned: 3,
+    signals: [],
+    summary: {
+      streaming: true,
+      scanning: ASSET,
+      closeness: pct === undefined ? [] : [{ assetId: ASSET, pct }],
+    },
+  });
+  const captionOf = (pct: number) =>
+    `${RU_TEXTS.sessionWaitingSignal.value}\n\n` +
+    `🛰 <b>Сканирую EUR/USD</b> · движение ${String(pct)} % от порога сигнала\n` +
+    '✅ Котировки  ✅ Движение цены  ⏳ Отбор сигнала';
+  const scan = { list: listOf(64) };
+  const scanner = { fresh: () => scan.list };
+  beforeEach(() => {
+    scan.list = listOf(64);
+  });
+  const STOP = (target: Target) => [
+    { text: RU_LABELS.sessionStopButton, callback_data: `session:stop:${target.session.id}:w` },
+  ];
+  const statusMessage = (target: Target) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ statusMessageId: STATUS_ID })
+      .where(eq(tradingSessions.id, target.session.id));
+  async function waitingTarget(settings?: TradingSessionSettings): Promise<Target> {
+    const target = await seedSession(settings);
+    await statusMessage(target);
+    await noSignal(target);
+    return target;
+  }
+  const captionsTo = (calls: readonly ApiCall[], target?: Target) =>
+    callsTo(calls, 'editMessageCaption').filter(
+      (call) => target === undefined || call.payload.chat_id === target.seed.telegramUserId,
+    );
+  const waitingIdOf = async (target: Target) => (await rowOf(target)).waitingMessageId;
+  // `count` sessions, each with a live waiting message the run's first tick sent, by id; the
+  // pacer's sleep calls `hook.at` when it is set
+  async function waitingRun(
+    count: number,
+    patch: Parameters<typeof sender>[0] = {},
+    clock = { now: 0 },
+    level: 'info' | 'debug' = 'info',
+  ) {
+    const targets: Target[] = [];
+    for (let i = 0; i < count; i += 1) targets.push(await waitingTarget());
+    const hook: { at?: () => void | Promise<void> } = {};
+    let sleeps = 0;
+    const run = sender(
+      {
+        scanner,
+        sleep: async () => {
+          sleeps += 1;
+          await hook.at?.();
+        },
+        ...patch,
+      },
+      clock,
+      level,
+    );
+    await run.notices.tick();
+    for (const target of targets) expect(waitingTo(run.captured.calls, target)).toHaveLength(1);
+    targets.sort((a, b) => (a.session.id < b.session.id ? -1 : 1));
+    return { targets, run, hook, sleeps: () => sleeps };
+  }
+
+  it('WC1 the waiting message is the animation with the pair’s scan; the second send names the file by its id', async () => {
+    const { targets, run } = await waitingRun(2);
+    const [first, second] = callsTo(run.captured.calls, 'sendAnimation');
+    expect(first!.payload.animation).toBeInstanceOf(InputFile);
+    expect(second!.payload.animation).toBe(RADAR_FILE_ID);
+    for (const target of targets) {
+      const [sent] = waitingTo(run.captured.calls, target);
+      expect(sent!.payload).toMatchObject({
+        caption: captionOf(64),
+        parse_mode: 'HTML',
+        disable_notification: true,
+      });
+      expect(inlineButtons(sent!.payload)).toEqual(STOP(target));
+      expect(await waitingIdOf(target)).toBe(answered.get(sent!.payload));
+    }
+  });
+
+  it('WC2 the pass edits a caption whose figures changed, with its «⏹»; the same caption again is not sent', async () => {
+    const { targets, run } = await waitingRun(1);
+    const [target] = targets;
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toEqual([]);
+    scan.list = listOf(71);
+    await run.notices.captions();
+    const edits = captionsTo(run.captured.calls, target);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]!.payload).toMatchObject({
+      message_id: await waitingIdOf(target!),
+      caption: captionOf(71),
+      parse_mode: 'HTML',
+    });
+    expect(inlineButtons(edits[0]!.payload)).toEqual(STOP(target!));
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+  });
+
+  it('WC3 the pass edits at most its count of sessions, round by id', async () => {
+    const { targets, run } = await waitingRun(5, { config: { captionEditsPerPass: 3 } });
+    const chats = () =>
+      captionsTo(run.captured.calls).map((call) =>
+        targets.findIndex((target) => target.seed.telegramUserId === call.payload.chat_id),
+      );
+    for (const [pct, expected] of [
+      [71, [0, 1, 2]],
+      [72, [0, 1, 2, 3, 4]],
+      [73, [0, 1, 2, 3, 4, 0, 1, 2]],
+    ] as const) {
+      scan.list = listOf(pct);
+      await run.notices.captions();
+      expect(chats()).toEqual(expected);
+    }
+  });
+
+  it('WC4 a wake in the pace before an edit ends the pass; the woken tick follows at once', async () => {
+    const clock = { now: 0 };
+    const { run, hook } = await waitingRun(3, {}, clock, 'debug');
+    clock.now = 10_000;
+    scan.list = listOf(71);
+    hook.at = () => {
+      if (captionsTo(run.captured.calls).length === 1) {
+        hook.at = undefined;
+        run.notices.wake();
+      }
+    };
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+    const lines = () => run.logs().filter((line) => line.msg === 'session notice tick');
+    await until('the woken tick', () => lines().length === 2);
+    expect(lines()[1]).toMatchObject({ woken: 1 });
+    expect(run.logs().find((line) => line.msg === 'session waiting captions')).toMatchObject({
+      listed: 3,
+      edited: 1,
+      yielded: true,
+    });
+  });
+
+  it('WC4b a wake from the answer to an edit: no pace and no edit after it', async () => {
+    const { run, sleeps } = await waitingRun(3);
+    scan.list = listOf(71);
+    const answer = run.captured.answers.get('editMessageCaption');
+    run.captured.answers.set('editMessageCaption', (payload) => {
+      run.notices.wake();
+      return answer === undefined ? true : answer(payload);
+    });
+    const before = sleeps();
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+    expect(sleeps() - before).toBe(1);
+  });
+
+  it('WC5 a 429 on an edit pauses the pass: none until the retry, then the edits', async () => {
+    const clock = { now: 10_000 };
+    const { run } = await waitingRun(3, {}, clock, 'debug');
+    scan.list = listOf(71);
+    failNext(run.captured, { editMessageCaption: [telegramError(429, 5)] });
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+    const passes = () => run.logs().filter((line) => line.msg === 'session waiting captions');
+    expect(passes()).toHaveLength(1);
+    clock.now += 4_000;
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+    expect(passes()).toHaveLength(1);
+    clock.now += 1_000;
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(4);
+  });
+
+  it('WC6 an edit refused as gone (a text waiting message of the backend before #860): deleted, its id dropped, the animation on the next tick', async () => {
+    const { targets, run } = await waitingRun(1);
+    const [target] = targets;
+    const id = await waitingIdOf(target!);
+    scan.list = listOf(71);
+    failNext(run.captured, {
+      editMessageCaption: [refusal('Bad Request: there is no caption in the message to edit')],
+    });
+    await run.notices.captions();
+    expect(deletesTo(run.captured.calls, target!)).toEqual([id]);
+    expect(await waitingIdOf(target!)).toBeNull();
+    expect(messagesOf(run.logs(), INFO)).toContain(
+      'session waiting caption not edited: the message is gone',
+    );
+    await run.notices.tick();
+    expect(waitingTo(run.captured.calls, target!)).toHaveLength(2);
+    expect(waitingTo(run.captured.calls, target!)[1]!.payload.caption).toBe(captionOf(71));
+  });
+
+  it('WC7 a waiting message the stop route took over between the list and the edit is not edited', async () => {
+    const { targets, run, hook } = await waitingRun(1);
+    const [target] = targets;
+    const id = (await waitingIdOf(target!))!;
+    scan.list = listOf(71);
+    hook.at = async () => {
+      hook.at = undefined;
+      await clearSessionWaitingMessage(tmp.db, { sessionId: target!.session.id, messageId: id });
+    };
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toEqual([]);
+    expect(messagesOf(run.logs(), INFO)).toContain(
+      'session waiting caption taken over: not edited',
+    );
+  });
+
+  it('WC8 a 403 on an edit marks the user unreachable; the next pass leaves the session out', async () => {
+    const { targets, run } = await waitingRun(1);
+    const [target] = targets;
+    scan.list = listOf(71);
+    failNext(run.captured, { editMessageCaption: [telegramError(403)] });
+    await run.notices.captions();
+    expect(messagesOf(run.logs(), WARN)).toEqual([
+      'session waiting caption refused: the user is unreachable',
+    ]);
+    const [user] = await tmp.db
+      .select({ at: users.telegramBlockedAt })
+      .from(users)
+      .where(eq(users.id, target!.seed.userId));
+    expect(user?.at).toBeInstanceOf(Date);
+    scan.list = listOf(72);
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+  });
+
+  it('WC9 another 4xx on an edit: tried on later passes, then left until the next waiting message', async () => {
+    const { run } = await waitingRun(1, { config: { maxAttempts: 3 } });
+    scan.list = listOf(71);
+    failNext(run.captured, {
+      editMessageCaption: [telegramError(400), telegramError(400), telegramError(400)],
+    });
+    for (let pass = 0; pass < 4; pass += 1) await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(3);
+    expect(messagesOf(run.logs(), WARN)).toEqual([
+      'session waiting caption not edited',
+      'session waiting caption not edited',
+      'session waiting caption dropped',
+    ]);
+  });
+
+  it('WC9 an edit whose outcome is a 5xx: logged, edited again on the next pass', async () => {
+    const { run } = await waitingRun(1);
+    scan.list = listOf(71);
+    failNext(run.captured, { editMessageCaption: [telegramError(502)] });
+    await run.notices.captions();
+    expect(messagesOf(run.logs(), WARN)).toEqual(['session waiting caption edit outcome unknown']);
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toHaveLength(2);
+  });
+
+  it('WC10 a cooling chat is skipped by the pass, and an edit marks its chat for the next step', async () => {
+    const GAP = 1_000;
+    const clock = { now: 0 };
+    const { targets, run } = await waitingRun(1, { config: { chatGapMs: GAP } }, clock);
+    const [cool] = targets;
+    clock.now = 4_800;
+    const hot = await waitingTarget();
+    await run.notices.tick();
+    expect(waitingTo(run.captured.calls, hot)).toHaveLength(1);
+    clock.now = 5_000;
+    scan.list = listOf(71);
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls, hot)).toEqual([]);
+    expect(captionsTo(run.captured.calls, cool)).toHaveLength(1);
+    await settled(cool!, '4.6');
+    clock.now = 5_100;
+    await run.notices.tick();
+    expect(sendsTo(run.captured.calls, cool!)).toEqual([]);
+    clock.now = 6_000;
+    await run.notices.tick();
+    expect(sendsTo(run.captured.calls, cool!)).toHaveLength(1);
+  });
+
+  it('WC11 an animation refused for its file forgets the id: the next send uploads the file', async () => {
+    const { run } = await waitingRun(1);
+    const target = await waitingTarget();
+    failNext(run.captured, {
+      sendAnimation: [refusal('Bad Request: wrong file identifier/HTTP URL specified')],
+    });
+    await run.notices.tick();
+    expect(messagesOf(run.logs(), WARN)).toEqual(['session waiting message refused']);
+    await run.notices.tick();
+    const sends = waitingTo(run.captured.calls, target);
+    expect(sends.map((call) => typeof call.payload.animation)).toEqual(['string', 'object']);
+    expect(sends[1]!.payload.animation).toBeInstanceOf(InputFile);
+  });
+
+  it('WC12 a pass called during a tick does nothing; after stop() too', async () => {
+    const { run, hook } = await waitingRun(1);
+    scan.list = listOf(71);
+    await waitingTarget();
+    let during: Promise<void> | undefined;
+    hook.at = () => {
+      hook.at = undefined;
+      during = run.notices.captions();
+    };
+    await run.notices.tick();
+    await during;
+    expect(during).toBeDefined();
+    expect(captionsTo(run.captured.calls)).toEqual([]);
+    await run.notices.stop();
+    await run.notices.captions();
+    expect(captionsTo(run.captured.calls)).toEqual([]);
+  });
+
+  it('WC13 stop() during a pass: the edit in flight, nothing after it', async () => {
+    const { run, hook } = await waitingRun(3);
+    scan.list = listOf(71);
+    let stopping: Promise<void> | undefined;
+    hook.at = () => {
+      if (captionsTo(run.captured.calls).length === 1) {
+        hook.at = undefined;
+        stopping = run.notices.stop();
+      }
+    };
+    await run.notices.captions();
+    await stopping;
+    expect(captionsTo(run.captured.calls)).toHaveLength(1);
+  });
+
+  it('WC13 start() runs the pass on its timer; stop() clears it', async () => {
+    const { run } = await waitingRun(1, { config: { captionMs: 30, tickMs: 60_000 } });
+    scan.list = listOf(71);
+    run.notices.start();
+    await until('the timer’s pass', () => captionsTo(run.captured.calls).length === 1);
+    const timeouts = () =>
+      process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length;
+    const before = timeouts();
+    await run.notices.stop();
+    // the tick's interval and the pass's
+    expect(before - timeouts()).toBe(2);
+  });
+
+  it('WC14 without a scanner the pair waits for a move; settings that cannot be read: the header alone, never edited', async () => {
+    const plain = await waitingTarget();
+    const unread = await seedSession();
+    await tmp.db
+      .update(tradingSessions)
+      .set({ settings: sql`'{}'::jsonb` })
+      .where(eq(tradingSessions.id, unread.session.id));
+    await statusMessage(unread);
+    await noSignal(unread);
+    const { notices, captured } = sender();
+    await notices.tick();
+    expect(waitingTo(captured.calls, plain)[0]!.payload.caption).toBe(
+      `${RU_TEXTS.sessionWaitingSignal.value}\n\n` +
+        '🛰 <b>Сканирую EUR/USD</b> · жду движение цены\n' +
+        '⏳ Котировки  ⏳ Движение цены  ⏳ Отбор сигнала',
+    );
+    expect(waitingTo(captured.calls, unread)[0]!.payload.caption).toBe(
+      RU_TEXTS.sessionWaitingSignal.value,
+    );
+    await notices.captions();
+    expect(captionsTo(captured.calls)).toEqual([]);
+  });
+
+  it('WC15 an English session’s caption is English', async () => {
+    const target = await waitingTarget();
+    await tmp.db.update(users).set({ language: 'en' }).where(eq(users.id, target.seed.userId));
+    const { notices, captured } = sender({ scanner });
+    await notices.tick();
+    expect(waitingTo(captured.calls, target)[0]!.payload.caption).toBe(
+      `${clientTextsOf(BotLanguage.En).sessionWaitingSignal.value}\n\n` +
+        '🛰 <b>Scanning EUR/USD</b> · movement at 64 % of the signal threshold\n' +
+        '✅ Quotes  ✅ Price movement  ⏳ Signal selection',
+    );
   });
 });

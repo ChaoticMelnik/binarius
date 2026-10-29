@@ -91,6 +91,7 @@ import {
   tradingModeScreen,
   scanTexts,
   TEXTS,
+  textOf,
   botCommands,
   userContextOf,
   type StatusCardInput,
@@ -493,6 +494,10 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ),
     ),
   pairWaiting: () => withAlternatives([pairWaitingText(pairLabel(pair), pair.id)]),
+  // the session's wait (#860, session-notice-messages.ts → sessionWaitingMessage): the header, with
+  // the session pair's scan lines and without
+  sessionWaiting: () =>
+    pairScans().map((scan) => waitingText(textOf('sessionWaitingSignal'), scan, false)),
   // the list's wait (#859): every line, the scanning pair and the closest without a symbol too
   signalsScanning: () =>
     SCAN_LISTS.flatMap((list) =>

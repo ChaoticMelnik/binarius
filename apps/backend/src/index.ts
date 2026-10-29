@@ -41,6 +41,7 @@ import { secretDigest, secretKeyId } from './auth/internal';
 import { createMailingEngine } from './mailing/engine';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeListener } from './trading/session-notice-listener';
+import { createScanMedia } from './trading/scan-media';
 import { createSessionNoticeSender } from './trading/session-notices';
 import { createStarReconciler } from './payments/star-reconciler';
 import { setBotTextSources } from './auth/texts';
@@ -541,6 +542,9 @@ const sessionNotices = createSessionNoticeSender({
   push: clientPush,
   catalog: pairsCatalog,
   balance: balanceReconciler,
+  // the waiting message's animation and its caption's scan (#860)
+  media: createScanMedia(app.log),
+  ...(marketData === undefined ? {} : { scanner: marketData.h1Scanner }),
   logger: app.log,
 });
 // a trade opened or settled wakes the sender (#723) and tells the H1 driver its repeat step may be
