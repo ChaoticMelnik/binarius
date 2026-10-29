@@ -269,6 +269,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 58. **Живое ожидание сигнала** — экран ожидания — анимация с подписью из сводки сканера, правки подписи последней очередью → `rules/bot-ui.md`
 59. **Живое ожидание сигнала в сессии** — сообщение ожидания — анимация с подписью пары из сводки сканера, правки подписи — отдельный проход внутри темпа отправителя → `rules/bot-ui.md`
 60. **Токен брокера на пути сделки** — валидный токен одним SELECT без блокировки, flight на аккаунт в процессе, кэш worker'а с TTL → `rules/auth.md`
+61. **Ширина ленты сессии** — пузырь текста — ширины медиа-пузыря клиента (`BOT_MESSAGE_SPACER_LENGTH` = 23), строки `<pre>` блока шага не шире распорки по `preLineBlanks` → `rules/bot-ui.md`
 
 ### Map: path → rules
 
@@ -319,8 +320,8 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/bonus-rules.md` | payments 40 |
 | `docs/bot-demo-trade.md` | bot-ui 29 |
 | `docs/bot-demo.md` | bot-ui 46, 58 |
-| `docs/bot-navigation.md` | bot-ui 31, 49 |
-| `docs/bot-session.md` | trading 28; bot-ui 47, 59 |
+| `docs/bot-navigation.md` | bot-ui 31, 49, 61 |
+| `docs/bot-session.md` | trading 28; bot-ui 47, 59, 61 |
 | `docs/bot-texts.md` | bot-ui 18, 30 |
 | `docs/broker-balance.md` | trading 21 |
 | `docs/broker-rest.md` | trading 24 |
@@ -359,7 +360,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/e2e/src/harness` | core 10; trading 22, 28; bot-ui 29, 46 |
 | `packages/mock-broker/src` | core 2, 10, 51; trading 15, 23, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/shared` | core 10, 52; trading 27; bot-ui 30, 58, 59 |
-| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59; payments 39, 40; auth 12, 60 |
+| `packages/shared/src` | core 2, 8, 9, 10, 14, 17, 26, 51; trading 15, 21, 22, 23, 25, 27, 28, 33, 36, 50; signal-h1 20, 43, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 61; payments 39, 40; auth 12, 60 |
 | `packages/signal` | signal-h1 43 |
 | `packages/signal-stand` | signal-h1 20 |
 | `packages/signal-stand/src` | core 10, 51; trading 25, 28; signal-h1 20, 41, 42, 43; bot-ui 18 |
