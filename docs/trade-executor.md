@@ -39,9 +39,11 @@ clocks are three processes' and the broker's, not aligned.
 
 An H1 session's trade (#707, [h1.md → The driver](h1.md#the-driver-707)): `decided_at_ms` is the
 closed second `f` of the backend's second series (the broker's clock) → `taken_at_ms` (the
-driver's, the backend's clock) → `trade_intents.created_at` (database) → `submit_deadline_at` (=
-`taken_at_ms + H1_SUBMIT_BUDGET_MS`, the backend's clock) → `submitted_at` (database) →
-`open_timestamp_ms` (the broker's). A take whose database clock is past the deadline rejects the
+driver's, the backend's clock) → `trade_intents.created_at` (database) → `submit_not_before_at`
+(= the second's `closedAtMs + entryDelaySec`, the backend's clock; the worker holds the job until it
+on its own, #836) → `submit_deadline_at` (= `max(submit_not_before_at, the creation) +
+H1_SUBMIT_BUDGET_MS`, the backend's clock) → `submitted_at` (database) → `open_timestamp_ms` (the
+broker's). A take whose database clock is past the deadline rejects the
 intent `entry_window_missed` without a broker call, so `last_error` shows the share the budget
 cut.
 

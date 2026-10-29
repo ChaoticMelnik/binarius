@@ -184,8 +184,9 @@ services:
       # GET /postbacks/binodex/<secret>. Forwarded only when set; unset, the route does not exist.
       # Here rather than in the broker anchor: the worker never receives it.
       POSTBACK_URL_SECRET:
-      # The H1 driver's wait for the worker's take (#707, docs/h1.md -> The driver): 700 ms unless
-      # set. Forwarded only when set; here rather than in the broker anchor: the worker never reads it.
+      # The H1 driver's wait for the worker's take after the entry's hold (#707, #836, docs/h1.md ->
+      # The driver): 700 ms unless set. Forwarded only when set; here rather than in the broker
+      # anchor: the worker never reads it.
       H1_SUBMIT_BUDGET_MS:
       # The cashier widget's origins (#11, docs/deposit.md). Forwarded only when set; unset, the
       # backend allows the origin of BROKER_OAUTH_AUTHORIZE_URL alone. `web` below reads the same
