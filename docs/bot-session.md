@@ -1,4 +1,4 @@
-# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700, #718, #723)
+# The session in the bot: the button, the session message, the stop, the trade messages and the summary (issues #284, #320, #318, #122, #321, #327, #418, #464, #476, #551, #567, #536, #568, #587, #537, #700, #718, #723, #860)
 
 The analysis screen ([bot-demo.md](bot-demo.md#the-analysis)) draws «🚀 Сессия из 5 циклов» as its
 first row on a signal (#360; since #509 never without one, and without one it waits for it, #664); a finished single trade's message
@@ -27,7 +27,9 @@ martingale cycle in one message, each step added to it by an edit (#551), sent b
 ([Trade messages and the summary](#trade-messages-and-the-summary-464)). While the session waits
 for a signal — its latest decision was «no signal» (#722) — the backend keeps under them, as the
 last of the session's messages, the waiting message «🔎 Ждём сигнал для следующей сделки…» with
-«⏹ Остановить сессию» ([The waiting message](#the-waiting-message-536)); while a trade is open,
+«⏹ Остановить сессию» — since #860 the scanner's animation, its caption the session pair's scan
+(«🛰 Сканирую EUR/JPY · движение 64 % от порога сигнала» and the stages), edited every few seconds
+([The waiting message](#the-waiting-message-536)); while a trade is open,
 its block in the cycle message carries the «⏹» instead
 ([The stop and the old buttons](#the-stop-and-the-old-buttons-536)).
 When the session is over, its summary comes in one message with sound, sent by the bot after every
@@ -131,7 +133,13 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   and `packages/db/src/session-notice-ops.ts` (#464) — the sender of the trade messages, the
   final mark, the fallback text summary (#537) and the waiting message (#536: `sessionWaitingMessage`, and `sendSessionWaiting` /
   `deleteSessionWaiting` of `apps/backend/src/auth/client-push.ts`) ([Trade messages and the
-  summary](#trade-messages-and-the-summary-464)).
+  summary](#trade-messages-and-the-summary-464)). Since #860 the waiting message is the scanner's
+  animation: `apps/backend/src/trading/scan-media.ts` (`createScanMedia`, its `file_id` in the
+  process's memory over `createTelegramFileIds`) and `apps/backend/src/package-root.ts`
+  (`sharedFile`, the file of `packages/shared/assets`); its caption is edited by the sender's
+  `captions()` pass through `editSessionWaitingCaption` (`client-push.ts`) on the rows of
+  `listSessionWaitingCaptions` (`session-notice-ops.ts`) ([The waiting
+  message](#the-waiting-message-536)).
 - `apps/backend/src/trading/session-notice-listener.ts` (#723) — `createSessionNoticeListener({
   pool, channel, onNotification, logger, retryMs? })` → `{ start, stop }`: one client of the
   backend's pool `LISTEN`s on `SESSION_NOTICE_CHANNEL` (`session_notices`,
@@ -176,8 +184,11 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
            when the session stops (#536) or its signal's direction turns (#568)
   backend's sender, its next tick once the message is recorded and the session's latest decision
         is no_signal (#536, #722):
-        sendMessage: «🔎 Ждём сигнал для следующей сделки…», without sound, with
-        «⏹ Остановить сессию» (session:stop:<id>:w); deleted before each new message of the session
+        sendAnimation (#860): the scanner's radar, its caption «🔎 Ждём сигнал для следующей
+        сделки…» and the session pair's scan lines, without sound, with
+        «⏹ Остановить сессию» (session:stop:<id>:w); its caption edited every
+        SESSION_WAIT_CAPTION_MS (editMessageCaption, the same «⏹») while the figures change;
+        deleted before each new message of the session
         (a cycle message, a relaunch's status message, #587) and sent again under it while the
         session waits, deleted once a later decision ends the wait - before the open trade's
         block, which carries «⏹» (session:stop:<id>:c) until its result's edit - or once the
@@ -497,7 +508,9 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   ([trading-session.md](trading-session.md#post-tradingsessionsidstop)); the backend's sender then
   neither deletes it nor waits for it, and the bot's summary comes under it (#537). 409 `session_not_active`
   reads the session and answers how it ended (decision В3). The reply is drawn **in place of the
-  pressed message** (`editMessageText`, #587): the end line, and the last trade's line by its
+  pressed message** (`editMessageText`, #587; under the backend's animation since #860 the reply
+  goes on the scanner's still by `editMessageMedia`, a failure as the caption by
+  `editMessageCaption`, [The waiting message](#the-waiting-message-536)): the end line, and the last trade's line by its
   status (`sessionStopReplyText` → `LAST_TRADE_LINE`, the owner's decision of 2026-10-08 in #311
   and the wording of #619): «⏳ Открытая сделка доиграет до конца.» for an open trade
   (`accepted`); «🔎 Итог последней сделки уточняется у брокера.» for `unknown`/`reconciling` (the
@@ -525,7 +538,8 @@ analysis and the menu; a failed stop offers the menu, never the stop again.
   | --- | --- | --- |
   | done, or refused «not modified» | — | — |
   | refused as gone (the user deleted the message, the sender deleted it in the same second, or older than 48 h) | the same text as a new message, which may come under the summary ([risk 77](#accepted-risks)); after an unknown stop outcome under «🏠 В меню», not «⏹» (the sender's next waiting message carries the one «⏹», #587 round 1) | `info` `the pressed message was already gone` |
-  | another Telegram refusal, a transport failure | nothing more: the summary follows | `warn` `trading session stop reply not drawn` |
+  | the still refused for its file (#860, under the animation) | the still's id forgotten; the reply as the caption under the animation | `warn` `the scan media was refused, editing the caption` |
+  | another Telegram refusal, a transport failure | nothing more: the summary follows | `warn` `trading session stop reply not drawn` (the method called) |
   | anything else | a bug, rethrown to `bot.catch` | `error` |
 
   A stop whose outcome is unknown and did commit leaves `unavailable` and «⏹» above the summary
@@ -1147,6 +1161,25 @@ after the edits that end waits): about 38 a second in the worst coincidence, abo
 so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)).
 
+**The caption pass** (#860, the owner's decision 2026-10-29: the captions are rare and yield the
+budget first). The waiting message's caption is edited by a pass of its own, `captions()`, every
+`SESSION_WAIT_CAPTION_MS` (4 000 ms, the middle of the owner's 3–5 s), inside the same pacer of 9
+a second and the same 429 pause as the tick, and serial with it under one `ticking`: a pass does
+not start while a tick runs, and a tick due during a pass (the interval's or a `wake()`) runs right
+after it. A pass edits at most `SESSION_WAIT_CAPTION_EDITS_PER_PASS` (9) sessions, round by id
+(`listSessionWaitingCaptions` from the last id of the previous page), so at N waiting sessions
+each caption is refreshed every `4 s × ceil(N / 9)`: 9 → 4 s, 45 → 20 s, 450 → 200 s, 2 000 →
+about 15 min. Where it yields, in order: a tick in flight (the pass is skipped), a `wake()` (the
+pass ends after the edit in flight, so a trade's message waits for at most one edit: a pace of
+111 ms and Telegram's answer), the 429 pause (no pass starts, a pass in it ends), a cooling chat
+(#660: the session skipped to a later pass, no timer), the count a pass, and a caption equal to the
+one shown (no call). The links are `sessionWaitCaptionBoundsHold` (`timing.ts`, in
+`TIMING_CHAIN_HOLDS`): the pass no more often than the tick, and its edits at their pace no more
+than a quarter of its period (`9 × 1000 / 9 ≤ 4 000 / 4`) — at most a quarter of the sender's
+pace; `timing.test.ts` TC1–TC2. The chain `20 + 9 < 30` does not change. `stop()` waits for the
+pass in flight as for a tick: its pace and one edit, and on «gone» the delete after its own pace and
+a check of `stop()`, under the links above.
+
 **The wake** (#723, the owner's decision 2026-10-21). `transitionIntent` runs
 `select pg_notify('session_notices', <session id>)` in the writer's transaction when an intent of a
 session becomes `accepted` or `settled`; Postgres delivers it on the commit and never on a
@@ -1205,7 +1238,68 @@ a session's sends read Σ ≤ 406 rows at ≤ 28 settled trades (Rule 28), ≤ 2
 «🔎 Ждём сигнал для следующей сделки…» (`sessionWaitingSignal`) without sound, with one button,
 «⏹ Остановить сессию» (`sessionStopButton`, `session:stop:<id>:w`), built when sent
 (`sessionWaitingMessage`, `session-notice-messages.ts`, Rule 30) and sent by
-`sendSessionWaiting`, deleted by `deleteSessionWaiting` (`client-push.ts`). It stands **only while
+`sendSessionWaiting`, deleted by `deleteSessionWaiting` (`client-push.ts`). Since #860 (Rule 59)
+it is the scanner's animation, the bot's wait's own radar (`packages/shared/assets/scan-radar.gif`,
+#859), sent by `sendAnimation` with the text as its caption — no width spacer, the media sets the
+width (Rule 18) — and the caption carries the session pair's scan under the header:
+
+```
+🔎 Ждём сигнал для следующей сделки…
+
+🛰 Сканирую EUR/JPY · движение 64 % от порога сигнала
+✅ Котировки  ✅ Движение цены  ⏳ Отбор сигнала
+```
+
+The lines are `pairScanLines` of `scan-summary.ts` (the bot's wait's, #859) on the H1 scanner's
+`fresh()` list, read in the backend's own process: the pair's closeness, or «жду движение цены»
+when the pair has no move on the current second (also while its signal is listed, for the second
+or two before the intent deletes the message, [risk 112](#accepted-risks)); without a scanner (no
+`BROKER_WS_URL`) the empty list, so «жду движение цены» and three ⏳. Settings that cannot be read,
+or a pair not in the catalog: the header alone, as before #860. The animation is uploaded once per
+process; the answer's `file_id` names it from then on (`scan-media.ts`), and a send refused for its
+file (`fileRefusal`: a bad file or a stale id) forgets the id, so the next attempt uploads it again
+— no text fallback: the send's own attempts bound it (`… dropped` at the third). The `file_id` is
+not logged (Rule 8).
+
+**The caption pass** ([Rate and timing](#rate-and-timing)) lists the live waiting messages
+(`listSessionWaitingCaptions`: an active session that waits for a signal, its waiting message on
+its current slot, notices not closed, a reachable user; by id, from the previous page's last id),
+builds each caption as a send would, and edits only a caption other than the one the message shows
+(in memory: the message's id and its caption, at most `SESSION_NOTICE_SCAN` of them, the oldest
+dropped first — a dropped one costs one edit, answered «not modified»). Each edit takes its pace;
+the id is re-read right before it (`readSessionWaitingMessage`, as the delete, #587 round 1), and
+`editSessionWaitingCaption` carries the same «⏹» — an edit without a keyboard would take it off
+(Rule 31). An edit marks its chat (#660). Two backends would each edit the same caption: «not
+modified», or figures a second older ([risk 111](#accepted-risks)).
+
+| An edit of the caption | In memory / columns | Then |
+| --- | --- | --- |
+| 2xx | the caption shown | — |
+| 400 «message is not modified» (`editRefusal` shown) | the caption shown | — |
+| 400 gone — the user deleted it, past 48 h, or a text waiting message of the backend before #860 («there is no caption in the message to edit») | the caption forgotten; the delete after its own pace and a check of `stop()`, by the delete's table above | `info` `session waiting caption not edited: the message is gone`; deleted → the id dropped → due → the animation on the next tick |
+| 403 | the caption forgotten; the user marked unreachable | `warn` `… refused: the user is unreachable`; the session is listed no more |
+| 429 | as it was | the whole sender pauses for `retry_after`; the pass ends |
+| another 4xx | an attempt counted in memory; at the third the caption left as it is until the next waiting message | `warn` `… not edited`, then `… dropped` |
+| 5xx, a timeout, the transport | as it was (the edit may have gone: the next pass gets «not modified») | `warn` `… edit outcome unknown`; edited again on the next pass |
+| the id re-read is another or NULL (the stop route took it over) | the caption forgotten | `info` `… taken over: not edited` |
+| the caption equal to the one shown, or the chat cooling | — | no call |
+| a `wake()`, the pause or `stop()` before or after the pace | — | the pass ends (`yielded` in its `debug` line) |
+
+No outcome holds the pass on one message: the page moves by id whatever the outcome. A pass whose
+statement throws ends with `error` `session waiting captions failed`; the next one starts after
+`captionMs`.
+
+**The «⏹» under the animation** (#860, `apps/bot/src/trading-session.ts`): the reply is drawn in
+place as before (#587), on the media: a stop's reply ends the wait on the scanner's still
+(`scan-still.png`, `editMessageMedia` with the reply as its caption and the session's end of the
+path; a still refused for its file is forgotten, `warn` `the scan media was refused, editing the
+caption`, and the reply goes as the caption under the animation); a stop whose outcome is unknown
+or a missing session edits the caption alone (`editMessageCaption`, «⏹» again or the menu), the
+wait going on; gone — a new message, as before. The stop body, the hand-over and the sender's
+delete do not change. A caption edit in flight when the bot's reply lands can draw the wait over
+the reply for one round-trip ([risk 110](#accepted-risks)).
+
+It stands **only while
 the session waits for a signal** (#722, the owner's decisions of 2026-10-21 in #700): the
 session's latest decision of the trading loop — its last `signal_decisions` row with `context =
 session`, by `recorded_at` then `id` (`signal_decisions_session_idx`,
@@ -1335,7 +1429,8 @@ message until its next recorded new cycle message only by these endings, each wi
 3. its third definite refusal (`… dropped`: Telegram refusing the message itself three times is a
    defect, not the network — a `session waiting message dropped` in a week is a reason for an
    issue);
-4. a waiting message the user deleted (the sender learns it on its next delete, as gone);
+4. a waiting message the user deleted (the sender learns it on its next delete, as gone; since
+   #860 on its next caption edit too, which deletes and sends anew);
 5. a record refused (the session stopped, or another sender recorded first) and the clean-up
    delete failed (`… not removed`): the message stays with its «⏹» ([risk 81](#accepted-risks)),
    the slot claimed.
@@ -1346,6 +1441,19 @@ no tick; once the user is reachable, the next new message of the session, or a l
 deletes it first — never a second «⏹» beside it.
 
 #### At the deploy and at a restart (#536)
+
+- **At the deploy of #860**: the live waiting messages are texts. The first passes edit their
+  caption: Telegram answers «there is no caption in the message to edit» → gone → the delete →
+  the id dropped → the next tick sends the animation; each old message is replaced within a pass
+  and a tick (≈ 4 s + 3 s), 9 a pass at most, two calls each inside the 9 a second (2 000 → about
+  15 min), the trades' messages first (the pass yields). Backend and bot are one image (deploy.md):
+  `docker compose stop bot && binarius-deploy <ref>` stops the old bot before the new backend
+  sends an animation, and both start from the same build, so an old bot never answers a «⏹» under
+  the animation (it would edit its text, be told gone and reply as a new message, the radar left
+  with its «⏹»). A new bot under an old backend's text waiting message edits the text as before.
+- **A restart of the backend** (#860): the captions shown and the animation's `file_id` are
+  memory: the first send uploads the file again, the first pass edits each live caption once
+  («not modified» when equal), the page starts from the first id, the attempts are counted anew.
 
 - **At the deploy of #723**: no migration and no order between the services. An old worker beside
   a new backend writes no NOTIFY: the listener hears nothing and the tick serves as before; a new
@@ -1365,7 +1473,7 @@ deletes it first — never a second «⏹» beside it.
   claimed trade and a reachable user is due (no backfill, the owner's decision 2026-10-17). The
   code does not bound their number (one active session per account); the planned figure is 2 000
   (`TRACKED_SESSIONS_MAX`).
-- **Calls.** One `sendMessage` and two UPDATEs (claim, record) each, no broker call. Each send
+- **Calls.** One `sendMessage` (`sendAnimation` since #860) and two UPDATEs (claim, record) each, no broker call. Each send
   takes a token of the sender's pacer (`SESSION_NOTICE_SEND_PER_SECOND`, 9 a second, shared with
   the trades, edits, deletes and summaries; with the mailing 20 + 9 < 30, `TIMING_CHAIN_HOLDS`).
   The list is read `SESSION_NOTICE_SCAN` (200) rows a tick, oldest first; a tick longer than the
@@ -1412,6 +1520,12 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
   delete dropped`, `… not removed` (`warn`, #536), `… deleted after the stop took it over` (`warn`,
   #587 round 1, [risk 82](#accepted-risks)); `session waiting message already gone`, `… removed:
   not recorded` (`info`, #536), `… taken over: not deleted` (`info`, #587 round 1)
+- the caption pass's (#860): `session waiting caption not edited`, `… dropped`, `… edit outcome
+  unknown`, `… refused: the user is unreachable` (`warn`, `editMessageCaption`); `session waiting
+  caption not edited: the message is gone`, `… taken over: not edited` (`info`); `session waiting
+  captions` (`debug`, at the end of a pass: `listed`, `edited`, `skipped`, `yielded`); `session
+  waiting captions failed` (`error`); `the scan media is not remembered` (`warn`, an animation's
+  answer without its `file_id`); the waiting message's send lines carry `sendAnimation`
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
 - `session notice tick` (`debug`, #723) at the end of a tick: `pending`, `fallback` (the lists'
   lengths) and `woken` (the `wake()` calls it served); `{ woken, paused: true }` for a tick the
@@ -2083,6 +2197,19 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     ago and started through the `n` door is traded in the drawn direction. Falsifiable: after a
     quiet hour, `start_signal_action` NULL on more than 15 % of the sessions started from the list
     or the card ([h1.md → Owner's steps](h1.md#owners-steps-after-the-merge), step 2).
+110. **A caption edit over the bot's reply** (#860): the sender re-reads the waiting message's id
+    right before its caption edit; a «⏹» whose stop hands the message over while that edit is in
+    flight gets the bot's reply first and the wait's caption with «⏹» over it, for one Telegram
+    round-trip — as risk 82 for the delete. A press of that «⏹» is a 409, and the reply is drawn
+    again.
+111. **Two senders edit one caption** (#860): two backends' passes edit the same waiting
+    message — «not modified», or figures a second older for a pass. The pilot is one backend.
+112. **«жду движение цены» while the pair's signal is listed** (#860): a pair whose second decided
+    a signal is in the scanner's `signals`, not in its `closeness`, so the caption says it waits for
+    a move for the second or two before the intent deletes the message. Nothing is made up: the
+    formula is the bot's wait's (#859).
+113. **The captions shown are bounded memory** (#860): at most `SESSION_NOTICE_SCAN` messages; a
+    dropped one, or a restart, costs one more edit, which Telegram answers «not modified».
 
 ## Running it locally
 

@@ -616,7 +616,8 @@ queue — the last call wins — and «Опубликовать заново» m
 A key's limit is checked with its variables' samples. `BOT_TEXT_MESSAGES` describes what that
 cannot bound: each message the bot builds from several keys (the account and status cards,
 `/help`, `/account`, the analysis screens, the trade status, the session message — the caption of
-its picture since #568, a caption of 1024 — and the reply to its stop (#536), the demo screens,
+its picture since #568, a caption of 1024 — and the reply to its stop (#536; a caption of 1024
+since #860, on the scanner's still under the session's wait), the demo screens,
 `/settings` with the stake line and the stake picker, the mode screen, its confirm and a switch's
 result (#474), the summary card's footer — plain text drawn
 on the image, bounded by its key's limit, #318; a block of the session's cycle message with its
@@ -627,7 +628,8 @@ bot's caption under the card and its text, a caption of 1024 (#709); the
 analysis card, `analysisCard`, a caption of 1024, #482; the waits for a signal — `signalsScanning`,
 `pairWaiting`, `analysisWaiting`, `analysisWaitingData` with the scanner's lines — and the next
 step the wait draws, `demoLaunch` and `demoCycleStake`, captions of 1024 under the wait's media
-since #859), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+since #859; the session's waiting message, `sessionWaiting` — its header and the session pair's
+scan lines, the backend's caption under the scanner's animation, #860), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its

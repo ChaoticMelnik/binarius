@@ -55,10 +55,12 @@ notification open with the text and the text's last word never wraps onto it.
 - Where: the two seams append it when they unwrap `TelegramHtml` — the bot's `replyHtml`,
   `editMessageTextHtml`, `editMessageTextByIdHtml`, `sendHtmlById` (#537) and their
   `…WithoutNextStep` forms (`send.ts`), the backend's `send` (the link push, mailings, the deposit
-  and Stars pushes, the fallback summary), `sendSessionTrade`, `editSessionTrade` and `sendSessionWaiting` (`client-push.ts`).
+  and Stars pushes, the fallback summary), `sendSessionTrade` and `editSessionTrade`
+  (`client-push.ts`); `sendSessionWaiting` until #860, a caption under the scanner's animation since.
   Nothing before the seams sees it: the catalog, the overrides, the texts' builders and the
   trackers' dedupe keys hold the text alone.
-- Not on captions (a photo or a video, `editMessageMedia`, the inline share result), the Stars
+- Not on captions (a photo, a video or an animation — the session's waiting message and its
+  caption edits, #860 —, `editMessageMedia`, the inline share result), the Stars
   invoice, callback toasts or the staff bot: a picture sets a caption's width, and the others are
   not bubbles of the client chat.
 - The limit: a text message holds `BOT_TEXT_LIMIT` = 4096 − 27 = 4069 characters after entities
@@ -332,14 +334,14 @@ no repeat.
 | the mode screen's access refusals in demo (`accountNone`, `statusAmbiguous`, `stakeBalanceMissing`) | 🔗 Подключить аккаунт Binodex // 🏠 В меню; 🏠 В меню |
 | the trade's refresh failed | 🔄 Повторить (`intent:<id>`) \| 🏠 В меню; `intentStatusUnavailable` (404) → 🏠 В меню |
 | the session's stop failed under an old status message (#536) | 🏠 В меню; `sessionStatusUnavailable` (404) → 🏠 В меню; the pressed message stays, its «⏹» pressed again is safe |
-| the session's stop failed under the waiting message (#587), drawn in place of it | a stop whose outcome is unknown: ⏹ Остановить сессию again (`waitingStopKeyboard`, `session:stop:<id>:w`; its next step is the stop itself); `sessionStatusUnavailable` (404) and a failed read after a 409 → 🏠 В меню; as a new message when the edit is refused as gone: 🏠 В меню — never a second «⏹» |
+| the session's stop failed under the waiting message (#587), drawn in place of it (under the animation as its caption, #860) | a stop whose outcome is unknown: ⏹ Остановить сессию again (`waitingStopKeyboard`, `session:stop:<id>:w`; its next step is the stop itself); `sessionStatusUnavailable` (404) and a failed read after a 409 → 🏠 В меню; as a new message when the edit is refused as gone: 🏠 В меню — never a second «⏹» |
 | trade status, live (planned, reserved, queued, submitting, unknown, reconciling, manual_review) | 🔄 Обновить while the tracker follows the message; its last edit at the deadline, and the message «🔄 Обновить» redraws (no tracker follows that one): 🔄 Обновить \| 🏠 В меню; a 404 while tracking leaves 🏠 В меню only |
 | trade status, where the tracker stops (accepted, every terminal status) | 🚀 Сессия из 5 циклов (#360; at 5 s for a trade of any duration, #685) // accepted: 🔄 Обновить \| 📊 Анализ // 📡 Сигналы \| 🏠 В меню; terminal: 📊 Анализ \| 📡 Сигналы \| 🏠 В меню |
 | the session message (#536; the picture of its signal's direction with the text as its caption, #568, or the text) | none (`session_status`, Exceptions); a 404 while tracking leaves 🏠 В меню only |
-| the waiting message (#536, sent by the backend while the session waits for a signal, #722) | ⏹ Остановить сессию (`session:stop:<id>:w`, red) |
+| the waiting message (#536, sent by the backend while the session waits for a signal, #722; the scanner's animation with its caption since #860, the caption's edits carry the same keyboard) | ⏹ Остановить сессию (`session:stop:<id>:w`, red) |
 | the cycle message with an open trade's block (#722, sent or edited by the backend; a session the sender read stopped gets none) | ⏹ Остановить сессию (`session:stop:<id>:c`, red); the result's edit takes it off |
 | the reply to the stop under the open trade's block (#722, a new message) | the end of the path (`sessionCardKeyboard`), as `/stop`'s for one session; a failure: 🏠 В меню, the block's «⏹» stays |
-| the reply to the stop under the waiting message (drawn in place of it, #587; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) // 📊 Анализ \| 📡 Сигналы // 💳 Пополнить (#27, https only) // 👥 Позвать (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать \| 🏠 В меню |
+| the reply to the stop under the waiting message (drawn in place of it, #587 — under the animation on the scanner's still, its caption the reply, #860; a new message only when its edit is refused as gone), `/stop` (#122) with one session stopped, and an old status message under its old «⏹» (drawn in place) | the end of the path (`sessionCardKeyboard`): 🔁 Ещё сессия (#320) // 📊 Анализ \| 📡 Сигналы // 💳 Пополнить (#27, https only) // 👥 Позвать (#115) \| 🏠 В меню; without `settings` 💳 Пополнить // 👥 Позвать \| 🏠 В меню; a session of an older duration (15 s) gets them at 5 s (#685); stopped by `no_signal_timeout` (#509): 🔀 Выбрать другую пару // 💳 Пополнить // 👥 Позвать \| 🏠 В меню |
 | an old status message's «🔄 Обновить» (`session:<id>`, before #536) | its keyboard stripped, nothing sent |
 | `/stop`: `sessionNoneActive`, `sessionsStopped`, `unavailable` | 🏠 В меню |
 | `/stop`'s mode line (#473): `modeStopReset`, `modeNotReset` | 🏠 В меню |
