@@ -70,6 +70,7 @@ import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingModeComposer } from './trading-mode';
 import { createLanguageScreenComposer } from './language-screen';
+import { createScanMedia } from './scan-media';
 import { createSetupCardPhotos } from './setup-card';
 import { createTradingSessionComposer } from './trading-session';
 import { createCycleStakeComposer } from './cycle-stake';
@@ -528,7 +529,9 @@ export function createBot({
 
   // the pictures of a signal's direction: the analysis card's and the session message's (#568)
   const setupCardPhotos = createSetupCardPhotos(logger);
-  signalWaiter.attach(createSignalWaitScreens({ connectButtons, setupCardPhotos }));
+  // the wait for a signal's animation and still (#859)
+  const scanMedia = createScanMedia(logger);
+  signalWaiter.attach(createSignalWaitScreens({ connectButtons, setupCardPhotos, scanMedia }));
 
   // The status card's button and the screens behind it (#125, docs/bot-demo.md): callback queries
   // only, so the private-chat filter covers them and the text handler below never sees them.
@@ -539,6 +542,7 @@ export function createBot({
       now,
       connectButtons,
       setupCardPhotos,
+      scanMedia,
       signalWaiter,
       shownSignals,
     }),

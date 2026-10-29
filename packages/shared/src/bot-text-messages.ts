@@ -14,7 +14,8 @@ import type { BotTextVarName } from './bot-text-vars';
 import { BOT_TEXT_LIMIT } from './bot-message-width';
 import { plainTextOf, TELEGRAM_CAPTION_LIMIT } from './telegram-html';
 import { STARS_PAYSUPPORT_LIST_LIMIT } from './stars';
-import { SIGNAL_CHART_INTERVAL_MS } from './signal';
+import { H1_CLOSENESS_MAX_PCT, SIGNAL_CHART_INTERVAL_MS } from './signal';
+import { SCAN_CLOSEST_SHOWN } from './scan-summary';
 import { INT4_MAX } from './trading';
 import {
   DEFAULT_SESSION_CYCLES,
@@ -99,6 +100,12 @@ export const BOT_TEXT_WIDTHS = {
   sessionCount: 3,
   // a Telegram username, 5-32 characters (stated: Telegram's rule, not a schema of ours)
   botUsername: 32,
+  // h1ClosenessPct: 0-99 (scanSummarySchema)
+  closenessPct: String(H1_CLOSENESS_MAX_PCT).length,
+  // the scanner's current pairs (#859): the catalog's, assumed under 10 000 (stated: ~150 today),
+  // and their checks a minute, formatCount of 9 999 × 60
+  scanCount: 4,
+  scanChecks: '599 940'.length,
 } as const;
 
 export interface BotTextMeasure {
@@ -159,6 +166,9 @@ const cycles = (m: BotTextMeasure) =>
   m.longest('sessionCycleOne', 'sessionCycleFew', 'sessionCycleMany');
 // a balance prints a number only when fresh, its stand-in otherwise (bot-text-vars.ts)
 const balance = (m: BotTextMeasure) => Math.max(w.usd, m.length('balanceUnavailable'));
+const stageMark = (m: BotTextMeasure) => m.longest('scanStageDone', 'scanStagePending');
+// « 82 %» after a closest pair's symbol
+const CLOSENESS_TAIL = ' '.length + String(H1_CLOSENESS_MAX_PCT).length + ' %'.length;
 
 // Each variable's widest value wherever it stands; a variable without one does not compile.
 export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTextWidth>> = {
@@ -252,6 +262,15 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   rewardTokens: () => w.count,
   // a share of the user's starter pack, a bigint (formatCount)
   nudgeTokens: () => w.count,
+  // scan-summary.ts: the scanned pairs and their word, the checks a minute (formatCount), a stage's
+  // mark, up to SCAN_CLOSEST_SHOWN «symbol pct %» joined by « · », a closeness 0-99
+  pairs: (m) => w.scanCount + 1 + m.longest('scanPairOne', 'scanPairFew', 'scanPairMany'),
+  checks: () => w.scanChecks,
+  quotes: stageMark,
+  moves: stageMark,
+  closest: () =>
+    SCAN_CLOSEST_SHOWN * (w.symbol + CLOSENESS_TAIL) + (SCAN_CLOSEST_SHOWN - 1) * SEPARATOR,
+  pct: () => w.closenessPct,
 };
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {
@@ -346,6 +365,12 @@ const k = (key: BotTextKey, width?: Widths): BotTextSegment =>
   width === undefined ? { key } : { key, width };
 const oneOf = (...options: (readonly BotTextSegment[])[]): BotTextSegment => ({ oneOf: options });
 const anyOf = (...keys: BotTextKey[]): BotTextSegment => oneOf(...keys.map((key) => [k(key)]));
+
+// the wait for a pair's scan block (#859, scan-summary.ts → pairScanLines), absent without a summary
+const pairScan = oneOf(
+  [],
+  ['\n\n', anyOf('pairScanning', 'pairScanningNoMove'), '\n', k('scanStages')],
+);
 
 const balances = (amount: number): BotTextSegment[] => [
   k('statusReal', { amount: () => amount }),
@@ -618,35 +643,52 @@ const ASSEMBLED: readonly BotTextMessage[] = [
   },
   // the analysis without a signal waits for one (#664): the features only on a refusal by a rule,
   // the line over the other pairs' buttons while they stand
+  // a caption under the scanner's animation since #859, with the pair's scan block once the wait
+  // holds a summary
   {
     id: 'analysisWaitingData',
     title: 'Анализ: ожидание сигнала, мало данных',
-    limit: BOT_TEXT_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
       k('analysisWaiting'),
+      pairScan,
       oneOf([], ['\n\n', k('pairWaitingAlternatives')]),
     ],
   },
   {
     id: 'analysisWaiting',
     title: 'Анализ: ожидание сигнала',
-    limit: BOT_TEXT_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [
       k('analysisHeader'),
       '\n',
       k('analysisWaiting'),
       '\n\n',
       ...features,
+      pairScan,
       oneOf([], ['\n\n', k('pairWaitingAlternatives')]),
     ],
   },
   {
     id: 'pairWaiting',
     title: 'Ожидание сигнала пары',
-    limit: BOT_TEXT_LIMIT,
-    body: [k('pairWaiting'), oneOf([], ['\n\n', k('pairWaitingAlternatives')])],
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [k('pairWaiting'), pairScan, oneOf([], ['\n\n', k('pairWaitingAlternatives')])],
+  },
+  // the list's wait (#859, scan-summary.ts → scanSummaryLines): a caption under the animation
+  {
+    id: 'signalsScanning',
+    title: 'Ожидание списка сигналов: подпись сканера',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [
+      k('signalsScanning'),
+      oneOf([], ['\n', k('signalsScanningPair')]),
+      '\n',
+      k('scanStages'),
+      oneOf([], ['\n', k('signalsScanningClosest')]),
+    ],
   },
   {
     id: 'intentStatus',
@@ -826,10 +868,11 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     limit: BOT_TEXT_CATALOG.sessionCardFooter.limit,
     body: [k('sessionCardFooter')],
   },
+  // the next step the wait draws is a caption of its still (#859), so both bound a caption
   {
     id: 'demoLaunch',
     title: 'Демо: запуск цикла',
-    limit: BOT_TEXT_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [
       // only after a saved stake, in the saved stake's mode (#326)
       anyOf('stakeSavedLine', 'stakeSavedLineReal'),
@@ -846,7 +889,7 @@ const ASSEMBLED: readonly BotTextMessage[] = [
     // the amount screen of a demo cycle (#476, texts.ts → cycleStakeText)
     id: 'demoCycleStake',
     title: 'Демо: выбор суммы цикла',
-    limit: BOT_TEXT_LIMIT,
+    limit: TELEGRAM_CAPTION_LIMIT,
     body: [
       // only after a save in the stake picker opened from an old launch screen, in its mode
       anyOf('stakeSavedLine', 'stakeSavedLineReal'),

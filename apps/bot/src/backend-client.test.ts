@@ -5,6 +5,7 @@ import {
   botTextOverridesResponseSchema,
   BrokerAccountStatus,
   StakeRefusal,
+  H1_CLOSENESS_MAX_PCT,
   INT4_MAX,
   LinkBonusSkipReason,
   MAX_SESSION_CYCLES,
@@ -933,6 +934,7 @@ describe('readSignals', () => {
       {
         interval: '15s',
         scanned: 13,
+        summary: { streaming: true, scanning: 101, closeness: [{ assetId: 7, pct: 82 }] },
         signals: [
           {
             assetId: 101,
@@ -943,7 +945,12 @@ describe('readSignals', () => {
           },
         ],
       },
-      { interval: '5s', scanned: 4, signals: [] },
+      {
+        interval: '5s',
+        scanned: 4,
+        summary: { streaming: false, scanning: null, closeness: [] },
+        signals: [],
+      },
     ],
   };
 
@@ -2173,6 +2180,15 @@ describe('body size', () => {
           lists: SIGNAL_SCAN_INTERVALS.map((interval) => ({
             interval,
             scanned: NONNEGATIVE_INT,
+            // every pair below the threshold (#859)
+            summary: {
+              streaming: false,
+              scanning: INT4_MAX,
+              closeness: Array.from({ length: ASSUMED_LONGEST_PAIRS }, () => ({
+                assetId: INT4_MAX,
+                pct: H1_CLOSENESS_MAX_PCT,
+              })),
+            },
             signals: Array.from({ length: ASSUMED_LONGEST_PAIRS }, () => ({
               assetId: INT4_MAX,
               action: longest(Object.values(TradeAction)),

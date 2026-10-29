@@ -10,7 +10,13 @@ import {
   type PairsCatalogView,
 } from '@binarius/shared';
 import type { ClosedSecond } from '../market-data/seconds';
-import { createH1Scanner, H1_SCANNER_PARAMS, type H1Scanner, type H1ScannerDeps } from './scanner';
+import {
+  createH1Scanner,
+  EMPTY_H1_SCANNER_LIST,
+  H1_SCANNER_PARAMS,
+  type H1Scanner,
+  type H1ScannerDeps,
+} from './scanner';
 
 // The H1 scanner (#828, docs/h1.md -> The scanner and the signals list). A scripted series closes
 // seconds in order; T is the first second, F = T + 300 s the first one with a full 301-second
@@ -156,7 +162,7 @@ describe('the H1 scanner (#828)', () => {
   it('H1-SC1 lists a signal of a closed second with its second, decision time and age', () => {
     const h = harness();
     h.feed(A, T, ramp(1));
-    expect(h.scanner.fresh(h.clock.now)).toEqual({
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({
       scanned: 1,
       signals: [{ assetId: A, action: 'up', second: F, decidedAt: F + AGE, ageMs: AGE }],
     });
@@ -175,7 +181,7 @@ describe('the H1 scanner (#828)', () => {
   it('H1-SC2 a no_signal second is not listed, counted by reason', () => {
     const h = harness();
     h.feed(A, T, quiet());
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 1, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 1, signals: [] });
     expect(h.scanner.current(A, h.clock.now)).toBeNull();
     const line = h.line();
     expect(line.decisions).toBe(1);
@@ -192,18 +198,18 @@ describe('the H1 scanner (#828)', () => {
     h.feed(A, F + 1_000, flat(1, 1.1001));
     expect(h.scanner.fresh(h.clock.now).signals.map((s) => s.second)).toEqual([F + 1_000]);
     h.feed(A, F + 2_000, flat(3, 1.1001));
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 1, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 1, signals: [] });
     expect(h.line()).toMatchObject({ decisions: 5, signals: 3 });
   });
 
   it('H1-SC4 a second older than maxAgeMs is not listed; exactly at it, it is', () => {
     const h = harness();
     h.feed(A, T, ramp(1));
-    expect(h.scanner.fresh(F + MAX_AGE_MS)).toEqual({
+    expect(h.scanner.fresh(F + MAX_AGE_MS)).toMatchObject({
       scanned: 1,
       signals: [{ assetId: A, action: 'up', second: F, decidedAt: F + AGE, ageMs: MAX_AGE_MS }],
     });
-    expect(h.scanner.fresh(F + MAX_AGE_MS + 1)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(F + MAX_AGE_MS + 1)).toMatchObject({ scanned: 0, signals: [] });
     expect(h.scanner.current(A, F + MAX_AGE_MS)?.action).toBe('up');
     expect(h.scanner.current(A, F + MAX_AGE_MS + 1)).toBeNull();
   });
@@ -215,7 +221,7 @@ describe('the H1 scanner (#828)', () => {
     expect(h.scanner.fresh(h.clock.now).signals).toHaveLength(2);
     h.streaming.on = false;
     h.feed(A, F + 1_000, [1.1002]);
-    expect(h.scanner.fresh(F + 1_100)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(F + 1_100)).toMatchObject({ scanned: 0, signals: [] });
     expect(h.line().sourceDown).toBe(1);
   });
 
@@ -245,7 +251,7 @@ describe('the H1 scanner (#828)', () => {
     expect(h.scanner.fresh(h.clock.now).signals).toHaveLength(1);
     h.catalog.view = { ...h.catalog.view!, pairs };
     h.feed(A, F + 1_000, [1.1002]);
-    expect(h.scanner.fresh(F + 1_000)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(F + 1_000)).toMatchObject({ scanned: 0, signals: [] });
     expect(h.line().ineligible).toBe(1);
   });
 
@@ -260,11 +266,11 @@ describe('the H1 scanner (#828)', () => {
     h.feed(A, T, ramp(1));
     // a reset: the series restarts at F + 10 s, the window lacks the 300 seconds before it
     h.feed(A, F + 10_000, [1.2]);
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 0, signals: [] });
     expect(h.line().warming).toBeGreaterThanOrEqual(1);
     const fresh = harness();
     fresh.feed(A, T, flat(10));
-    expect(fresh.scanner.fresh(fresh.clock.now)).toEqual({ scanned: 0, signals: [] });
+    expect(fresh.scanner.fresh(fresh.clock.now)).toMatchObject({ scanned: 0, signals: [] });
     expect(fresh.line()).toMatchObject({ warming: 10, decisions: 0 });
   });
 
@@ -344,15 +350,81 @@ describe('the H1 scanner (#828)', () => {
     h.feed(A, T, ramp(1));
     h.scanner.stop();
     expect(h.listeners.size).toBe(0);
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 0, signals: [] });
     h.feed(A, F + 1_000, [1.1002]);
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 0, signals: [] });
   });
 
   it('decides nothing before start()', () => {
     const h = harness({ start: false });
     h.feed(A, T, ramp(1));
     expect(h.listeners.size).toBe(0);
-    expect(h.scanner.fresh(h.clock.now)).toEqual({ scanned: 0, signals: [] });
+    expect(h.scanner.fresh(h.clock.now)).toMatchObject({ scanned: 0, signals: [] });
+  });
+
+  // a noisy window, then a last 3-second move of `move`: below the threshold, z > 0
+  const near = (move: number) => [
+    ...Array.from({ length: 297 }, (_, i) => (i % 2 === 0 ? 1.1 : 1.1002)),
+    1.1,
+    1.1,
+    1.1,
+    1.1 + move,
+  ];
+
+  it("H1-SC15 the summary's closeness: each current below-threshold pair, highest first (#859)", () => {
+    const C = 303;
+    const D = 404;
+    const h = harness({ pairs: [pairOf(A), pairOf(B), pairOf(C), pairOf(D)] });
+    h.feed(A, T, near(0.00005));
+    h.feed(B, T, near(0.0001));
+    // a signal and a flat window (no_volatility) carry no closeness
+    h.feed(C, T, ramp(1));
+    h.feed(D, T, flat(301));
+    const { summary, scanned, signals } = h.scanner.fresh(h.clock.now);
+    expect(scanned).toBe(4);
+    expect(signals.map((s) => s.assetId)).toEqual([C]);
+    // the window's 3-second moves are ±2 pips, so z = move / 0.0002 and pct = floor(100 · z / 1)
+    expect(summary.closeness).toEqual([
+      { assetId: B, pct: 50 },
+      { assetId: A, pct: 25 },
+    ]);
+    // a stale entry is not current: no closeness
+    expect(h.scanner.fresh(h.clock.now + MAX_AGE_MS).summary.closeness).toEqual([]);
+  });
+
+  it('H1-SC15 equal closeness goes by assetId', () => {
+    const h = harness();
+    h.feed(B, T, near(0.00005));
+    h.feed(A, T, near(0.00005));
+    expect(h.scanner.fresh(h.clock.now).summary.closeness.map((c) => c.assetId)).toEqual([A, B]);
+  });
+
+  it('H1-SC16 scanning rotates over the current pairs by assetId once a second; null without one', () => {
+    const C = 303;
+    const h = harness({ pairs: [pairOf(C), pairOf(A), pairOf(B)] });
+    expect(h.scanner.fresh(h.clock.now).summary.scanning).toBeNull();
+    h.feed(C, T, quiet());
+    h.feed(A, T, quiet());
+    h.feed(B, T, quiet());
+    // F = T + 300 s: floor(F / 1000) % 3 picks the pair by its place in [A, B, C]
+    const base = Math.floor(F / 1000) % 3;
+    const at = (offsetMs: number) => h.scanner.fresh(F + offsetMs).summary.scanning;
+    expect([at(0), at(1_000), at(1_500)]).toEqual([
+      [A, B, C][base],
+      [A, B, C][(base + 1) % 3],
+      [A, B, C][(base + 1) % 3],
+    ]);
+  });
+
+  it('H1-SC17 the summary says whether the source streams', () => {
+    const h = harness();
+    expect(h.scanner.fresh(h.clock.now).summary.streaming).toBe(true);
+    h.streaming.on = false;
+    expect(h.scanner.fresh(h.clock.now).summary.streaming).toBe(false);
+    expect(EMPTY_H1_SCANNER_LIST).toEqual({
+      scanned: 0,
+      signals: [],
+      summary: { streaming: false, scanning: null, closeness: [] },
+    });
   });
 });

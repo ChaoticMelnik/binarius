@@ -12,6 +12,7 @@ import {
   H1_REPEAT_VERSION,
   H1_START_VERSION,
   H1_VERSION,
+  h1ClosenessPct,
   h1DecisionSchema,
   h1ShadowEntrySchema,
   h1ShadowParamsSchema,
@@ -201,5 +202,15 @@ describe('the shown direction of a start (#829)', () => {
     expect((SIGNAL_ALGORITHM_VERSIONS as readonly string[]).includes(H1_START_VERSION)).toBe(false);
     expect(H1_START_VERSION).not.toBe(H1_VERSION);
     expect(H1_START_VERSION).not.toBe(H1_REPEAT_VERSION);
+  });
+});
+
+describe('the closeness of a move to the threshold (#859)', () => {
+  it('H-S13: the floored share of the threshold, at most 99 at and above it', () => {
+    expect(h1ClosenessPct(0, 1)).toBe(0);
+    expect(h1ClosenessPct(0.825, 1)).toBe(82);
+    expect(h1ClosenessPct(1.5, 2)).toBe(75);
+    expect(h1ClosenessPct(0.999, 1)).toBe(99);
+    expect(h1ClosenessPct(1, 1)).toBe(99);
   });
 });

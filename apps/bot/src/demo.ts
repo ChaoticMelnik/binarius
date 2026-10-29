@@ -3,6 +3,7 @@ import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
   deleteRefusal,
   editRefusal,
+  joinHtmlLines,
   BrokerRestErrorCode,
   checkStake,
   comparePairsByPayout,
@@ -74,18 +75,21 @@ import {
   type DemoTradeRead,
 } from './demo-catalog';
 import type { Logger } from './logging';
+import type { ScanMedia } from './scan-media';
 import {
+  editMessageAnimationByIdHtml,
   editMessageTextByIdHtml,
   editMessageTextHtml,
   editMessageTextHtmlWithoutNextStep,
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithAnimationHtml,
   replyWithPhotoHtml,
 } from './send';
 import type { SetupCardPhotos } from './setup-card';
 import type { ShownSignalRecord, ShownSignals } from './shown-signals';
-import type { SignalWaiter, SignalWaitScreens } from './signal-wait';
+import type { PairScan, SignalWaiter, SignalWaitScreens, WaitMedia } from './signal-wait';
 import { currentLanguage } from './language';
 import { stakeAccess } from './stake-access';
 import { stakeGroups } from './stake-rows';
@@ -105,6 +109,7 @@ import {
   signalButtonLabel,
   stakeButtonLabel,
   stakeSavedLine,
+  scanTexts,
   TEXTS,
   DEMO_GROUP_LABELS,
 } from './texts';
@@ -558,7 +563,8 @@ export function signalsShown(
 // #685), chosen and ordered by signalsShown, each joined with the catalog for its symbol and
 // payout. Two a row in signalsShown's order, across the types, the last alone when odd; the
 // footer under the list (#419). No pair: the wait for the signals (#664), with the footer and no
-// refresh — the bot edits the list into it once a pair has a signal. The list is a snapshot; the
+// refresh — the bot edits the list into it once a pair has a signal; its text is the scanner's
+// caption under the animation (#859). The list is a snapshot; the
 // cycle checks the signal again before each trade. Undefined when the body has no list for the
 // duration: a backend scanning other intervals. `shown` is the drawn buttons, for the bot's record
 // once the screen went out (#829).
@@ -576,7 +582,7 @@ export function signalsScreen(
   if (listed === 0) {
     return {
       screen: {
-        text: TEXTS.signalsWaiting({ label }),
+        text: joinHtmlLines(scanTexts.scanSummaryLines(list, symbolIn(catalog))),
         keyboard: signalsFooter([]),
       },
       listed,
@@ -602,6 +608,14 @@ export function signalsScreen(
   };
 }
 
+// a pair's label by its id in the catalog read with the list (#859)
+const symbolIn =
+  (catalog: PairsCatalogResponse) =>
+  (assetId: number): string | undefined => {
+    const pair = catalog.pairs.find((candidate) => candidate.id === assetId);
+    return pair === undefined ? undefined : pairLabel(pair);
+  };
+
 // The pairs' buttons, two a row in the list's order, green or red by the signal's direction
 // (#475), as the list draws them
 const signalList = (shown: readonly ShownSignal[]): ButtonGroup => ({
@@ -615,24 +629,42 @@ const signalList = (shown: readonly ShownSignal[]): ButtonGroup => ({
   perRow: 2,
 });
 
-// The wait for a pair's signal (#664): its text, and while there are some the line and the
-// buttons of the pairs with a signal now, then the manual path and the menu
+// The wait for a pair's signal (#664): its text, the scanner's lines of the pair once a list was
+// read (#859), and while there are some the line and the buttons of the pairs with a signal now,
+// then the manual path and the menu
 export function pairWaitingScreen(
   base: TelegramHtml,
   alternatives: readonly ShownSignal[],
+  scan?: PairScan,
 ): DemoScreen {
   return {
-    text: waitingText(base, alternatives.length > 0),
+    text: waitingText(base, pairScanLinesOf(scan), alternatives.length > 0),
     keyboard: signalsFooter([], signalList(alternatives)),
   };
 }
 
-export const waitingText = (base: TelegramHtml, alternatives: boolean): TelegramHtml =>
-  alternatives
-    ? telegramHtml`${base}
+const pairScanLinesOf = (scan: PairScan | undefined): TelegramHtml[] =>
+  scan === undefined
+    ? []
+    : scanTexts.pairScanLines(scan.list, { assetId: scan.pair.id, symbol: pairLabel(scan.pair) });
+
+export function waitingText(
+  base: TelegramHtml,
+  scan: readonly TelegramHtml[],
+  alternatives: boolean,
+): TelegramHtml {
+  const scanned =
+    scan.length === 0
+      ? base
+      : telegramHtml`${base}
+
+${joinHtmlLines(scan)}`;
+  return alternatives
+    ? telegramHtml`${scanned}
 
 ${TEXTS.pairWaitingAlternatives}`
-    : base;
+    : scanned;
+}
 
 export const pairWaitingText = (symbol: PairLabel | null, assetId: number): TelegramHtml =>
   TEXTS.pairWaiting({
@@ -1060,9 +1092,11 @@ export function nextStepScreen(
 export function createSignalWaitScreens({
   connectButtons,
   setupCardPhotos,
+  scanMedia,
 }: {
   connectButtons: () => BotButton[];
   setupCardPhotos: SetupCardPhotos;
+  scanMedia: ScanMedia;
 }): SignalWaitScreens {
   return {
     list: signalsScreen,
@@ -1090,6 +1124,7 @@ export function createSignalWaitScreens({
       };
     },
     photos: setupCardPhotos,
+    media: scanMedia,
   };
 }
 
@@ -1104,6 +1139,8 @@ export interface DemoComposerDeps {
   connectButtons: () => BotButton[];
   // the card's pictures, shared with the session message (#568)
   setupCardPhotos: SetupCardPhotos;
+  // the wait's animation, shared with the wait (#859)
+  scanMedia: ScanMedia;
   // the wait for a signal (#664): the list without pairs, the list's 30 s, the pair without one
   signalWaiter: Pick<SignalWaiter, 'waitList' | 'waitPair'>;
   // the directions this composer's screens showed (#829), taken by the start
@@ -1116,6 +1153,7 @@ export function createDemoComposer<C extends Context>({
   now,
   connectButtons,
   setupCardPhotos,
+  scanMedia,
   signalWaiter,
   shownSignals,
 }: DemoComposerDeps): Composer<C> {
@@ -1127,41 +1165,137 @@ export function createDemoComposer<C extends Context>({
   composer.callbackQuery(LEGACY_DURATION_PATTERNS, async (ctx) => {
     logger.info({ callbackData: ctx.callbackQuery.data }, 'legacy duration button');
     const drawn = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_SIGNALS_CALLBACK_DATA));
-    const sent = await replyHtml(ctx, drawn.screen.text, { reply_markup: drawn.screen.keyboard });
-    waitList(ctx, placeOf(sent), drawn);
+    waitList(ctx, await showListAnew(ctx, drawn), drawn);
   });
 
   // the card's button is under a photo: the list goes as a new message
   composer.callbackQuery(DEMO_CALLBACK_DATA, async (ctx) => {
     const drawn = await answerAnd(ctx, readSignalsScreen(ctx, DEMO_CALLBACK_DATA));
-    const sent = await replyHtml(ctx, drawn.screen.text, { reply_markup: drawn.screen.keyboard });
-    waitList(ctx, placeOf(sent), drawn);
+    waitList(ctx, await showListAnew(ctx, drawn), drawn);
   });
 
+  // In place; the wait's animation under a photo or an animation goes as a new message (#859)
   composer.callbackQuery(DEMO_SIGNALS_PATTERN, async (ctx) => {
     const drawn = await answerAnd(ctx, readSignalsScreen(ctx, ctx.callbackQuery.data));
-    waitList(ctx, await editOrReply(ctx, drawn.screen.text, drawn.screen.keyboard), drawn);
+    const { text, keyboard } = drawn.screen;
+    if (drawn.listed !== 0) {
+      waitList(ctx, asText(await editOrReply(ctx, text, keyboard)), drawn);
+      return;
+    }
+    const onto = pressedUnderMedia(ctx) ? undefined : pressedPlace(ctx);
+    const shown = await showAnimation(ctx, drawn.screen, onto, async (gone) =>
+      gone
+        ? placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }))
+        : editOrReply(ctx, text, keyboard),
+    );
+    waitList(ctx, shown, drawn);
   });
+
+  // a new message: the scanner's animation while no pair has a signal (#859), else the text
+  async function showListAnew(
+    ctx: Context,
+    { screen, listed }: Awaited<ReturnType<typeof readSignalsScreen>>,
+  ): Promise<Shown | undefined> {
+    const reply = async () =>
+      placeOf(await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard }));
+    return listed === 0 ? showAnimation(ctx, screen, undefined, reply) : asText(await reply());
+  }
 
   // A list drawn with its pairs expires after SIGNALS_LIST_TTL_MS, one without pairs waits for
   // them (#664); a refusal of the reads, with its «🔄 Повторить», is not a wait. A list on screen
   // records its pairs' directions for the start (#829).
   function waitList(
     ctx: Context,
-    place: Place | undefined,
-    { screen, listed, shown }: Awaited<ReturnType<typeof readSignalsScreen>>,
+    shown: Shown | undefined,
+    { screen, listed, shown: buttons }: Awaited<ReturnType<typeof readSignalsScreen>>,
   ): void {
     const from = ctx.from;
-    if (place === undefined || listed === undefined || from === undefined) return;
-    shownSignals.remember(from.id, ShownSignalSource.List, now(), shownRecordsOf(shown));
+    if (shown === undefined || listed === undefined || from === undefined) return;
+    shownSignals.remember(from.id, ShownSignalSource.List, now(), shownRecordsOf(buttons));
     signalWaiter.waitList({
       api: ctx.api,
-      ...place,
+      ...shown.place,
       telegramUserId: from.id,
       language: currentLanguage(),
       drawn: screen,
+      media: shown.media,
+      scanned: true,
       shown: listed > 0,
     });
+  }
+
+  // The wait's screen as the scanner's animation (#859, Rule 58): `onto` — a text message —
+  // becoming it, or a new message; a gone `onto` gets a new one. An animation refused for its file
+  // (not a 429, a 403 or an edit refusal: a bad file, a stale file_id) forgets the id and the
+  // screen goes as text by `fallback`, told whether `onto` is gone. A transport failure sends
+  // nothing more. Where the screen landed and as what; undefined when it did not.
+  async function showAnimation(
+    ctx: Context,
+    screen: DemoScreen,
+    onto: Place | undefined,
+    fallback: (gone: boolean) => Promise<Place | undefined>,
+  ): Promise<Shown | undefined> {
+    const file = scanMedia.file('animation');
+    const extra = { reply_markup: screen.keyboard };
+    let gone = false;
+    try {
+      if (onto !== undefined) {
+        try {
+          const result = await editMessageAnimationByIdHtml(
+            ctx.api,
+            onto.chatId,
+            onto.messageId,
+            file,
+            screen.text,
+            extra,
+          );
+          scanMedia.remember('animation', result);
+          return { place: onto, media: 'animation' };
+        } catch (error) {
+          const refusal = error instanceof GrammyError ? editRefusal(error) : undefined;
+          if (refusal === 'shown') return { place: onto, media: 'animation' };
+          if (refusal !== 'gone') throw error;
+          gone = true;
+          logger.warn(
+            { ...errorLogFields(error), ...telegramErrorFields(error, 'editMessageMedia') },
+            'the demo screen was not edited, sending it anew',
+          );
+        }
+      }
+      const sent = await replyWithAnimationHtml(ctx, file, screen.text, extra);
+      scanMedia.remember('animation', sent);
+      return { place: placeOf(sent), media: 'animation' };
+    } catch (error) {
+      if (
+        error instanceof GrammyError &&
+        error.error_code !== 429 &&
+        error.error_code !== 403 &&
+        editRefusal(error) === undefined
+      ) {
+        scanMedia.forget('animation');
+        logger.warn(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error),
+            byFileId: typeof file === 'string',
+          },
+          'the scan animation was refused, sending the text',
+        );
+        return asText(await fallback(gone));
+      }
+      if (error instanceof HttpError) {
+        logger.error(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error),
+            updateId: ctx.update.update_id,
+          },
+          'the scan animation failed in transport, sending nothing more',
+        );
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   // A pair of the list, and since #476 every demo door of a cycle: the amount screen in demo, the
@@ -1192,7 +1326,7 @@ export function createDemoComposer<C extends Context>({
     const firstName = ctx.from.first_name;
     const back = cycleBackOf(origin);
     let screen: DemoScreen;
-    let wait: { base: TelegramHtml; alternatives: ShownSignal[] } | undefined;
+    let wait: { base: TelegramHtml; alternatives: ShownSignal[]; scanned: boolean } | undefined;
     if (!read.ok) {
       screen = tradeFailure(read, ctx.callbackQuery.data);
     } else {
@@ -1206,15 +1340,19 @@ export function createDemoComposer<C extends Context>({
         const alternatives =
           list === undefined ? [] : signalsShown(list.signals, read.catalog, now());
         const base = pairWaitingText(pairLabel(read.pair), assetId);
-        screen = pairWaitingScreen(base, alternatives);
-        wait = { base, alternatives };
+        const scan = list === undefined ? undefined : { list, pair: read.pair };
+        screen = pairWaitingScreen(base, alternatives, scan);
+        wait = { base, alternatives, scanned: scan !== undefined };
       }
     }
-    const place =
-      origin === 'n'
-        ? placeOf(await replyHtml(ctx, screen.text, { reply_markup: screen.keyboard }))
-        : await editOrReply(ctx, screen.text, screen.keyboard);
-    if (wait === undefined || place === undefined) return;
+    const { text, keyboard } = screen;
+    const reply = async () => placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
+    // the wait is the scanner's animation as a new message (#859); the rest as before
+    const shown =
+      wait !== undefined
+        ? await showAnimation(ctx, screen, undefined, reply)
+        : asText(origin === 'n' ? await reply() : await editOrReply(ctx, text, keyboard));
+    if (wait === undefined || shown === undefined) return;
     shownSignals.remember(
       ctx.from.id,
       ShownSignalSource.List,
@@ -1223,16 +1361,18 @@ export function createDemoComposer<C extends Context>({
     );
     signalWaiter.waitPair({
       api: ctx.api,
-      ...place,
+      ...shown.place,
       telegramUserId: ctx.from.id,
       language: currentLanguage(),
       drawn: screen,
+      media: shown.media,
+      scanned: wait.scanned,
       firstName,
       assetId,
       back,
       origin: 'door',
       base: wait.base,
-      alternatives: wait.alternatives.length > 0 ? 'shown' : 'done',
+      alternatives: wait.alternatives.length > 0 ? wait.alternatives : 'done',
     });
   });
 
@@ -1344,16 +1484,31 @@ export function createDemoComposer<C extends Context>({
       amounts !== null,
     );
     if (screen.wait) {
-      // no signal now: the wait for one (#664), its card drawn in this message once it comes
+      // no signal now: the wait for one (#664), «⏳» becoming the scanner's animation (#859), its
+      // card drawn in this message once it comes. The analysis read no list: the scanner's lines
+      // come with the wait's first poll.
       const drawn = pairWaitingScreen(screen.text, []);
-      const place = await showResult(ctx, waiting, drawn.text, drawn.keyboard);
-      if (place === undefined) return;
+      const shown = await showAnimation(
+        ctx,
+        drawn,
+        waiting === null ? undefined : { chatId: waiting.chatId, messageId: waiting.messageId },
+        async (gone) => {
+          if (waiting === null) {
+            return placeOf(await replyHtml(ctx, drawn.text, { reply_markup: drawn.keyboard }));
+          }
+          // a gone «⏳» is not sent anew (HANDLER_CALLS.demoAnalysis)
+          return gone ? undefined : editWaitingText(ctx, waiting, drawn);
+        },
+      );
+      if (shown === undefined) return;
       signalWaiter.waitPair({
         api: ctx.api,
-        ...place,
+        ...shown.place,
         telegramUserId: ctx.from.id,
         language: currentLanguage(),
         drawn,
+        media: shown.media,
+        scanned: false,
         firstName: ctx.from.first_name,
         assetId,
         back: 'a',
@@ -1457,7 +1612,7 @@ export function createDemoComposer<C extends Context>({
   // unknown and sends nothing more; any other refusal goes to bot.catch.
   async function showWaiting(ctx: Context, text: TelegramHtml): Promise<Waiting | 'unknown'> {
     const pressed = ctx.callbackQuery?.message;
-    if (pressedUnderPhoto(ctx)) {
+    if (pressedUnderMedia(ctx)) {
       try {
         const sent = await replyHtmlWithoutNextStep(ctx, text, NO_NEXT_STEP_REASONS.InProgress);
         return { pressed: false, chatId: sent.chat.id, messageId: sent.message_id };
@@ -1614,6 +1769,33 @@ export function createDemoComposer<C extends Context>({
     return true;
   }
 
+  // «⏳» as the wait's text after its animation was refused (#859): already shown is drawn; any
+  // other refusal or failure is logged, nothing more
+  async function editWaitingText(
+    ctx: Context,
+    { chatId, messageId }: Exclude<Waiting, null>,
+    { text, keyboard }: DemoScreen,
+  ): Promise<Place | undefined> {
+    try {
+      await editMessageTextByIdHtml(ctx.api, chatId, messageId, text, { reply_markup: keyboard });
+      return { chatId, messageId };
+    } catch (error) {
+      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
+      if (error instanceof GrammyError && editRefusal(error) === 'shown') {
+        return { chatId, messageId };
+      }
+      logger.warn(
+        {
+          ...errorLogFields(error),
+          ...telegramErrorFields(error, 'editMessageText'),
+          updateId: ctx.update.update_id,
+        },
+        'the analysis «⏳» was not edited into the wait',
+      );
+      return undefined;
+    }
+  }
+
   // «⏳» edited after the card could not go: any refusal or failure is logged, nothing more; true
   // when the text is on screen
   async function editWaiting(
@@ -1762,8 +1944,9 @@ export function createDemoComposer<C extends Context>({
   // gets the screen anew; any other refusal goes to bot.catch with nothing sent, the keyboard on
   // screen being the retry. A transport failure leaves the edit unknown and sends nothing more;
   // anything else is a bug.
-  // Under a photo (the analysis card #482, the summary card #318) no edit is tried: a caption
-  // cannot become this text, so the screen goes as a new message at once (#761).
+  // Under a photo (the analysis card #482, the summary card #318, the wait's still) or the wait's
+  // animation (#859) no edit is tried: a caption cannot become this text, so the screen goes as a
+  // new message at once (#761).
   // Where the screen landed, for the wait (#664): the pressed message or the new one; undefined
   // after a transport failure.
   async function editOrReply(
@@ -1771,7 +1954,7 @@ export function createDemoComposer<C extends Context>({
     text: TelegramHtml,
     keyboard: BotKeyboard,
   ): Promise<Place | undefined> {
-    if (pressedUnderPhoto(ctx)) {
+    if (pressedUnderMedia(ctx)) {
       return placeOf(await replyHtml(ctx, text, { reply_markup: keyboard }));
     }
     try {
@@ -1973,11 +2156,24 @@ export const pressedPlace = (ctx: Context): Place | undefined => {
   const messageId = ctx.callbackQuery?.message?.message_id;
   return chatId === undefined || messageId === undefined ? undefined : { chatId, messageId };
 };
-// The pressed message is a photo, so its text is a caption that editMessageText cannot edit
-export const pressedUnderPhoto = (ctx: Context): boolean => {
+// The pressed message is a photo or the wait's animation (#859), so its text is a caption that
+// editMessageText cannot edit
+export const pressedUnderMedia = (ctx: Context): boolean => {
   const pressed = ctx.callbackQuery?.message;
-  return pressed !== undefined && 'photo' in pressed && pressed.photo !== undefined;
+  if (pressed === undefined) return false;
+  return (
+    ('photo' in pressed && pressed.photo !== undefined) ||
+    ('animation' in pressed && pressed.animation !== undefined)
+  );
 };
+
+// where a screen landed and as what, for the wait (#859)
+interface Shown {
+  place: Place;
+  media: WaitMedia;
+}
+const asText = (place: Place | undefined): Shown | undefined =>
+  place === undefined ? undefined : { place, media: 'text' };
 
 // Where the analysis's «⏳» is: the pressed message, or a new one under a photo; null when the
 // pressed message was gone and no «⏳» stands

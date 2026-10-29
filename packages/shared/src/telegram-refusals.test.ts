@@ -8,6 +8,7 @@ describe('editRefusal', () => {
     'Bad Request: message to edit not found',
     "Bad Request: message can't be edited",
     'Bad Request: there is no text in the message to edit',
+    'Bad Request: there is no caption in the message to edit',
   ])('a 400 «%s» is a gone message', (description) => {
     expect(editRefusal(refusal(400, description))).toBe('gone');
   });

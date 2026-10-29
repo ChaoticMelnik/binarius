@@ -7,6 +7,8 @@ import type { BotKeyboard, TelegramHtml } from '@binarius/shared';
 import {
   answerInlineQueryEmpty,
   answerInlineQueryPhotoHtml,
+  editMessageAnimationByIdHtml,
+  editMessageCaptionByIdHtml,
   editMessagePhotoByIdHtml,
   editMessagePhotoByIdHtmlWithoutNextStep,
   editMessageTextByIdHtml,
@@ -14,6 +16,7 @@ import {
   editMessageTextHtml,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithAnimationHtml,
   replyWithInvoiceStars,
   replyWithPhotoHtml,
   replyWithPhotoHtmlWithoutNextStep,
@@ -220,4 +223,41 @@ export const viaInvoiceBare = replyWithInvoiceStars(ctx, invoice, {
   pay: 'p',
   // @ts-expect-error (TS2322)
   then: { inline_keyboard: [] },
+});
+
+// The wait's seams (#859): a keyboard, TelegramHtml and parse_mode HTML, as every one above
+// @ts-expect-error the animation needs its keyboard (TS2554)
+export const viaAnimationNoKeyboard = replyWithAnimationHtml(ctx, 'id', text);
+// @ts-expect-error nor a raw caption (TS2345)
+export const viaAnimationRaw = replyWithAnimationHtml(ctx, 'id', 'raw', { reply_markup: keyboard });
+export const viaAnimationEntities = replyWithAnimationHtml(ctx, 'id', text, {
+  reply_markup: keyboard,
+  // @ts-expect-error nor caption_entities in place of parse_mode (TS2353)
+  caption_entities: [],
+});
+// @ts-expect-error the animation edit by id needs its keyboard (TS2554)
+export const viaAnimationEditNoKeyboard = editMessageAnimationByIdHtml(api, 1, 2, 'id', text);
+export const viaAnimationEditRaw = editMessageAnimationByIdHtml(
+  api,
+  1,
+  2,
+  'id',
+  // @ts-expect-error nor a raw caption (TS2345)
+  'raw',
+  { reply_markup: keyboard },
+);
+// @ts-expect-error the caption edit needs its keyboard (TS2554)
+export const viaCaptionNoKeyboard = editMessageCaptionByIdHtml(api, 1, 2, text);
+// @ts-expect-error nor a raw caption (TS2345)
+export const viaCaptionRaw = editMessageCaptionByIdHtml(api, 1, 2, 'raw', {
+  reply_markup: keyboard,
+});
+export const viaCaptionParseMode = editMessageCaptionByIdHtml(api, 1, 2, text, {
+  reply_markup: keyboard,
+  // @ts-expect-error nor its own parse_mode (TS2353)
+  parse_mode: 'MarkdownV2',
+});
+export const viaCaptionGrammyKeyboard = editMessageCaptionByIdHtml(api, 1, 2, text, {
+  // @ts-expect-error nor a grammY keyboard (TS2322)
+  reply_markup: grammyKeyboard,
 });

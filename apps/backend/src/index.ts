@@ -55,7 +55,7 @@ import { createMarketDataManager } from './market-data/manager';
 import { createTickStore } from './market-data/ticks';
 import { createSecondSeries } from './market-data/seconds';
 import { createH1Driver, H1ReadingUnavailable } from './h1/driver';
-import { createH1Scanner } from './h1/scanner';
+import { createH1Scanner, EMPTY_H1_SCANNER_LIST } from './h1/scanner';
 import { createTradeLogKeeper } from './trade-log/keeper';
 import { createCandleRing } from './market-data/ring';
 import { createCandleSource, createPendingRequests } from './market-data/source';
@@ -310,7 +310,7 @@ const app = buildApp({
       candleStore === undefined
         ? undefined
         : {
-            fresh: (nowMs) => marketData?.h1Scanner.fresh(nowMs) ?? { scanned: 0, signals: [] },
+            fresh: (nowMs) => marketData?.h1Scanner.fresh(nowMs) ?? EMPTY_H1_SCANNER_LIST,
           },
     internalApiToken: env.internalApiToken,
   },

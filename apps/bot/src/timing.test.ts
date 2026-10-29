@@ -111,6 +111,7 @@ import {
   USER_VIEW,
   captureApi,
   callbackUpdate,
+  animationCallbackUpdate,
   photoCallbackUpdate,
   chosenInlineResultUpdate,
   inlineQueryUpdate,
@@ -118,6 +119,9 @@ import {
   chatMemberUpdate,
   fakeLogger,
   messageAnswer,
+  animationAnswer,
+  SCAN_FILE_ID,
+  SCAN_MESSAGE_ID,
   photoAnswer,
   textUpdate,
   accessView,
@@ -257,6 +261,12 @@ const PHOTO_REFUSED: ApiError = {
   ok: false,
   error_code: 400,
   description: 'Bad Request: IMAGE_PROCESS_FAILED',
+};
+// the wait's animation refused for its file (#859): no edit refusal, no 429 or 403
+const ANIMATION_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: wrong file identifier/HTTP URL specified',
 };
 const PIN_REFUSED: ApiError = {
   ok: false,
@@ -523,6 +533,7 @@ async function observe(branch: Branch): Promise<Calls> {
   // the analysis card reads the file_id of the photo it sent (#482)
   api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-file-id']));
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
+  api.answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
   for (const [method, failure] of branch.apiErrors ?? []) api.apiErrors.set(method, failure);
   for (const [method, answer] of branch.answers ?? []) api.answers.set(method, answer);
   if (branch.failSecondEdit !== undefined) {
@@ -806,12 +817,15 @@ const signalsBranches = (update: () => Update, telegram: number): Branch[] => [
   },
 ];
 
+// no pair has a signal: the wait is the scanner's animation (#859)
+const NO_PAIR = () => Promise.resolve(signalsResponse(1_790_000_000_000));
 // the status card's button (#685): the list as a new message, after the two reads
 const DEMO_WORST_CASE: Branch = {
-  label: 'the query is answered and the list is sent',
+  label: 'no pair: the animation is refused for its file and the wait goes as text (#859)',
   update: callbackUpdate(DEMO_CALLBACK_DATA),
-  readSignals: () => Promise.resolve(SIGNALS),
-  expected: { backend: 2, telegram: 2 },
+  readSignals: NO_PAIR,
+  apiErrors: [['sendAnimation', ANIMATION_REFUSED]],
+  expected: { backend: 2, telegram: 3 },
 };
 
 const DEMO_BRANCHES: readonly Branch[] = [
@@ -821,6 +835,12 @@ const DEMO_BRANCHES: readonly Branch[] = [
     expected: { backend: 0, telegram: 0 },
   },
   DEMO_WORST_CASE,
+  {
+    label: 'the query is answered and the list is sent',
+    update: callbackUpdate(DEMO_CALLBACK_DATA),
+    readSignals: () => Promise.resolve(SIGNALS),
+    expected: { backend: 2, telegram: 2 },
+  },
   {
     label: 'answering the query is refused and the list still goes',
     update: callbackUpdate(DEMO_CALLBACK_DATA),
@@ -996,7 +1016,42 @@ const DEMO_SIGNALS = demoScreenBranches(
   signalsBranches(() => callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA), 2),
   2,
 );
+// #859: no pair, the pressed text becomes the animation; refused for its file, the text path
+const DEMO_SIGNALS_WORST: Branch = {
+  label: 'no pair: the animation is refused for its file, the text edit is gone, the text is sent',
+  update: callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA),
+  readSignals: NO_PAIR,
+  apiErrors: [
+    ['editMessageMedia', ANIMATION_REFUSED],
+    ['editMessageText', EDIT_REFUSED],
+  ],
+  expected: { backend: 2, telegram: 4 },
+};
 DEMO_SIGNALS.branches.push(
+  DEMO_SIGNALS_WORST,
+  {
+    label: 'no pair: the animation edit is gone and the animation is sent',
+    update: callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA),
+    readSignals: NO_PAIR,
+    apiErrors: [['editMessageMedia', EDIT_REFUSED]],
+    expected: { backend: 2, telegram: 3 },
+  },
+  {
+    label: 'no pair: the animation edit is gone, the animation refused, the text is sent',
+    update: callbackUpdate(DEMO_SIGNALS_CALLBACK_DATA),
+    readSignals: NO_PAIR,
+    apiErrors: [
+      ['editMessageMedia', EDIT_REFUSED],
+      ['sendAnimation', ANIMATION_REFUSED],
+    ],
+    expected: { backend: 2, telegram: 4 },
+  },
+  {
+    label: 'no pair under the animation: the animation is sent at once',
+    update: animationCallbackUpdate(DEMO_SIGNALS_CALLBACK_DATA),
+    readSignals: NO_PAIR,
+    expected: { backend: 2, telegram: 2 },
+  },
   {
     label: 'an old `demo:sig:15` button',
     update: callbackUpdate('demo:sig:15'),
@@ -1049,13 +1104,12 @@ DEMO_LAUNCH.branches.push({
 // #476, #664: the door under a trade or a session, drawn without a signal, sends the screen at
 // once, after its check of the H1 list
 const doorN = () => callbackUpdate(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'));
-const DEMO_LAUNCH_CHECK_WORST: Branch = {
-  label: 'the pair is in the list: the next step as a new message',
-  update: doorN(),
-  expected: { backend: 3, telegram: 2 },
-};
 const DEMO_LAUNCH_CHECK: Branch[] = [
-  DEMO_LAUNCH_CHECK_WORST,
+  {
+    label: 'the pair is in the list: the next step as a new message',
+    update: doorN(),
+    expected: { backend: 3, telegram: 2 },
+  },
   {
     label: 'the pair has no signal now: the wait (#664)',
     update: doorN(),
@@ -1072,6 +1126,13 @@ const DEMO_LAUNCH_CHECK: Branch[] = [
     readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
     evaluateSignal: () => Promise.reject(new Error('the door asks no signal (#664)')),
     expected: { backend: 3, telegram: 2 },
+  },
+  {
+    label: "the wait's animation is refused for its file: the wait as text (#859)",
+    update: doorN(),
+    readSignals: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+    apiErrors: [['sendAnimation', ANIMATION_REFUSED]],
+    expected: { backend: 3, telegram: 3 },
   },
 ];
 // «📊 Анализ» (#126): the check, «⏳» edited in place of the summary — or sent at once under a
@@ -1199,17 +1260,61 @@ const DEMO_ANALYSIS = {
       apiErrors: [['editMessageText', EDIT_TRANSPORT]],
       expected: { backend: 2, telegram: 2 },
     },
+    // the wait (#859): «⏳» becomes the scanner's animation
     {
-      label: 'the result edit is refused as gone and the result is sent anew',
+      label: "the wait's animation edit is refused as gone and the animation is sent anew",
       update: analysisUpdate(),
+      apiErrors: [['editMessageMedia', EDIT_REFUSED]],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the animation edit is gone, the animation refused for its file: nothing more',
+      update: analysisUpdate(),
+      apiErrors: [
+        ['editMessageMedia', EDIT_REFUSED],
+        ['sendAnimation', ANIMATION_REFUSED],
+      ],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the animation is refused for its file and «⏳» is edited into the wait as text',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageMedia', ANIMATION_REFUSED]],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the animation is refused for its file and the text edit is gone: nothing more',
+      update: analysisUpdate(),
+      apiErrors: [['editMessageMedia', ANIMATION_REFUSED]],
       failSecondEdit: EDIT_REFUSED,
       evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 4 },
     },
     {
-      label: 'the result edit fails in transport',
+      label: '«⏳» is gone and the animation refused for its file: the wait is sent as text',
       update: analysisUpdate(),
-      failSecondEdit: EDIT_TRANSPORT,
+      apiErrors: [
+        ['editMessageText', EDIT_REFUSED],
+        ['sendAnimation', ANIMATION_REFUSED],
+      ],
+      evaluateSignal: noSignal,
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: 'the animation edit fails in transport',
+      update: analysisUpdate(),
+      apiErrors: [
+        [
+          'editMessageMedia',
+          new HttpError(
+            "Network request for 'editMessageMedia' failed!",
+            new Error('The operation was aborted due to timeout'),
+          ),
+        ],
+      ],
       evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 3 },
     },
@@ -1226,9 +1331,9 @@ const DEMO_ANALYSIS = {
       expected: { backend: 3, telegram: 3 },
     },
     {
-      label: 'under a photo the new «⏳» is gone, and the text result is sent anew',
+      label: 'under a photo the new «⏳» is gone, and the animation is sent anew',
       update: analysisOnPhoto(),
-      apiErrors: [['editMessageText', EDIT_REFUSED]],
+      apiErrors: [['editMessageMedia', EDIT_REFUSED]],
       evaluateSignal: noSignal,
       expected: { backend: 3, telegram: 4 },
     },
@@ -3409,10 +3514,11 @@ const HELP_BRANCHES: readonly Branch[] = [
 // #313, #685: a button drawn with a duration the demo no longer offers: the list as a new message
 const legacyUpdate = () => callbackUpdate('demo:an:101:15');
 const LEGACY_DURATION_SENT: Branch = {
-  label: 'the list is sent',
+  label: 'no pair: the animation is refused for its file and the wait goes as text (#859)',
   update: legacyUpdate(),
-  readSignals: () => Promise.resolve(SIGNALS),
-  expected: { backend: 2, telegram: 2 },
+  readSignals: NO_PAIR,
+  apiErrors: [['sendAnimation', ANIMATION_REFUSED]],
+  expected: { backend: 2, telegram: 3 },
 };
 const LEGACY_DURATION_BRANCHES: Branch[] = [
   {
@@ -3421,6 +3527,12 @@ const LEGACY_DURATION_BRANCHES: Branch[] = [
     expected: { backend: 0, telegram: 0 },
   },
   LEGACY_DURATION_SENT,
+  {
+    label: 'the list is sent',
+    update: legacyUpdate(),
+    readSignals: () => Promise.resolve(SIGNALS),
+    expected: { backend: 2, telegram: 2 },
+  },
   {
     label: 'a duration of the set before #313',
     update: callbackUpdate('demo:sess:101:900'),
@@ -3586,7 +3698,7 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler(
       'demoSignals',
       DEMO_SIGNALS.branches,
-      DEMO_SIGNALS.worst,
+      DEMO_SIGNALS_WORST,
       HANDLER_CALLS.demoSignals,
     );
   });
@@ -3631,7 +3743,7 @@ describe('what the handlers do, against what HANDLER_CALLS declares', () => {
     await checkHandler(
       'demoLaunchCheck',
       DEMO_LAUNCH_CHECK,
-      DEMO_LAUNCH_CHECK_WORST,
+      DEMO_LAUNCH_CHECK.at(-1)!,
       HANDLER_CALLS.demoLaunchCheck,
     );
   });
@@ -3975,6 +4087,23 @@ describe("the wait for a signal's bounds (#664)", () => {
       SHUTDOWN_BUDGET_MS,
     );
     expect(signalWaitBoundsHold()).toBe(true);
+  });
+
+  // #859: the owner's 3-5 s between captions, and a tick's captions inside the second's budget
+  it('the chain fails on a caption outside 3-5 polls, or captions that fill a tick or the second', () => {
+    expect(signalWaitBoundsHold({ captionMs: 2_999 })).toBe(false);
+    expect(signalWaitBoundsHold({ captionMs: 3_000 })).toBe(true);
+    expect(signalWaitBoundsHold({ captionMs: 5_000 })).toBe(true);
+    expect(signalWaitBoundsHold({ captionMs: 5_001 })).toBe(false);
+    expect(signalWaitBoundsHold({ captionEditsPerTick: 4 })).toBe(true);
+    expect(signalWaitBoundsHold({ captionEditsPerTick: 5 })).toBe(false);
+    // at 2 edits a second a tick's 2 captions take the whole poll
+    expect(signalWaitBoundsHold({ editsPerSecond: 2 })).toBe(false);
+    expect(signalWaitBoundsHold({ editsPerSecond: 3 })).toBe(true);
+    // a longer poll fits more captions at the pace, but never the second's whole budget
+    const longPoll = { pollMs: 1_100, pollOffsetMs: 600, editsPerSecond: 10 };
+    expect(signalWaitBoundsHold({ ...longPoll, captionEditsPerTick: 9 })).toBe(true);
+    expect(signalWaitBoundsHold({ ...longPoll, captionEditsPerTick: 10 })).toBe(false);
   });
 
   it('the chain fails on a stop window of SHUTDOWN_BUDGET_MS', () => {

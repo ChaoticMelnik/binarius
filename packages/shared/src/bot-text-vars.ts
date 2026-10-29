@@ -213,6 +213,19 @@ export const BOT_TEXT_VARS = {
     sample: '50',
     format: (count: string) => formatCount(count),
   }),
+  pairs: shown('Пары с текущим решением сканера H1, число со словом', '115 пар'),
+  checks: variable({
+    description: 'Проверок сканера H1 в минуту: пары × 60',
+    sample: '6900',
+    format: (count: string) => formatCount(count),
+  }),
+  quotes: shown('Значок этапа «Котировки»: ✅ пока источник котировок стримит', '✅'),
+  moves: shown('Значок этапа «Движение цены»: ✅ пока есть решения на текущей секунде', '✅'),
+  closest: shown(
+    'До трёх пар, ближайших к порогу сигнала, с процентом от порога',
+    'GBP/USD 82 % · EUR/USD 71 % · USD/JPY 60 %',
+  ),
+  pct: shown('Движение пары на последней секунде, % от порога сигнала H1 (0–99)', '82'),
   nudgeTokens: variable({
     description: 'Порог баланса напоминания о токенах',
     sample: '50',

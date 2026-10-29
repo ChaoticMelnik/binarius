@@ -10,6 +10,8 @@ import {
 } from '@binarius/shared';
 import {
   answerInlineQueryPhotoHtml,
+  editMessageAnimationByIdHtml,
+  editMessageCaptionByIdHtml,
   editMessagePhotoByIdHtml,
   editMessagePhotoByIdHtmlWithoutNextStep,
   editMessageTextByIdHtml,
@@ -19,6 +21,7 @@ import {
   NO_NEXT_STEP_REASONS,
   replyHtml,
   replyHtmlWithoutNextStep,
+  replyWithAnimationHtml,
   replyWithInvoiceStars,
   replyWithPhotoHtml,
   replyWithPhotoHtmlWithoutNextStep,
@@ -38,13 +41,19 @@ const fakeCtx = () => {
     editMessageText: vi.fn(),
     replyWithPhoto: vi.fn(),
     replyWithVideo: vi.fn(),
+    replyWithAnimation: vi.fn(),
     replyWithInvoice: vi.fn(),
     answerInlineQuery: vi.fn(),
   };
   return { ctx, context: ctx as unknown as Context };
 };
 const fakeApi = () => {
-  const api = { editMessageText: vi.fn(), sendPhoto: vi.fn(), editMessageMedia: vi.fn() };
+  const api = {
+    editMessageText: vi.fn(),
+    sendPhoto: vi.fn(),
+    editMessageMedia: vi.fn(),
+    editMessageCaption: vi.fn(),
+  };
   return { api, typed: api as unknown as Api };
 };
 const SPACED = TEXT.value + BOT_MESSAGE_SPACER;
@@ -115,6 +124,29 @@ describe('captions, inline answers and the invoice go without it', () => {
     expect(api.editMessageMedia.mock.calls.map(([, , media]) => media.caption)).toEqual([
       CAPTION.value,
       CAPTION.value,
+    ]);
+  });
+
+  it("the wait's animation, its media edit and a caption edit carry the caption as HTML (#859)", () => {
+    const { ctx, context } = fakeCtx();
+    void replyWithAnimationHtml(context, 'radar', CAPTION, { reply_markup: keyboard });
+    expect(ctx.replyWithAnimation.mock.calls[0]).toEqual([
+      'radar',
+      { reply_markup: keyboard, caption: CAPTION.value, parse_mode: 'HTML' },
+    ]);
+    const { api, typed } = fakeApi();
+    void editMessageAnimationByIdHtml(typed, 1, 2, 'radar', CAPTION, { reply_markup: keyboard });
+    void editMessageCaptionByIdHtml(typed, 1, 2, CAPTION, { reply_markup: keyboard });
+    expect(api.editMessageMedia.mock.calls[0]).toEqual([
+      1,
+      2,
+      { type: 'animation', media: 'radar', caption: CAPTION.value, parse_mode: 'HTML' },
+      { reply_markup: keyboard },
+    ]);
+    expect(api.editMessageCaption.mock.calls[0]).toEqual([
+      1,
+      2,
+      { reply_markup: keyboard, caption: CAPTION.value, parse_mode: 'HTML' },
     ]);
   });
 

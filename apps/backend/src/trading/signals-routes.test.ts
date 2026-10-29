@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../app';
 import { unusedAdminDeps, unusedPaymentsDeps } from '../admin/testing';
 import type { AuthRoutesDeps } from '../auth/routes';
-import { createH1Scanner, type H1Scanner } from '../h1/scanner';
+import { createH1Scanner, EMPTY_H1_SCANNER_LIST, type H1Scanner } from '../h1/scanner';
 import type { ClosedSecond } from '../market-data/seconds';
 import type { UsersRoutesDeps } from '../users/routes';
 import type { TradingRoutesDeps } from './routes';
@@ -155,7 +155,7 @@ describe('GET /trading/signals (#828: the H1 scanner)', () => {
       {
         fresh: () => {
           reads += 1;
-          return { scanned: 0, signals: [] };
+          return EMPTY_H1_SCANNER_LIST;
         },
       },
       F + 500,
@@ -186,6 +186,8 @@ describe('GET /trading/signals (#828: the H1 scanner)', () => {
         {
           interval: '5s',
           scanned: 3,
+          // floor((F + 900) / 1000) % 3 = 2: the third pair by assetId; the quiet pair's move is 0
+          summary: { streaming: true, scanning: 3, closeness: [{ assetId: 3, pct: 0 }] },
           signals: [
             { assetId: 1, action: 'up', second: F, decidedAt: F + 300, ageMs: 900 },
             { assetId: 2, action: 'down', second: F, decidedAt: F + 300, ageMs: 900 },
@@ -214,14 +216,43 @@ describe('GET /trading/signals (#828: the H1 scanner)', () => {
     ]);
     expect((await get(appWith(scanner, F + 500))).json()).toEqual({
       asOf: F + 500,
-      lists: [{ interval: '5s', scanned: 1, signals: [] }],
+      lists: [
+        {
+          interval: '5s',
+          scanned: 1,
+          summary: { streaming: true, scanning: 3, closeness: [{ assetId: 3, pct: 0 }] },
+          signals: [],
+        },
+      ],
     });
   });
 
-  it('R6 without the data socket (no scanner) the list is empty', async () => {
+  it('R6 without the data socket (no scanner) the list and its summary are empty', async () => {
     expect((await get(appWith(undefined, F))).json()).toEqual({
       asOf: F,
-      lists: [{ interval: '5s', scanned: 0, signals: [] }],
+      lists: [
+        {
+          interval: '5s',
+          scanned: 0,
+          summary: { streaming: false, scanning: null, closeness: [] },
+          signals: [],
+        },
+      ],
     });
+  });
+
+  it("R7 the scanner's summary goes on the wire by its named fields (#859)", async () => {
+    const summary = {
+      streaming: false,
+      scanning: 7,
+      closeness: [
+        { assetId: 7, pct: 82 },
+        { assetId: 5, pct: 71 },
+      ],
+    };
+    const body: unknown = (
+      await get(appWith({ fresh: () => ({ scanned: 2, signals: [], summary }) }, F))
+    ).json();
+    expect(safeParseTradingSignalsResponse(body).data?.lists[0]?.summary).toEqual(summary);
   });
 });

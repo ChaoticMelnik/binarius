@@ -6,7 +6,7 @@ import {
   type TradingSignalsResponse,
 } from '@binarius/shared';
 import { internalBearerAuth } from '../auth/internal';
-import type { H1Scanner } from '../h1/scanner';
+import { EMPTY_H1_SCANNER_LIST, type H1Scanner } from '../h1/scanner';
 
 export interface SignalsRoutesDeps {
   // the H1 scanner (#828); undefined without the data socket (no BROKER_WS_URL): an empty list
@@ -21,13 +21,18 @@ function toTradingSignalsResponse(
   scanner: SignalsRoutesDeps['scanner'],
   nowMs: number,
 ): TradingSignalsResponse {
-  const list = scanner?.fresh(nowMs) ?? { scanned: 0, signals: [] };
+  const list = scanner?.fresh(nowMs) ?? EMPTY_H1_SCANNER_LIST;
   return {
     asOf: nowMs,
     lists: [
       {
         interval: intervalForDuration(H1_EXPIRY_SEC),
         scanned: list.scanned,
+        summary: {
+          streaming: list.summary.streaming,
+          scanning: list.summary.scanning,
+          closeness: list.summary.closeness.map(({ assetId, pct }) => ({ assetId, pct })),
+        },
         signals: list.signals.map(({ assetId, action, second, decidedAt, ageMs }) => ({
           assetId,
           action,

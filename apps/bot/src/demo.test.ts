@@ -88,8 +88,13 @@ import {
   failFromSecondCall,
   fakeLogger,
   messageAnswer,
+  animationAnswer,
+  SCAN_FILE_ID,
+  SCAN_MESSAGE_ID,
   pairsResponse,
   photoAnswer,
+  animationCallbackUpdate,
+  EMPTY_SCAN_SUMMARY,
   photoCallbackUpdate,
   rejectionOf,
   sessionView,
@@ -179,6 +184,7 @@ function setup(
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
+  api.answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
   api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-small', CARD_FILE_ID]));
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
@@ -237,6 +243,12 @@ const EDIT_GONE: ApiError = {
   ok: false,
   error_code: 400,
   description: 'Bad Request: message to edit not found',
+};
+// the wait's animation refused for its file (#859): no edit refusal, no 429 or 403
+const ANIMATION_REFUSED: ApiError = {
+  ok: false,
+  error_code: 400,
+  description: 'Bad Request: wrong file identifier/HTTP URL specified',
 };
 const EDIT_NOT_MODIFIED: ApiError = {
   ok: false,
@@ -580,6 +592,7 @@ describe('the signals screen', () => {
         {
           interval: '15s' as const,
           scanned: 1,
+          summary: EMPTY_SCAN_SUMMARY,
           signals: [
             { ...BOTH.lists[0]!.signals[0]!, assetId: PAIR_EURUSD.id, action: TradeAction.Up },
           ],
@@ -659,23 +672,103 @@ describe('the signals screen', () => {
 
   // #664: the wait for the signals, edited into the list by signal-wait.ts
   describe('the wait for signals (#664)', () => {
-    it('an empty list waits: signalsWaiting, manual and menu, no refresh, the user’s list entry registered', async () => {
-      const { press, calls, signalWaiter } = setup({
-        readSignals: () => Promise.resolve(signalsOf([PAIR_CLOSED.id, TradeAction.Up])),
-      });
-      await press(LIST);
-      const edited = payloadOf(calls, 'editMessageText');
-      expect(edited?.text).toBe(TEXTS.signalsWaiting({ label: '⏱ 5 с' }).value);
-      expect(plainTextOf(TEXTS.signalsWaiting({ label: '⏱ 5 с' }))).toBe(
-        '🔎 Анализирую сигналы · ⏱ 5 с\nПроверяю пары каждую секунду. Как только появится сигнал, список откроется здесь.',
+    // #859: the wait is the scanner's animation, its caption the backend's summary
+    const SCANNING = () =>
+      Promise.resolve(
+        signalsResponse(
+          NOW,
+          { '5s': [[PAIR_CLOSED.id, TradeAction.Up]] },
+          {
+            scanned: 115,
+            summary: {
+              streaming: true,
+              scanning: PAIR_EURUSD.id,
+              closeness: [{ assetId: PAIR_EURUSD.id, pct: 82 }],
+            },
+          },
+        ),
       );
+    const SCAN_CAPTION = [
+      '🛰 Сканирую рынок · 115 пар · 6\u00a0900 проверок в минуту',
+      `Сейчас: ${pairLabel(PAIR_EURUSD)}`,
+      '✅ Котировки  ✅ Движение цены  ⏳ Отбор сигнала',
+      `Ближе всего к сигналу: ${pairLabel(PAIR_EURUSD)} 82 %`,
+    ].join('\n');
+    const mediaOf = (payload: Record<string, unknown> | undefined) =>
+      payload?.media as { type: string; caption: string; parse_mode: string } | undefined;
+
+    it("W-media1 an empty list becomes the scanner's animation in place, its caption the summary, manual and menu", async () => {
+      const { press, calls, signalWaiter } = setup({ readSignals: SCANNING });
+      await press(LIST);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageMedia']);
+      const edited = payloadOf(calls, 'editMessageMedia');
+      expect(mediaOf(edited)).toMatchObject({ type: 'animation', parse_mode: 'HTML' });
+      expect(plainTextOf(mediaOf(edited)?.caption ?? '')).toBe(SCAN_CAPTION);
       expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
-      expect(signalWaiter.waitList).toHaveBeenCalledTimes(1);
       expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({
         chatId: USER.id,
         telegramUserId: USER.id,
+        media: 'animation',
+        scanned: true,
         shown: false,
       });
+    });
+
+    it('W-media1 the status card’s button sends the animation as a new message', async () => {
+      const { press, calls, signalWaiter } = setup({ readSignals: SCANNING });
+      await press(DEMO_CALLBACK_DATA);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendAnimation']);
+      expect(plainTextOf(payloadOf(calls, 'sendAnimation')?.caption as string)).toBe(SCAN_CAPTION);
+      expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({
+        messageId: SCAN_MESSAGE_ID,
+        media: 'animation',
+      });
+    });
+
+    it('W-media2 a gone message gets the animation as a new message', async () => {
+      const { press, calls, apiErrors, signalWaiter } = setup({ readSignals: SCANNING });
+      apiErrors.set('editMessageMedia', EDIT_GONE);
+      await press(LIST);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageMedia', 'sendAnimation']);
+      expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({
+        messageId: SCAN_MESSAGE_ID,
+        media: 'animation',
+      });
+    });
+
+    it('W-media3 an animation refused for its file is forgotten and the wait goes as text', async () => {
+      const { press, calls, apiErrors, answers, signalWaiter, logger } = setup({
+        readSignals: SCANNING,
+      });
+      apiErrors.set('editMessageMedia', ANIMATION_REFUSED);
+      answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
+      await press(LIST);
+      expect(methods(calls)).toEqual([
+        'answerCallbackQuery',
+        'editMessageMedia',
+        'editMessageText',
+      ]);
+      expect(plainTextOf(payloadOf(calls, 'editMessageText')?.text as string)).toBe(SCAN_CAPTION);
+      expect(signalWaiter.waitList.mock.calls[0]?.[0]).toMatchObject({ media: 'text' });
+      expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
+        'the scan animation was refused, sending the text',
+      ]);
+      // the next one uploads the file again: a file, not an id
+      apiErrors.delete('editMessageMedia');
+      await press(DEMO_CALLBACK_DATA);
+      await press(DEMO_CALLBACK_DATA);
+      const sent = calls.filter((call) => call.method === 'sendAnimation');
+      expect(sent.map((call) => typeof call.payload.animation)).toEqual(['object', 'string']);
+      expect(sent[1]?.payload.animation).toBe(SCAN_FILE_ID);
+    });
+
+    it('W-media4 a press under the animation draws the next screen as a new message, no edit', async () => {
+      const { bot, calls } = setup({ readSignals: SCANNING });
+      await bot.handleUpdate(animationCallbackUpdate(LIST));
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendAnimation']);
+      calls.length = 0;
+      await bot.handleUpdate(animationCallbackUpdate(DEMO_GROUPS_CALLBACK_DATA));
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
     });
 
     it('a list with pairs is registered as shown, on the message it landed on', async () => {
@@ -825,14 +918,21 @@ describe('the amount screen (#476)', () => {
       [PAIR_SHORT.id, TradeAction.Down],
       [PAIR_OTHER_TYPE.id, TradeAction.Up],
     );
+    // #859: the pair's scanner lines once the list was read; no closeness of its own here
+    const NO_MOVE = `🛰 <b>Сканирую ${pairLabel(PAIR_EURUSD)}</b> · жду движение цены`;
+    const stages = (moves: string) => `✅ Котировки  ${moves} Движение цены  ⏳ Отбор сигнала`;
+    const captionOf = (calls: readonly ApiCall[]) =>
+      payloadOf(calls, 'sendAnimation')?.caption as string | undefined;
 
     it('W-door1 the door n on a pair absent from the list waits: the other pairs two a row, manual and menu; no evaluateSignal', async () => {
       const { press, calls, evaluateSignal, signalWaiter } = setup({
         readSignals: () => Promise.resolve(ALTERNATIVES),
       });
       await press(DOOR_N);
-      const edited = payloadOf(calls, 'sendMessage');
-      expect(edited?.text).toBe(`${WAIT_TEXT}\n\n${TEXTS.pairWaitingAlternatives.value}`);
+      const edited = payloadOf(calls, 'sendAnimation');
+      expect(edited?.caption).toBe(
+        `${WAIT_TEXT}\n\n${NO_MOVE}\n${stages('✅')}\n\n${TEXTS.pairWaitingAlternatives.value}`,
+      );
       expect(rowsOf(edited)).toEqual([
         [
           button('BTC/USD ⬇️ 90%', demoLaunchCallbackData(PAIR_SHORT.id, 5)),
@@ -841,12 +941,19 @@ describe('the amount screen (#476)', () => {
         [MANUAL, MENU],
       ]);
       expect(evaluateSignal).not.toHaveBeenCalled();
-      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+      const request = signalWaiter.waitPair.mock.calls[0]?.[0];
+      expect(request).toMatchObject({
         assetId: PAIR_EURUSD.id,
         origin: 'door',
         back: 'a',
-        alternatives: 'shown',
+        media: 'animation',
+        scanned: true,
       });
+      const alternatives = request?.alternatives;
+      expect(Array.isArray(alternatives) ? alternatives.map(({ pair }) => pair.id) : []).toEqual([
+        PAIR_SHORT.id,
+        PAIR_OTHER_TYPE.id,
+      ]);
     });
 
     it('W-door2 the door n waits without alternatives when the signals are not read or the list is missing, one warn', async () => {
@@ -866,11 +973,15 @@ describe('the amount screen (#476)', () => {
       ] as const) {
         const { press, calls, logger, signalWaiter } = setup({ readSignals });
         await press(DOOR_N);
-        const edited = payloadOf(calls, 'sendMessage');
-        expect(edited?.text).toBe(WAIT_TEXT);
+        const edited = payloadOf(calls, 'sendAnimation');
+        // no list read: no scanner lines, the wait's first poll draws them
+        expect(edited?.caption).toBe(WAIT_TEXT);
         expect(rowsOf(edited)).toEqual([[MANUAL, MENU]]);
         expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([line]);
-        expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({ alternatives: 'done' });
+        expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+          alternatives: 'done',
+          scanned: false,
+        });
       }
     });
 
@@ -920,12 +1031,61 @@ describe('the amount screen (#476)', () => {
         readSignals: () => Promise.resolve(signalsOf()),
       });
       await press(demoLaunchCallbackData(PAIR_EURUSD.id, 5, 'n'));
-      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage']);
-      expect(payloadOf(calls, 'sendMessage')?.text).toBe(WAIT_TEXT);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendAnimation']);
+      expect(captionOf(calls)).toBe(`${WAIT_TEXT}\n\n${NO_MOVE}\n${stages('⏳')}`);
       expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
-        messageId: TEXT_CARD_MESSAGE_ID,
+        messageId: SCAN_MESSAGE_ID,
         back: 'a',
         alternatives: 'done',
+        media: 'animation',
+      });
+    });
+
+    it("W-media5 the door's wait prints its own pair's closeness to the threshold", async () => {
+      const { press, calls } = setup({
+        readSignals: () =>
+          Promise.resolve(
+            signalsResponse(
+              NOW,
+              {},
+              {
+                scanned: 3,
+                summary: {
+                  streaming: false,
+                  scanning: PAIR_SHORT.id,
+                  closeness: [
+                    { assetId: PAIR_SHORT.id, pct: 90 },
+                    { assetId: PAIR_EURUSD.id, pct: 47 },
+                  ],
+                },
+              },
+            ),
+          ),
+      });
+      await press(DOOR_N);
+      expect(plainTextOf(captionOf(calls) ?? '')).toBe(
+        [
+          plainTextOf(WAIT_TEXT),
+          '',
+          `🛰 Сканирую ${pairLabel(PAIR_EURUSD)} · движение 47 % от порога сигнала`,
+          '⏳ Котировки  ✅ Движение цены  ⏳ Отбор сигнала',
+        ].join('\n'),
+      );
+    });
+
+    it("W-media5 the door's animation refused for its file: the wait goes as a text message", async () => {
+      const { press, calls, apiErrors, signalWaiter } = setup({
+        readSignals: () => Promise.resolve(signalsOf()),
+      });
+      apiErrors.set('sendAnimation', ANIMATION_REFUSED);
+      await press(DOOR_N);
+      expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendAnimation', 'sendMessage']);
+      expect(payloadOf(calls, 'sendMessage')?.text).toBe(
+        `${WAIT_TEXT}\n\n${NO_MOVE}\n${stages('⏳')}`,
+      );
+      expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
+        messageId: TEXT_CARD_MESSAGE_ID,
+        media: 'text',
       });
     });
 
@@ -955,7 +1115,9 @@ describe('the amount screen (#476)', () => {
         });
         await press(data);
         for (const call of calls) {
-          expect(String(call.payload.text ?? '')).not.toMatch(/нет сигнала|сигнала нет/i);
+          expect(String(call.payload.text ?? call.payload.caption ?? '')).not.toMatch(
+            /нет сигнала|сигнала нет/i,
+          );
         }
       }
     });
@@ -968,7 +1130,7 @@ describe('the amount screen (#476)', () => {
         readSignals: () => Promise.resolve(signalsOf()),
       });
       await press(DOOR_N);
-      expect(payloadOf(calls, 'sendMessage')?.text).toBe(WAIT_TEXT);
+      expect(captionOf(calls)?.startsWith(WAIT_TEXT)).toBe(true);
     });
   });
 
@@ -1659,6 +1821,12 @@ describe('the analysis', () => {
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
   const cardOf = (calls: readonly ApiCall[]) => payloadOf(calls, 'sendPhoto');
+  // the wait (#859): «⏳» turned into the scanner's animation, or one sent anew
+  const waitOf = (calls: readonly ApiCall[]) =>
+    calls.filter((call) => ['editMessageMedia', 'sendAnimation'].includes(call.method)).at(-1)
+      ?.payload;
+  const captionOf = (payload: Record<string, unknown> | undefined) =>
+    (payload?.media as { caption?: unknown } | undefined)?.caption ?? payload?.caption;
   // the amounts of #476 under a demo card (#482), their way back the analysis, then «✏️ Ввести»
   const amountOf = (value: string, label: string, durationSec: 5 = 5) =>
     button(label, cycleStakeCallbackData(PAIR_EURUSD.id, durationSec, value, 'a'));
@@ -1988,8 +2156,8 @@ describe('the analysis', () => {
       evaluateSignal: () => Promise.resolve(response),
     });
     await press(DATA);
-    const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(
+    const result = waitOf(calls);
+    expect(captionOf(result)).toBe(
       analysisScreen({ mode: TradeMode.Demo, pair, durationSec: 5, response, chooseAmount: true })
         .text.value,
     );
@@ -2056,9 +2224,16 @@ describe('the analysis', () => {
         evaluateSignal: () => Promise.resolve(response),
       });
       await press(DATA);
-      const result = edits(calls).at(-1)?.payload;
-      expect(result?.text).toBe(resultOf(response));
-      expect(String(result?.text)).not.toMatch(/нет сигнала|сигнала нет/i);
+      // #859: «⏳» becomes the scanner's animation by its id; the analysis read no list
+      expect(methods(calls)).toEqual([
+        'answerCallbackQuery',
+        'editMessageText',
+        'editMessageMedia',
+      ]);
+      const result = waitOf(calls);
+      expect(result?.media).toMatchObject({ type: 'animation', parse_mode: 'HTML' });
+      expect(captionOf(result)).toBe(resultOf(response));
+      expect(String(captionOf(result))).not.toMatch(/нет сигнала|сигнала нет/i);
       expect(rowsOf(result)).toEqual(WAIT_ROWS);
       expect(logger.warn).not.toHaveBeenCalled();
       expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
@@ -2068,6 +2243,8 @@ describe('the analysis', () => {
         origin: 'analysis',
         back: 'a',
         alternatives: 'pending',
+        media: 'animation',
+        scanned: false,
       });
       expect(signalWaiter.waitPair.mock.calls[0]?.[0].base.value).toBe(resultOf(response));
     },
@@ -2084,8 +2261,8 @@ describe('the analysis', () => {
     });
     await press(DATA);
 
-    const result = edits(calls).at(-1)?.payload;
-    expect(result?.text).toBe(resultOf(response));
+    const result = waitOf(calls);
+    expect(captionOf(result)).toBe(resultOf(response));
     expect(rowsOf(result)).toEqual(WAIT_ROWS);
     expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
     expect(logger.warn.mock.calls).toEqual([
@@ -2130,14 +2307,15 @@ describe('the analysis', () => {
     apiErrors.set('editMessageText', EDIT_GONE);
     await press(DATA);
 
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendMessage']);
-    const result = payloadOf(calls, 'sendMessage');
-    expect(result?.text).toBe(resultOf(SIGNAL_NO_SIGNAL));
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendAnimation']);
+    const result = payloadOf(calls, 'sendAnimation');
+    expect(result?.caption).toBe(resultOf(SIGNAL_NO_SIGNAL));
     expect(rowsOf(result)).toEqual(WAIT_ROWS);
     expect(evaluateSignal).toHaveBeenCalledTimes(1);
     // W-an2: the wait is on the new message
     expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({
-      messageId: TEXT_CARD_MESSAGE_ID,
+      messageId: SCAN_MESSAGE_ID,
+      media: 'animation',
     });
   });
 
@@ -2171,31 +2349,59 @@ describe('the analysis', () => {
     expect(evaluateSignal).not.toHaveBeenCalled();
   });
 
-  it('sends the result anew with its keyboard when its edit is refused as gone', async () => {
-    const { press, calls, ...api } = setup({
+  it("W-media6 sends the wait's animation anew with its keyboard when its edit is refused as gone", async () => {
+    const { press, calls, apiErrors, signalWaiter } = setup({
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
     });
-    failFromSecondCall(api, 'editMessageText', EDIT_GONE);
+    apiErrors.set('editMessageMedia', EDIT_GONE);
     await press(DATA);
 
     expect(methods(calls)).toEqual([
       'answerCallbackQuery',
       'editMessageText',
-      'editMessageText',
-      'sendMessage',
+      'editMessageMedia',
+      'sendAnimation',
     ]);
-    const sent = payloadOf(calls, 'sendMessage');
-    expect(sent?.text).toBe(resultOf(SIGNAL_NO_SIGNAL));
-    expect(sent?.reply_markup).toEqual(edits(calls)[1]?.payload.reply_markup);
+    const sent = payloadOf(calls, 'sendAnimation');
+    expect(sent?.caption).toBe(resultOf(SIGNAL_NO_SIGNAL));
+    expect(sent?.reply_markup).toEqual(payloadOf(calls, 'editMessageMedia')?.reply_markup);
+    expect(signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({ messageId: SCAN_MESSAGE_ID });
   });
 
-  it('is done when Telegram says the message already shows the result', async () => {
-    const { press, calls, apiErrors } = setup({
+  it('W-media6 an animation refused for its file: «⏳» becomes the wait as text, a gone one nothing more', async () => {
+    const refused = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+    refused.apiErrors.set('editMessageMedia', ANIMATION_REFUSED);
+    await refused.press(DATA);
+    expect(methods(refused.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'editMessageMedia',
+      'editMessageText',
+    ]);
+    expect(edits(refused.calls).at(-1)?.payload.text).toBe(resultOf(SIGNAL_NO_SIGNAL));
+    expect(refused.signalWaiter.waitPair.mock.calls[0]?.[0]).toMatchObject({ media: 'text' });
+
+    const gone = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
+    gone.apiErrors.set('editMessageMedia', ANIMATION_REFUSED);
+    failFromSecondCall(gone, 'editMessageText', EDIT_GONE);
+    await gone.press(DATA);
+    expect(methods(gone.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'editMessageMedia',
+      'editMessageText',
+    ]);
+    expect(gone.signalWaiter.waitPair).not.toHaveBeenCalled();
+  });
+
+  it('is done when Telegram says the message already shows the wait', async () => {
+    const { press, calls, apiErrors, signalWaiter } = setup({
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
     });
-    apiErrors.set('editMessageText', EDIT_NOT_MODIFIED);
+    apiErrors.set('editMessageMedia', EDIT_NOT_MODIFIED);
     await press(DATA);
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageText']);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageMedia']);
+    expect(signalWaiter.waitPair).toHaveBeenCalledTimes(1);
   });
 
   it('does nothing outside a private chat', async () => {
@@ -2906,15 +3112,15 @@ describe('a press under the session card (a photo)', () => {
     });
   });
 
-  it('C3b a text result under a photo goes in place of the new «⏳», by its id', async () => {
+  it("C3b the wait under a photo becomes the scanner's animation in place of the new «⏳», by its id", async () => {
     const { pressOnPhoto: press, calls } = setup({
       evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL),
     });
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'editMessageText']);
-    const edited = payloadOf(calls, 'editMessageText');
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'editMessageMedia']);
+    const edited = payloadOf(calls, 'editMessageMedia');
     expect(edited).toMatchObject({ chat_id: USER.id, message_id: TEXT_CARD_MESSAGE_ID });
-    expect(edited?.text).toBe(
+    expect((edited?.media as { caption?: unknown }).caption).toBe(
       analysisScreen({
         mode: TradeMode.Demo,
         pair: PAIR_EURUSD,
@@ -2925,24 +3131,25 @@ describe('a press under the session card (a photo)', () => {
     );
   });
 
-  it('C3c sends that result anew when the new «⏳» is gone, and nothing when it fails in transport', async () => {
+  it('C3c sends that wait anew when the new «⏳» is gone, and nothing when it fails in transport', async () => {
     const gone = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
-    gone.apiErrors.set('editMessageText', EDIT_GONE);
+    gone.apiErrors.set('editMessageMedia', EDIT_GONE);
     await gone.pressOnPhoto(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
     expect(methods(gone.calls)).toEqual([
       'answerCallbackQuery',
       'sendMessage',
-      'editMessageText',
-      'sendMessage',
+      'editMessageMedia',
+      'sendAnimation',
     ]);
     const transport = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_NO_SIGNAL) });
-    transport.apiErrors.set('editMessageText', TRANSPORT('editMessageText'));
+    transport.apiErrors.set('editMessageMedia', TRANSPORT('editMessageMedia'));
     await transport.pressOnPhoto(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
     expect(methods(transport.calls)).toEqual([
       'answerCallbackQuery',
       'sendMessage',
-      'editMessageText',
+      'editMessageMedia',
     ]);
+    expect(transport.signalWaiter.waitPair).not.toHaveBeenCalled();
   });
 
   it('C3d asks for no signal when the new «⏳» fails in transport', async () => {
@@ -3536,8 +3743,9 @@ describe('the record of the shown directions (#829)', () => {
     const { press, shownSignals } = setup({ readSignals: () => Promise.resolve(others) });
     await press(door);
     expect(shownSignals.remember.mock.calls).toEqual([[USER.id, 'list', NOW, [LISTED[1]]]]);
+    // the wait goes as the scanner's animation (#859)
     const refused = setup({ readSignals: () => Promise.resolve(others) });
-    refused.apiErrors.set('sendMessage', SEND_REFUSED);
+    refused.apiErrors.set('sendAnimation', SEND_REFUSED);
     await refused.press(door).catch(() => undefined);
     expect(refused.shownSignals.remember).not.toHaveBeenCalled();
   });

@@ -46,11 +46,14 @@ import {
   type LinkedAccountView,
   type PairTypeGroup,
   type PairView,
+  type ScanList,
   type SignalDecision,
   type TelegramHtml,
   type TradingSessionView,
   type TradingSignalResponse,
   BOT_TEXT_DEFAULT_SOURCES,
+  H1_CLOSENESS_MAX_PCT,
+  joinHtmlLines,
 } from '@binarius/shared';
 import { botTextSourcesWith } from '@binarius/shared/testing';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
@@ -86,6 +89,7 @@ import {
   tradingModeConfirm,
   tradingModeResult,
   tradingModeScreen,
+  scanTexts,
   TEXTS,
   botCommands,
   userContextOf,
@@ -206,9 +210,32 @@ const allFeatures = Object.values(TrendDirection).flatMap((trend) =>
 );
 // in both modes: the disclaimer and the hint follow the user's mode (#121); with the amounts'
 // line and without it (#482)
-// a wait's text alone and under the line over the other pairs' buttons (demo.ts)
+// the scanner's summary at its widest (#859): the pair's own closeness and none, both marks of a
+// stage; three closest pairs of the widest symbol at 99 %
+const SCAN_PAIR = 1;
+const scanList = (streaming: boolean, scanned: number): ScanList => ({
+  scanned,
+  summary: {
+    streaming,
+    scanning: SCAN_PAIR,
+    closeness: [SCAN_PAIR, 2, 3].map((assetId) => ({ assetId, pct: H1_CLOSENESS_MAX_PCT })),
+  },
+});
+const SCAN_LISTS = [scanList(true, 9_994), scanList(false, 0)];
+const wideSymbol = () => x(W.symbol);
+const pairScans = (): TelegramHtml[][] => [
+  [],
+  ...SCAN_LISTS.flatMap((list) => [
+    scanTexts.pairScanLines(list, { assetId: SCAN_PAIR, symbol: wideSymbol() }),
+    scanTexts.pairScanLines(list, { assetId: 99, symbol: wideSymbol() }),
+  ]),
+];
+// a wait's text alone and under the line over the other pairs' buttons (demo.ts), with the
+// scanner's lines of the pair and without
 const withAlternatives = (texts: TelegramHtml[]) =>
-  texts.flatMap((text) => [waitingText(text, false), waitingText(text, true)]);
+  texts.flatMap((text) =>
+    pairScans().flatMap((scan) => [waitingText(text, scan, false), waitingText(text, scan, true)]),
+  );
 const screens = (responses: TradingSignalResponse[]) =>
   responses.flatMap((response) =>
     DEMO_DURATIONS_SEC.flatMap((durationSec) =>
@@ -466,6 +493,13 @@ const REAL: Record<string, () => TelegramHtml[]> = {
       ),
     ),
   pairWaiting: () => withAlternatives([pairWaitingText(pairLabel(pair), pair.id)]),
+  // the list's wait (#859): every line, the scanning pair and the closest without a symbol too
+  signalsScanning: () =>
+    SCAN_LISTS.flatMap((list) =>
+      [wideSymbol, () => undefined].map((symbolOf) =>
+        joinHtmlLines(scanTexts.scanSummaryLines(list, symbolOf)),
+      ),
+    ),
   intentStatus: () =>
     [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
       [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>

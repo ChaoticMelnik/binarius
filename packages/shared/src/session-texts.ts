@@ -117,6 +117,17 @@ const PLURAL_RULES: Record<BotLanguage, (count: number) => PluralForm> = {
   [BotLanguage.En]: (count) => (count === 1 ? PluralForm.One : PluralForm.Many),
 };
 
+// the word after `count` of the three forms, by the language's rule (scan-summary.ts, #859)
+export const pluralWordOf = (
+  language: BotLanguage,
+  count: number,
+  [one, few, many]: readonly [string, string, string],
+): string => {
+  const form = PLURAL_RULES[language](count);
+  if (form === PluralForm.One) return one;
+  return form === PluralForm.Few ? few : many;
+};
+
 const priceOf = (value: number, digits: number | null): string =>
   digits === null ? String(value) : formatPrice(value, digits);
 

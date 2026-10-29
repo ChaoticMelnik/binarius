@@ -58,6 +58,9 @@ import {
   fakeLogger,
   intentView,
   messageAnswer,
+  animationAnswer,
+  SCAN_FILE_ID,
+  SCAN_MESSAGE_ID,
   photoAnswer,
   SESSION_ID,
   sessionView,
@@ -257,20 +260,26 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
+  api.answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
   // the analysis card reads the file_id of the photo it sent (#482)
   api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-file-id']));
   await bot.handleUpdate(scene.update);
   return api.calls.flatMap(wordsOf);
 }
 
-// what a user reads: the text or the caption, and every button's label
+// what a user reads: the text or the caption (a media edit's in its media, #859), and every
+// button's label
 function wordsOf({ payload }: ApiCall): string[] {
   const rows =
     (payload.reply_markup as { inline_keyboard?: { text: string }[][] } | undefined)
       ?.inline_keyboard ?? [];
-  return [payload.text, payload.caption, ...rows.flat().map((button) => button.text)].filter(
-    (value): value is string => typeof value === 'string',
-  );
+  const media = payload.media as { caption?: unknown } | undefined;
+  return [
+    payload.text,
+    payload.caption,
+    media?.caption,
+    ...rows.flat().map((button) => button.text),
+  ].filter((value): value is string => typeof value === 'string');
 }
 
 describe('the real path (#121)', () => {

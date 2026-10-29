@@ -161,8 +161,18 @@ Choose another asset type.`,
   demoNext: `Next — the candle analysis: the bot will show the signal and what you can do with it.`,
   demoSignalsHeader: `📡 <b>Signals now</b> · {label}
 Choose a pair. An H1 signal lives a second, so the list changes every second and the trades follow the fresh signal.`,
-  signalsWaiting: `🔎 <b>Analysing the signals</b> · {label}
-I check the pairs every second. As soon as a signal appears, the list opens here.`,
+  signalsScanning: `🛰 <b>Scanning the market</b> · {pairs} · {checks} checks a minute`,
+  signalsScanningPair: `Now: {symbol}`,
+  scanStages: `{quotes} Quotes  {moves} Price movement  ⏳ Signal selection`,
+  scanStageDone: '✅',
+  scanStagePending: '⏳',
+  signalsScanningClosest: `Closest to a signal: {closest}`,
+  pairScanning: `🛰 <b>Scanning {symbol}</b> · movement at {pct} % of the signal threshold`,
+  pairScanningNoMove: `🛰 <b>Scanning {symbol}</b> · waiting for the price to move`,
+  // English has one form for 1 and another for every other number: the few word is the many one
+  scanPairOne: 'pair',
+  scanPairFew: 'pairs',
+  scanPairMany: 'pairs',
   signalsExpired: `🚀 <b>Start trading</b>
 A signal lives a second, so this list is out of date. Open the fresh signals or pick a pair by hand.`,
   pairWaiting: `⏳ <b>Checking the signal on {symbol}</b>

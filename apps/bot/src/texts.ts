@@ -7,6 +7,7 @@ import {
   BrokerAccountStatus,
   confirmButtonLabel,
   createBotTexts,
+  createScanTexts,
   createSessionTexts,
   joinHtmlLines,
   pairLabel,
@@ -38,6 +39,7 @@ import {
   type BotTextKeyOfGroup,
   type BotTextSource,
   type SessionScore,
+  type ScanTexts,
   type SessionTexts,
   type BrokerBalanceView,
   type DecimalString,
@@ -73,7 +75,12 @@ export const setBotTextSources = (
 // language's plural rule (#633).
 const viewsOf = (language: BotLanguage, source: BotTextSource<BotTextKey>) => {
   const { html, plain } = createBotTexts(source);
-  return { html, plain, session: createSessionTexts({ html, plain, language }) };
+  return {
+    html,
+    plain,
+    session: createSessionTexts({ html, plain, language }),
+    scan: createScanTexts({ html, plain, language }),
+  };
 };
 const liveViewsOf = (language: BotLanguage) =>
   viewsOf(language, { sourceOf: (key) => active[language].sourceOf(key) });
@@ -98,6 +105,9 @@ export const textOf = (key: BotStaticHtmlKey): TelegramHtml => html[key];
 // packages/shared), printed with this bot's catalog in the update's language. Read at call time:
 // a function taken from it at load would be the Russian set's forever.
 export const sessionTexts: SessionTexts = inCurrentLanguage((views) => views.session);
+// the scanner's lines of the wait for a signal (#859, scan-summary.ts in packages/shared), read at
+// call time for the same reason
+export const scanTexts: ScanTexts = inCurrentLanguage((views) => views.scan);
 export const pluralTrades = (count: number): string => sessionTexts.pluralTrades(count);
 export const sessionAssetLabel: SessionTexts['sessionAssetLabel'] = (label, assetId) =>
   sessionTexts.sessionAssetLabel(label, assetId);

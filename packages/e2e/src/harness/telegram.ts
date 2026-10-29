@@ -5,9 +5,10 @@ import { BOT_INFO, captureApi, inlineButtons, USER, type ApiCall } from '@binari
 import type { Bot } from 'grammy';
 
 // Methods whose result is a message: the bot and the push read its message_id (a delete, an edit,
-// a pin, the status message the tracker edits), and the summary card reads the photo's file_id.
+// a pin, the status message the tracker edits), the summary card reads the photo's file_id, the
+// wait for a signal the animation's (#859). editMessageMedia answers by the media it was given.
 const MESSAGE_METHODS = ['sendMessage', 'sendVideo', 'editMessageText', 'editMessageCaption'];
-const PHOTO_METHODS = ['sendPhoto', 'editMessageMedia'];
+const MEDIA_METHODS = ['sendPhoto', 'sendAnimation', 'editMessageMedia'];
 
 export interface TelegramSide {
   calls: ApiCall[];
@@ -23,7 +24,14 @@ export function createTelegram() {
   const ids = new WeakMap<Record<string, unknown>, number>();
 
   function program(answers: Map<string, (payload: Record<string, unknown>) => unknown>) {
-    const message = (payload: Record<string, unknown>, photo: boolean) => {
+    const kindOf = (method: string, payload: Record<string, unknown>) => {
+      if (method === 'sendPhoto') return 'photo';
+      if (method === 'sendAnimation') return 'animation';
+      return (payload.media as { type?: string } | undefined)?.type === 'animation'
+        ? 'animation'
+        : 'photo';
+    };
+    const message = (payload: Record<string, unknown>, media: 'photo' | 'animation' | null) => {
       const edited = typeof payload.message_id === 'number' ? payload.message_id : undefined;
       const id = edited ?? (lastMessageId += 1);
       ids.set(payload, id);
@@ -31,7 +39,18 @@ export function createTelegram() {
         message_id: id,
         date: Math.floor(Date.now() / 1000),
         chat: { id: USER.id, type: 'private', first_name: USER.first_name },
-        ...(photo
+        ...(media === 'animation'
+          ? {
+              animation: {
+                file_id: `animation-${id}`,
+                file_unique_id: `u-${id}-a`,
+                width: 640,
+                height: 320,
+                duration: 2,
+              },
+            }
+          : {}),
+        ...(media === 'photo'
           ? {
               photo: [
                 { file_id: `photo-${id}-s`, file_unique_id: `u-${id}-s`, width: 90, height: 90 },
@@ -41,8 +60,10 @@ export function createTelegram() {
           : {}),
       };
     };
-    for (const method of MESSAGE_METHODS) answers.set(method, (payload) => message(payload, false));
-    for (const method of PHOTO_METHODS) answers.set(method, (payload) => message(payload, true));
+    for (const method of MESSAGE_METHODS) answers.set(method, (payload) => message(payload, null));
+    for (const method of MEDIA_METHODS) {
+      answers.set(method, (payload) => message(payload, kindOf(method, payload)));
+    }
   }
 
   const side = (calls: ApiCall[]): TelegramSide => ({
@@ -67,10 +88,10 @@ export function createTelegram() {
   };
 }
 
-const isPhoto = (call: ApiCall) => PHOTO_METHODS.includes(call.method);
+const isPhoto = (call: ApiCall) => MEDIA_METHODS.includes(call.method);
 
 // The newest message of the bot in the chat carrying a button that matches; the press goes to that
-// message, a photo's press as a photo's (#482). Other chats are skipped: in the repeat run (#106)
+// message, a photo's press as a photo's (#482), an animation's as one under a caption too (#859). Other chats are skipped: in the repeat run (#106)
 // B and C get welcomes with the same connect button.
 export function findButton(side: TelegramSide, match: (label: string) => boolean, chatId: number) {
   for (let index = side.calls.length - 1; index >= 0; index -= 1) {

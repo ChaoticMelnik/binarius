@@ -19,3 +19,11 @@ export const botFile = (...segments: string[]): string => {
   accessSync(file, constants.R_OK);
   return file;
 };
+
+// A file of @binarius/shared (#859: the wait's media, which the backend's session wait reads too),
+// found and checked the same way
+export const sharedFile = (...segments: string[]): string => {
+  const file = path.join(packageRoot('@binarius/shared', import.meta.url), ...segments);
+  accessSync(file, constants.R_OK);
+  return file;
+};

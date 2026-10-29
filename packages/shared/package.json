@@ -5,6 +5,7 @@
   "type": "module",
   "types": "./src/index.ts",
   "exports": {
+    "./package.json": "./package.json",
     ".": {
       "types": "./src/index.ts",
       "default": "./src/index.ts"

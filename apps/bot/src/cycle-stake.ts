@@ -27,7 +27,7 @@ import {
   cycleCustomDataOf,
   cycleStakeDataOf,
   demoLaunchCallbackData,
-  pressedUnderPhoto,
+  pressedUnderMedia,
   type CycleStakeStep,
 } from './demo';
 import type { LoginDialog } from './login-dialog';
@@ -219,9 +219,10 @@ export function createCycleStakeComposer<C extends Context>({
 
   // Every refusal of an edit is classified as in demo.ts: already shown is done, gone gets the
   // screen anew, a transport failure sends nothing more, anything else goes to bot.catch. Under
-  // a photo (the analysis card, #482) no edit is tried: the screen goes as a new message (#761).
+  // a photo (the analysis card, #482, the wait's still) or the wait's animation (#859) no edit is
+  // tried: the screen goes as a new message (#761).
   async function editOrReply(ctx: Context, text: TelegramHtml, reply_markup: BotKeyboard) {
-    if (pressedUnderPhoto(ctx)) {
+    if (pressedUnderMedia(ctx)) {
       await replyHtml(ctx, text, { reply_markup });
       return;
     }
