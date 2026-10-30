@@ -459,6 +459,8 @@ const TIMING_CHAIN_HOLDS =
   BROKER_HTTP_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
   OAUTH_CALLBACK_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // app.close() waits for the callback's exchange, then onClose waits for its push
+  BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   // the first tick of the broker loops (#874)
   firstTickBoundsHold() &&
   ADMIN_POLLING_BATCH_LIMIT === 1 &&
