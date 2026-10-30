@@ -38,6 +38,7 @@ import {
 } from '@binarius/shared/broker-balance';
 import {
   BROKER_RATE_LIMIT_PER_MINUTE,
+  DEFAULT_BALANCE_POLL_PER_MINUTE,
   DEFAULT_SIGNAL_SCAN_PER_MINUTE,
 } from '@binarius/shared/broker-budget';
 import {
@@ -152,7 +153,13 @@ import {
   TRADE_TICKS_MAX_WAIT_MS,
   TRADE_TICKS_SCAN_LIMIT,
   TRADE_TICKS_SCAN_MS,
+  BALANCE_FIRST_TICK_MIN_MS,
+  DEFAULT_BALANCE_RECONCILE_INTERVAL_MS,
+  SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
+  firstTickBoundsHold,
+  firstTickDelayMs,
 } from './timing';
+import { balanceTickLimit } from './broker/balance-reconciler';
 import { MAX_HEALTH_TIMEOUT_MS } from './env';
 
 const composeYaml = readFileSync(
@@ -166,10 +173,11 @@ describe('backend shutdown timing', () => {
   it('keeps the publish deadline under phase 1 and both phases under the stop grace period', () => {
     expect(DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
-    expect(BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThanOrEqual(
-      OAUTH_CALLBACK_BUDGET_MS,
-    );
+    // the callback's longest path is the exchange; its push runs after the response, inside
+    // phase 1 (#874)
+    expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThanOrEqual(OAUTH_CALLBACK_BUDGET_MS);
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThan(ACCESS_TOKEN_ROUTE_BUDGET_MS);
     expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS).toBeLessThan(
@@ -676,5 +684,48 @@ describe('broker balance timing', () => {
     'SIGNAL_SCAN_MAX_PER_MINUTE',
   ])('forwards %s to the backend without a default of its own', (name) => {
     expect(composeServiceEnvValue(composeYaml, 'backend', name)).toBe('');
+  });
+});
+
+// #874, docs/broker-balance.md → Start and shutdown
+describe('the first tick of the broker loops', () => {
+  it('FT1 draws the first delay in [min, interval)', () => {
+    expect(firstTickDelayMs(5_000, 60_000, () => 0)).toBe(5_000);
+    expect(firstTickDelayMs(5_000, 60_000, () => 0.5)).toBe(32_500);
+    expect(firstTickDelayMs(5_000, 60_000, () => 0.999_999)).toBeLessThan(60_000);
+    expect(firstTickDelayMs(5_000, 60_000, () => 0.999_999)).toBeGreaterThan(59_900);
+  });
+
+  it('FT2 pins the floors and breaks the chain with a floor not below its shortest interval', () => {
+    expect(BALANCE_FIRST_TICK_MIN_MS).toBe(5_000);
+    expect(SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS).toBe(5_000);
+    expect(firstTickBoundsHold()).toBe(true);
+    expect(firstTickBoundsHold({ balanceMinMs: MIN_BALANCE_RECONCILE_INTERVAL_MS - 1 })).toBe(true);
+    expect(firstTickBoundsHold({ balanceMinMs: MIN_BALANCE_RECONCILE_INTERVAL_MS })).toBe(false);
+    expect(firstTickBoundsHold({ serviceAccountsMinMs: SERVICE_ACCOUNTS_TICK_MS - 1 })).toBe(true);
+    expect(firstTickBoundsHold({ serviceAccountsMinMs: SERVICE_ACCOUNTS_TICK_MS })).toBe(false);
+  });
+
+  it('FT3 holds no more ticks in the first minute than in a steady one, and the default share', () => {
+    // the schedule: d, d + I, d + 2I, …; a steady 60 s window holds at most ceil(60 s / I) ticks
+    const firstMinute = (d: number, intervalMs: number) =>
+      d >= 60_000 ? 0 : Math.ceil((60_000 - d) / intervalMs);
+    for (const intervalMs of [10_000, 25_000, 60_000]) {
+      for (const r of [0, 0.25, 0.5, 0.75, 0.999_999]) {
+        const d = firstTickDelayMs(BALANCE_FIRST_TICK_MIN_MS, intervalMs, () => r);
+        expect(firstMinute(d, intervalMs)).toBeLessThanOrEqual(Math.ceil(60_000 / intervalMs));
+      }
+    }
+    const d = firstTickDelayMs(
+      BALANCE_FIRST_TICK_MIN_MS,
+      DEFAULT_BALANCE_RECONCILE_INTERVAL_MS,
+      () => 0,
+    );
+    expect(firstMinute(d, DEFAULT_BALANCE_RECONCILE_INTERVAL_MS)).toBe(1);
+    const gets =
+      firstMinute(d, DEFAULT_BALANCE_RECONCILE_INTERVAL_MS) *
+      balanceTickLimit(DEFAULT_BALANCE_POLL_PER_MINUTE, DEFAULT_BALANCE_RECONCILE_INTERVAL_MS);
+    expect(gets).toBe(100);
+    expect(gets).toBeLessThanOrEqual(DEFAULT_BALANCE_POLL_PER_MINUTE);
   });
 });

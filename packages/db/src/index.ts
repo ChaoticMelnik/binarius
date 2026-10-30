@@ -14,6 +14,7 @@ export * from './link-bonus-ops';
 export * from './bonus-rule-ops';
 export * from './postback-ops';
 export * from './token-balance-ops';
+export * from './trading-access-ops';
 export * from './token-adjustment-ops';
 export * from './star-payment-ops';
 export * from './balance-snapshot-ops';

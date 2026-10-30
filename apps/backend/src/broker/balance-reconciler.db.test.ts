@@ -64,8 +64,10 @@ function reconciler(
   db: Db = tmp.db,
   config: Partial<BalanceReconcilerConfig> = {},
   client = createBrokerRestClient({ baseUrl: broker.url }),
+  random?: () => number,
 ) {
   return createBalanceReconciler({
+    ...(random === undefined ? {} : { random }),
     db,
     client,
     accessToken: async (accountId, options) => {
@@ -669,7 +671,7 @@ describe('tick', () => {
   // a behavioural test would not see a second timer: running ??= hides the doubled ticks
   it('arms one timer for a second start()', async () => {
     const balance = reconciler(own.db, { intervalMs: 60_000 });
-    const spy = vi.spyOn(globalThis, 'setInterval');
+    const spy = vi.spyOn(globalThis, 'setTimeout');
     try {
       balance.start();
       balance.start();
@@ -683,7 +685,7 @@ describe('tick', () => {
   it('runs on its timer without overlapping ticks, and stays stopped', async () => {
     await withIntent();
     broker.rest.failNext('user', { hang: true });
-    const balance = reconciler(own.db, { intervalMs: 20 });
+    const balance = reconciler(own.db, { intervalMs: 20, firstTickMinMs: 0 });
     balance.start();
     await until('the first tick to hang', () => broker.rest.pendingHangs === 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -695,5 +697,74 @@ describe('tick', () => {
     balance.start();
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(userGets()).toHaveLength(after);
+  });
+
+  // #874, Rule 65: the first tick at firstTickDelayMs inside the first interval, the interval
+  // from that tick; here 100 + 0.5 × (1 000 − 100) = 550 ms
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('BF1 ticks first at the jittered delay, then a whole interval later', async () => {
+    await withIntent();
+    const balance = reconciler(
+      own.db,
+      { intervalMs: 1_000, firstTickMinMs: 100 },
+      undefined,
+      () => 0.5,
+    );
+    const started = Date.now();
+    balance.start();
+    try {
+      await sleep(300);
+      expect(userGets()).toHaveLength(0);
+      await until('the first tick', () => userGets().length === 1);
+      const first = Date.now();
+      // before the interval would have fired from start()
+      expect(first - started).toBeLessThan(1_000);
+      await sleep(600);
+      expect(userGets()).toHaveLength(1);
+      await until('the second tick', () => userGets().length === 2);
+      expect(Date.now() - first).toBeGreaterThanOrEqual(900);
+    } finally {
+      await balance.stop();
+    }
+  });
+
+  it('BF2 a stop() inside the first delay cancels the first tick', async () => {
+    await withIntent();
+    const balance = reconciler(
+      own.db,
+      { intervalMs: 200, firstTickMinMs: 40 },
+      undefined,
+      () => 0.5,
+    );
+    balance.start();
+    await sleep(20);
+    await balance.stop();
+    balance.start();
+    await sleep(500);
+    expect(userGets()).toHaveLength(0);
+  });
+
+  it('BF3 arms the interval once, after the first tick, with the interval', async () => {
+    await withIntent();
+    const timeouts = vi.spyOn(globalThis, 'setTimeout');
+    const intervals = vi.spyOn(globalThis, 'setInterval');
+    const balance = reconciler(
+      own.db,
+      { intervalMs: 200, firstTickMinMs: 40 },
+      undefined,
+      () => 0.5,
+    );
+    try {
+      balance.start();
+      expect(intervals).not.toHaveBeenCalled();
+      expect(timeouts.mock.calls.some(([, ms]) => ms === 120)).toBe(true);
+      await until('the first tick', () => userGets().length === 1);
+      expect(intervals.mock.calls.filter(([, ms]) => ms === 200)).toHaveLength(1);
+    } finally {
+      timeouts.mockRestore();
+      intervals.mockRestore();
+      await balance.stop();
+    }
   });
 });

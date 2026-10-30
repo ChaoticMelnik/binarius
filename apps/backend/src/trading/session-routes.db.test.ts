@@ -57,8 +57,7 @@ import {
   markIntentAccepted,
   openTrading,
   listActiveH1Sessions,
-  readSessionBalance,
-  readSessionHistory,
+  readSessionBatch,
   readTradingSessionView,
   recordSignalDecision,
   referralCodes,
@@ -2354,8 +2353,8 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
       streaming: () => true,
       sessions: {
         list: () => listActiveH1Sessions(tmp.db),
-        history: (id, options) => readSessionHistory(tmp.db, id, options),
-        balance: (id, options) => readSessionBalance(tmp.db, id, options),
+        read: async (id, { maxDurationMs, noSignalTimeoutMs }) =>
+          (await readSessionBatch(tmp.db, [{ id, noSignalTimeoutMs }], { maxDurationMs })).get(id),
         createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
         stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
         record: (input) => recordSignalDecision(tmp.db, input),
@@ -2617,8 +2616,8 @@ describe('POST /trading/sessions: every start is H1 (#745, #775, #828)', () => {
       streaming: () => true,
       sessions: {
         list: () => listActiveH1Sessions(tmp.db),
-        history: (id, options) => readSessionHistory(tmp.db, id, options),
-        balance: (id, options) => readSessionBalance(tmp.db, id, options),
+        read: async (id, { maxDurationMs, noSignalTimeoutMs }) =>
+          (await readSessionBatch(tmp.db, [{ id, noSignalTimeoutMs }], { maxDurationMs })).get(id),
         createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
         stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
         record: (input) => recordSignalDecision(tmp.db, input),

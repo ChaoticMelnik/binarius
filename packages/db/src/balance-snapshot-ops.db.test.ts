@@ -20,6 +20,7 @@ import {
   resolveBalanceAccount,
   summarizeWatchedBalances,
   toBrokerBalanceView,
+  touchAndReadBalanceSnapshot,
   touchBalanceRequested,
   touchBalancesRequested,
   upsertBalanceSnapshot,
@@ -477,6 +478,41 @@ describe('recordBalanceRefreshFailure and touchBalanceRequested', () => {
     expect(await snapshotRow(none)).toBeUndefined();
     expect(await touchBalancesRequested(counted, [])).toBe(0);
     expect(statements).toHaveLength(1);
+  });
+
+  it('BS1 the touch + read (#874) moves both times and returns what readBalanceSnapshot reads, in one statement', async () => {
+    const { accountId } = await seedAccount();
+    await upsertBalanceSnapshot(tmp.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: false,
+    });
+    await shift(accountId, 'updated_at', '-1 hour');
+    const before = (await snapshotRow(accountId))!.row;
+    expect(before.lastRequestedAt).toBeNull();
+    const statements: string[] = [];
+    const counted = createDb(tmp.pool, {
+      logger: { logQuery: (query) => void statements.push(query) },
+    });
+
+    const read = await touchAndReadBalanceSnapshot(counted, accountId);
+    expect(statements).toHaveLength(1);
+    const after = (await snapshotRow(accountId))!.row;
+    expect(after.lastRequestedAt).toBeInstanceOf(Date);
+    expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+    expect(read).toEqual(await readBalanceSnapshot(tmp.db, accountId));
+    expect(read).toMatchObject({
+      real: { available: '100.00000000', held: '0.00000000', total: '100.00000000' },
+      restSnapshotAgeSec: 0,
+      balanceEventAgeSec: null,
+      lastRefreshError: null,
+    });
+  });
+
+  it('BS2 the touch + read returns nothing and writes nothing without a snapshot', async () => {
+    const { accountId } = await seedAccount();
+    expect(await touchAndReadBalanceSnapshot(tmp.db, accountId)).toBeUndefined();
+    expect(await snapshotRow(accountId)).toBeUndefined();
   });
 });
 

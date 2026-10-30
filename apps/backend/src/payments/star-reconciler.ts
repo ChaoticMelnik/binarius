@@ -291,9 +291,11 @@ export function createStarReconciler(deps: StarReconcilerDeps): StarReconciler {
 
   return {
     tick,
+    // no broker call: the first tick at start() (#874, Rule 65)
     start() {
       if (stopped || timer !== undefined) return;
       timer = setInterval(() => void tick(), config.tickMs);
+      void tick();
     },
     async stop() {
       stopped = true;

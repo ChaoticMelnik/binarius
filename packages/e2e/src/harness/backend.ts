@@ -41,8 +41,7 @@ import {
   createSessionIntent,
   createTokenCipher,
   listActiveH1Sessions,
-  readSessionBalance,
-  readSessionHistory,
+  readSessionBatch,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
   setLastAnalysis,
@@ -159,8 +158,8 @@ export async function startE2eBackend(deps: {
     streaming,
     sessions: {
       list: () => listActiveH1Sessions(db),
-      history: (id, options) => readSessionHistory(db, id, options),
-      balance: (id, options) => readSessionBalance(db, id, options),
+      read: async (id, { maxDurationMs, noSignalTimeoutMs }) =>
+        (await readSessionBatch(db, [{ id, noSignalTimeoutMs }], { maxDurationMs })).get(id),
       createIntent: (input) => createSessionIntent(db, input, { demoOnly: false }),
       stop: (id, reason) => stopTradingSession(db, { id, reason }),
       record: (input) => recordSignalDecision(db, input),

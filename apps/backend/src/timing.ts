@@ -101,9 +101,10 @@ export const ADMIN_HANDLER_BUDGET_MS =
 
 // --- The client push (#128, #202) -------------------------------------------------------------
 // Each sendMessage of auth/client-push.ts (grammY's ApiClientOptions.timeoutSeconds): the one
-// POST /auth/binodex/callback makes after the link commits, and each mailing. One attempt: a lost
-// link push is made up for by the confirm button on the user's next /start, and a mailing whose
-// send ended without Telegram's answer is never sent again (docs/mailing.md).
+// POST /auth/binodex/callback starts after its response (#874; app.close() waits for it), and
+// each mailing. One attempt: a lost link push is made up for by the confirm button on the user's
+// next /start, and a mailing whose send ended without Telegram's answer is never sent again
+// (docs/mailing.md).
 export const CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
 
 // --- The mailing engine (#202) -----------------------------------------------------------------
@@ -358,6 +359,26 @@ export const BALANCE_POLL_CONCURRENCY = 4;
 // down the queue (no snapshot to mark, or a token that needs an exchange).
 export const BALANCE_STALLED_RETRY_MS = 300_000;
 
+// --- The first tick of the broker loops (#874) ------------------------------------------------
+// docs/broker-balance.md → Start and shutdown. The balance reconciler and the service-account
+// keeper tick first at firstTickDelayMs after start(), and their interval runs from that tick:
+// the spacing of the ticks is the interval's from the first one on, so the first minute after a
+// start never holds more ticks than a steady minute. The floor leaves the worker's own start burst
+// (its reconnections and catch-up) the first seconds.
+export const BALANCE_FIRST_TICK_MIN_MS = 5_000;
+export const SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS = 5_000;
+// in [minMs, intervalMs) for random() in [0, 1)
+export const firstTickDelayMs = (minMs: number, intervalMs: number, random: () => number) =>
+  minMs + random() * (intervalMs - minMs);
+// The links of the chain, a function so a test can show which value breaks them: each floor is
+// below the shortest interval of its loop, so the jitter's range is never empty.
+export const firstTickBoundsHold = ({
+  balanceMinMs = BALANCE_FIRST_TICK_MIN_MS,
+  serviceAccountsMinMs = SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
+}: { balanceMinMs?: number; serviceAccountsMinMs?: number } = {}): boolean =>
+  balanceMinMs < MIN_BALANCE_RECONCILE_INTERVAL_MS &&
+  serviceAccountsMinMs < SERVICE_ACCOUNTS_TICK_MS;
+
 // The one broker GET POST /trading/access may wait for (the route's signal; the client ends at
 // the earlier of it and BROKER_REST_TIMEOUT_MS).
 export const TRADING_ACCESS_REFRESH_BUDGET_MS = 3_000;
@@ -422,10 +443,14 @@ export const BOT_PROFILE_PUBLISH_CALLS = 3;
 const TIMING_CHAIN_HOLDS =
   DEFAULT_PUBLISHER_CONFIG.publishTimeoutMs < SHUTDOWN_PHASE1_BUDGET_MS &&
   BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
-  // the callback's longest path: the code exchange, then the push. The contract constant lives
-  // in packages/shared because apps/web sizes its forward's timeout above the same number.
-  BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
+  // the callback's longest path: the code exchange; its push runs after the response (#874) and
+  // app.close() waits for it. The contract constant lives in packages/shared because apps/web
+  // sizes its forward's timeout above the same number.
+  BROKER_HTTP_TIMEOUT_MS <= OAUTH_CALLBACK_BUDGET_MS &&
   OAUTH_CALLBACK_BUDGET_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
+  // the first tick of the broker loops (#874)
+  firstTickBoundsHold() &&
   ADMIN_POLLING_BATCH_LIMIT === 1 &&
   ADMIN_POLLING_TIMEOUT_S * 1000 < ADMIN_TELEGRAM_API_TIMEOUT_MS &&
   // what POST /admin/auth/login may spend: the wait for a scrypt slot, the scrypt, and the one

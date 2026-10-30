@@ -9,6 +9,7 @@ import {
   StarPaymentStatus,
   starsInvoicePayload,
 } from '@binarius/shared';
+import { until } from '@binarius/shared/testing';
 import { auditLog, starPayments, tokenLedger, users } from '@binarius/db';
 import {
   createTempDatabase,
@@ -273,6 +274,18 @@ describe('the Stars reconciler', () => {
         method: 'getStarTransactions',
       }),
     );
+  });
+
+  // #874, Rule 65: no broker call, so the first tick at start(), not a whole interval later
+  it('S30 ticks at start() without waiting for its interval', async () => {
+    const { subject, reads } = reconciler([]);
+    subject.start();
+    try {
+      await until('the first tick at start()', () => reads.length === 1);
+    } finally {
+      await subject.stop();
+    }
+    expect(reads).toHaveLength(1);
   });
 
   it('starts no tick after stop()', async () => {

@@ -40,6 +40,7 @@ import {
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
 import { startOAuthStub, type OAuthStub } from '../broker/testing/oauth-stub';
+import { createInFlight, type InFlight } from '../in-flight';
 import type { AuthRoutesDeps } from './routes';
 import {
   callsTo,
@@ -90,6 +91,9 @@ let tmp: TempDatabase;
 let stub: OAuthStub;
 let app: ReturnType<typeof buildApp>;
 let authDeps: AuthRoutesDeps;
+// the shared app's pushes after the response (#874); callback() waits for them, so every read of
+// the captured pushes sees the callback's own
+let linkPushes: InFlight;
 // every push the shared app sends; a case reads only the ones addressed to its own Telegram id
 let pushApi: CapturedApi;
 
@@ -101,6 +105,7 @@ beforeAll(async () => {
     redirectUri: REDIRECT_URI,
     partnerCode: PARTNER_REF,
   });
+  linkPushes = createInFlight();
   authDeps = {
     db: tmp.db,
     cipher,
@@ -121,6 +126,7 @@ beforeAll(async () => {
       botToken: PUSH_BOT_TOKEN,
       maxAgeMs: INIT_DATA_MAX_AGE_MS,
     }),
+    linkPushes,
   };
   pushApi = captureApi(authDeps.clientPush);
   app = testApp(authDeps);
@@ -201,16 +207,20 @@ const stateFor = async (telegramUserId: string): Promise<string> => {
 // The state owner's own signed initData is added to every object body that names no initData
 // key of its own, so the cases written before #113 still test what they say. A case about the
 // proof itself passes `initData` explicitly — `undefined` to leave it out of the body.
-const callback = (payload: unknown, instance = app) => {
-  if (typeof payload !== 'object' || payload === null || 'initData' in payload) {
-    return postJson(instance, '/auth/binodex/callback', payload);
-  }
-  const { state } = payload as { state?: unknown };
-  const owner = (typeof state === 'string' && stateOwners.get(state)) || STRANGER_TELEGRAM_ID;
-  return postJson(instance, '/auth/binodex/callback', {
-    ...payload,
-    initData: initDataFor(owner),
-  });
+const callback = async (payload: unknown, instance = app) => {
+  const response = await (() => {
+    if (typeof payload !== 'object' || payload === null || 'initData' in payload) {
+      return postJson(instance, '/auth/binodex/callback', payload);
+    }
+    const { state } = payload as { state?: unknown };
+    const owner = (typeof state === 'string' && stateOwners.get(state)) || STRANGER_TELEGRAM_ID;
+    return postJson(instance, '/auth/binodex/callback', {
+      ...payload,
+      initData: initDataFor(owner),
+    });
+  })();
+  await linkPushes.settle();
+  return response;
 };
 
 async function login(telegramUserId: string, brokerUserId: string, isPartnerClient?: boolean) {
@@ -1198,6 +1208,84 @@ describe('a push that fails', () => {
     const { notifier } = refusing(400, 'Bad Request: chat not found');
     const { telegram } = await failing(notifier);
     expect(await blockedAtOf(telegram)).toBeNull();
+  });
+});
+
+// #874: the callback answers before its push; app.close() (shutdown phase 1) waits for it
+describe('the push after the response', () => {
+  // a sendMessage that answers only on release(); `answered` turns true when it has
+  const holding = () => {
+    const notifier = createClientPush({ token: PUSH_BOT_TOKEN });
+    const captured = captureApi(notifier);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const state = { answered: false };
+    captured.answers.set('sendMessage', () =>
+      gate.then(() => {
+        state.answered = true;
+        return true;
+      }),
+    );
+    return { notifier, captured, release, state };
+  };
+  const later = (ms: number) =>
+    new Promise<'later'>((resolve) => setTimeout(() => resolve('later'), ms));
+
+  it('OA1 the callback answers while the push is held, and the push completes after it', async () => {
+    const held = holding();
+    const pushes = createInFlight();
+    const instance = await own({ clientPush: held.notifier, linkPushes: pushes });
+    try {
+      const telegram = telegramId();
+      const state = await stateFor(telegram);
+      const code = stub.issueCode({ brokerUserId: `oa1-${telegram}` });
+      const response = await Promise.race([callback({ state, code }, instance), later(1_000)]);
+      if (response === 'later') throw new Error('the callback waited for its push');
+      expect(response.statusCode).toBe(200);
+      expect(held.state.answered).toBe(false);
+      expect(pushes.size).toBe(1);
+      held.release();
+      await pushes.settle();
+      expect(held.state.answered).toBe(true);
+      expect(pushesTo(telegram, held.captured)).toHaveLength(1);
+    } finally {
+      held.release();
+      await instance.close();
+    }
+  });
+
+  it('OA2 app.close() does not resolve while a push is held, and the push is done when it does', async () => {
+    const held = holding();
+    const instance = await own({ clientPush: held.notifier, linkPushes: createInFlight() });
+    const telegram = telegramId();
+    const state = await stateFor(telegram);
+    const code = stub.issueCode({ brokerUserId: `oa2-${telegram}` });
+    expect((await callback({ state, code }, instance)).statusCode).toBe(200);
+    const closed = instance.close().then(() => 'closed' as const);
+    expect(await Promise.race([closed, later(200)])).toBe('later');
+    held.release();
+    expect(await closed).toBe('closed');
+    expect(held.state.answered).toBe(true);
+  });
+
+  it('OA3 a 403 after the response still marks the owner unreachable once the pushes settle', async () => {
+    pushApi.apiErrors.set('sendMessage', {
+      ok: false,
+      error_code: 403,
+      description: 'Forbidden: bot was blocked by the user',
+    });
+    try {
+      const telegram = telegramId();
+      const { response } = await login(telegram, `oa3-${telegram}`);
+      expect(response.statusCode).toBe(200);
+      const [row] = await tmp.db
+        .select({ at: users.telegramBlockedAt })
+        .from(users)
+        .where(eq(users.telegramUserId, BigInt(telegram)));
+      expect(row?.at).toBeInstanceOf(Date);
+    } finally {
+      pushApi.apiErrors.delete('sendMessage');
+    }
   });
 });
 

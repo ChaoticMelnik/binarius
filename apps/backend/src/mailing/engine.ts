@@ -284,10 +284,12 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
     planTick,
     wakePlan,
     sendTick,
+    // the planner's first tick at start() (#874, Rule 65); the sender's on its short interval
     start() {
       if (stopped || planTimer !== undefined) return;
       planTimer = setInterval(() => void planTick(), config.planTickMs);
       sendTimer = setInterval(() => void sendTick(), config.sendTickMs);
+      void planTick();
     },
     async stop() {
       stopped = true;

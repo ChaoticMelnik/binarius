@@ -53,7 +53,7 @@ import {
   recordSessionStatusMessage,
   stopTradingSession,
   stopUserSessions,
-  touchBalanceRequested,
+  touchAndReadBalanceSnapshot,
   type Db,
   type SignalDecisionInput,
   TradingSessionDbErrorCode,
@@ -217,8 +217,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     // keeps the account in work for the backend's reconcile tick and the worker's sessions;
     // a stored snapshot of any age serves: the sizer checks the balance before every trade
     const readSnapshot = async () => {
-      await touchBalanceRequested(db, brokerAccountId);
-      const stored = await readBalanceSnapshot(db, brokerAccountId);
+      const stored = await touchAndReadBalanceSnapshot(db, brokerAccountId);
       if (stored !== undefined) return stored;
       // the same comparison as POST /trading/access: an exchange would not fit the budget, so it
       // runs in the background and the caller retries

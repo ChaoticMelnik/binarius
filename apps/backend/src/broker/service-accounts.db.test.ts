@@ -14,7 +14,6 @@ import {
   seedUser,
   type TempDatabase,
 } from '@binarius/db/testing';
-import { until } from '@binarius/shared/testing';
 import { ADMIN_TEXTS } from '../admin/texts';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
 import { createServiceAccountKeeper, type ServiceAccountKeeperConfig } from './service-accounts';
@@ -144,6 +143,7 @@ function keeper(
     accessToken?: ReturnType<typeof fakeAccessToken>;
     notify?: ReturnType<typeof fakeNotify>;
     config?: Partial<ServiceAccountKeeperConfig>;
+    random?: () => number;
   } = {},
 ) {
   const token = overrides.accessToken ?? fakeAccessToken();
@@ -155,6 +155,7 @@ function keeper(
     notifyStaff: notify.notifyStaff,
     logger,
     config: { ...CONFIG, ...overrides.config },
+    ...(overrides.random === undefined ? {} : { random: overrides.random }),
   });
   return { instance, token, notify, logger };
 }
@@ -433,7 +434,13 @@ describe('the keeper as a loop', () => {
     expect(logged).not.toContain('Служебных');
   });
 
-  it('K12 ticks every tickMs after start() and reuses a tick still running', async () => {
+  // #874, Rule 65: the first tick at firstTickDelayMs (random 0: the floor), the interval from it.
+  // The waits below run on the real clock the fake one leaves alone.
+  const realSetTimeout = globalThis.setTimeout;
+  const realSleep = (ms: number) => new Promise((resolve) => realSetTimeout(resolve, ms));
+  const FIRST_MS = 200;
+
+  it('K12 ticks first at its floor after start(), then every tickMs, and reuses a tick still running', async () => {
     await serviceAccount({ expiresInHours: 1 });
     let release: (() => void) | undefined;
     const held = new Promise<void>((resolve) => {
@@ -443,19 +450,44 @@ describe('the keeper as a loop', () => {
       await held;
       return { ok: true, accessToken: TOKEN, brokerUserId: 'broker-user' };
     });
-    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    const { instance } = keeper({ accessToken: token });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const { instance } = keeper({
+      accessToken: token,
+      config: { firstTickMinMs: FIRST_MS },
+      random: () => 0,
+    });
     instance.start();
-    vi.advanceTimersByTime(CONFIG.tickMs - 1);
+    vi.advanceTimersByTime(FIRST_MS - 1);
+    await realSleep(100);
     expect(token.calls).toHaveLength(0);
     vi.advanceTimersByTime(1);
-    await until('the first tick asks for the token', () => token.calls.length === 1);
+    for (let i = 0; i < 100 && token.calls.length === 0; i += 1) await realSleep(20);
+    expect(token.calls).toHaveLength(1);
     const again = instance.tick();
     vi.advanceTimersByTime(CONFIG.tickMs);
     release?.();
     await again;
     expect(token.calls).toHaveLength(1);
+    // the interval runs from the first tick: its next fire is FIRST_MS + 2 tickMs
+    vi.advanceTimersByTime(CONFIG.tickMs - 1);
+    await realSleep(100);
+    expect(token.calls).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    for (let i = 0; i < 100 && token.calls.length === 1; i += 1) await realSleep(20);
+    expect(token.calls).toHaveLength(2);
     await instance.stop();
+  });
+
+  it('K13 a stop() inside the first delay leaves the keeper without an exchange', async () => {
+    await serviceAccount({ expiresInHours: 1 });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+    const { instance, token } = keeper({ config: { firstTickMinMs: FIRST_MS }, random: () => 0 });
+    instance.start();
+    vi.advanceTimersByTime(FIRST_MS - 1);
+    await instance.stop();
+    vi.advanceTimersByTime(10 * CONFIG.tickMs);
+    await realSleep(100);
+    expect(token.calls).toHaveLength(0);
   });
 });
 

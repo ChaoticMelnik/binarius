@@ -159,7 +159,8 @@ interface Harness {
   series: ReturnType<typeof scriptedSeries>;
   listed: ActiveH1Session[];
   histories: Map<string, SessionHistory | undefined>;
-  // the session's balance read (#775): undefined is no snapshot; onRead runs at each read
+  // the session's balance in the one read (#775, #874): undefined is no snapshot; onRead runs at
+  // each read
   balance: { read: SessionBalanceRead | undefined; onRead?: () => void };
   creates: CreateSessionIntentInput[];
   records: SignalDecisionInput[];
@@ -276,13 +277,13 @@ async function harness(
     streaming: () => streaming.on,
     sessions: {
       list: () => listAnswers.shift()?.() ?? Promise.resolve([...h.listed]),
-      history: (id) => {
+      read: (id) => {
         historyReads.n += 1;
-        return Promise.resolve(histories.has(id) ? histories.get(id) : emptyHistory());
-      },
-      balance: () => {
         balance.onRead?.();
-        return Promise.resolve(balance.read);
+        const history = histories.has(id) ? histories.get(id) : emptyHistory();
+        return Promise.resolve(
+          history === undefined ? undefined : { history, balance: balance.read },
+        );
       },
       createIntent: (input) => {
         creates.push(input);

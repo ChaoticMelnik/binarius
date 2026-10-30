@@ -128,6 +128,34 @@ const jobsOf = (userId: string) =>
 const sendsTo = (calls: ReturnType<typeof captureApi>['calls'], telegramUserId: string) =>
   callsTo(calls, 'sendMessage').filter((call) => call.payload.chat_id === telegramUserId);
 
+// #874, Rule 65: the planner reads only the database, so its first tick is at start()
+describe('the planner at start()', () => {
+  const idle = { planTickMs: 3_600_000, sendTickMs: 3_600_000 };
+
+  it('MP1 plans a due job right after start(), without waiting for its interval', async () => {
+    const user = await dueUser();
+    const { mailing } = engine(idle);
+    mailing.start();
+    try {
+      await until('the first plan at start()', async () => (await jobsOf(user.userId)).length > 0);
+    } finally {
+      await mailing.stop();
+    }
+    expect((await jobsOf(user.userId)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Pending,
+    ]);
+  });
+
+  it('MP2 plans nothing on a start() after stop()', async () => {
+    const user = await dueUser();
+    const { mailing } = engine(idle);
+    await mailing.stop();
+    mailing.start();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(await jobsOf(user.userId)).toEqual([]);
+  });
+});
+
 describe('the first-session chain through the engine', () => {
   it.each(FIRST_SESSION_CHAIN.map((step) => [step.kind, step.afterHours] as const))(
     'sends %s once, as Telegram HTML with the demo button',

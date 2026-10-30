@@ -253,29 +253,37 @@ export interface BalanceSnapshotRead {
   lastRefreshError: BalanceRefreshError | null;
 }
 
-export async function readBalanceSnapshot(
-  db: Db,
-  brokerAccountId: string,
-): Promise<BalanceSnapshotRead | undefined> {
-  const t = brokerBalanceSnapshots;
-  const [row] = await db
-    .select({
-      realAvailable: t.realAvailable,
-      realHeld: t.realHeld,
-      realTotal: t.realTotal,
-      demoAvailable: t.demoAvailable,
-      demoHeld: t.demoHeld,
-      demoTotal: t.demoTotal,
-      minTradeAmount: t.minTradeAmount,
-      levelCode: t.levelCode,
-      levelRank: t.levelRank,
-      restSnapshotAgeSec: sql<number>`${ageSecOf(sql`${t.restObservedAt}`)}`,
-      balanceEventAgeSec: nullableAgeSec(newestEventAt),
-      lastRefreshError: t.lastRefreshError,
-    })
-    .from(t)
-    .where(eq(t.brokerAccountId, brokerAccountId));
-  if (row === undefined) return undefined;
+const snapshotReadColumns = {
+  realAvailable: brokerBalanceSnapshots.realAvailable,
+  realHeld: brokerBalanceSnapshots.realHeld,
+  realTotal: brokerBalanceSnapshots.realTotal,
+  demoAvailable: brokerBalanceSnapshots.demoAvailable,
+  demoHeld: brokerBalanceSnapshots.demoHeld,
+  demoTotal: brokerBalanceSnapshots.demoTotal,
+  minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
+  levelCode: brokerBalanceSnapshots.levelCode,
+  levelRank: brokerBalanceSnapshots.levelRank,
+  restSnapshotAgeSec: sql<number>`${ageSecOf(sql`${brokerBalanceSnapshots.restObservedAt}`)}`,
+  balanceEventAgeSec: nullableAgeSec(newestEventAt),
+  lastRefreshError: brokerBalanceSnapshots.lastRefreshError,
+};
+
+interface SnapshotReadRow {
+  realAvailable: BrokerBalance['available'];
+  realHeld: BrokerBalance['held'];
+  realTotal: BrokerBalance['total'];
+  demoAvailable: BrokerBalance['available'];
+  demoHeld: BrokerBalance['held'];
+  demoTotal: BrokerBalance['total'];
+  minTradeAmount: BrokerUser['minTradeAmount'];
+  levelCode: BrokerUser['level']['code'];
+  levelRank: BrokerUser['level']['rank'];
+  restSnapshotAgeSec: number;
+  balanceEventAgeSec: number | null;
+  lastRefreshError: BalanceRefreshError | null;
+}
+
+function toSnapshotRead(row: SnapshotReadRow): BalanceSnapshotRead {
   return {
     real: { available: row.realAvailable, held: row.realHeld, total: row.realTotal },
     demo: { available: row.demoAvailable, held: row.demoHeld, total: row.demoTotal },
@@ -285,6 +293,31 @@ export async function readBalanceSnapshot(
     balanceEventAgeSec: row.balanceEventAgeSec,
     lastRefreshError: row.lastRefreshError,
   };
+}
+
+export async function readBalanceSnapshot(
+  db: Db,
+  brokerAccountId: string,
+): Promise<BalanceSnapshotRead | undefined> {
+  const [row] = await db
+    .select(snapshotReadColumns)
+    .from(brokerBalanceSnapshots)
+    .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId));
+  return row === undefined ? undefined : toSnapshotRead(row);
+}
+
+// touchBalanceRequested and readBalanceSnapshot in one statement (#874): the ages are by the
+// statement's now(), as the SELECT's; no snapshot → undefined and nothing written.
+export async function touchAndReadBalanceSnapshot(
+  db: Db,
+  brokerAccountId: string,
+): Promise<BalanceSnapshotRead | undefined> {
+  const [row] = await db
+    .update(brokerBalanceSnapshots)
+    .set({ lastRequestedAt: sql`now()`, updatedAt: sql`now()` })
+    .where(eq(brokerBalanceSnapshots.brokerAccountId, brokerAccountId))
+    .returning(snapshotReadColumns);
+  return row === undefined ? undefined : toSnapshotRead(row);
 }
 
 // The wire view: keys built one by one, so nothing the row carries (lastRefreshError, the
@@ -450,30 +483,40 @@ export type BalanceAccountResolution =
   // the explicit id is not an account of this user
   | { kind: 'not_found' };
 
-// Which account a balance read is about. Without an id, the user's only active account; with
-// one, that account whatever its status, so the caller can say it is pending or revoked.
-export async function resolveBalanceAccount(
-  db: Db,
-  { telegramUserId, brokerAccountId }: { telegramUserId: bigint; brokerAccountId?: string },
-): Promise<BalanceAccountResolution> {
-  const accountFilter =
+export const balanceAccountColumns = {
+  userStatus: users.status,
+  language: users.language,
+  id: brokerAccounts.id,
+  status: brokerAccounts.status,
+  brokerUserId: brokerAccounts.brokerUserId,
+  accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
+};
+
+export interface BalanceAccountRow {
+  userStatus: UserStatus;
+  language: BotLanguage;
+  id: string | null;
+  status: BrokerAccountStatus | null;
+  brokerUserId: string | null;
+  accessTokenExpiresAt: Date | null;
+}
+
+// The join condition of users ⟕ broker_accounts for a balance read: without an id, the user's
+// active accounts; with one, that account whatever its status.
+export const balanceAccountFilter = (brokerAccountId?: string): SQL | undefined =>
+  and(
+    eq(brokerAccounts.userId, users.id),
     brokerAccountId === undefined
       ? eq(brokerAccounts.status, BrokerAccountStatus.Active)
-      : eq(brokerAccounts.id, brokerAccountId);
-  const rows = await db
-    .select({
-      userStatus: users.status,
-      language: users.language,
-      id: brokerAccounts.id,
-      status: brokerAccounts.status,
-      brokerUserId: brokerAccounts.brokerUserId,
-      accessTokenExpiresAt: brokerAccounts.accessTokenExpiresAt,
-    })
-    .from(users)
-    .leftJoin(brokerAccounts, and(eq(brokerAccounts.userId, users.id), accountFilter))
-    .where(eq(users.telegramUserId, telegramUserId))
-    .orderBy(brokerAccounts.id)
-    .limit(2);
+      : eq(brokerAccounts.id, brokerAccountId),
+  );
+
+// The rows of users ⟕ broker_accounts on balanceAccountFilter, ordered by the account id and
+// limited to 2.
+export function resolveAccountRows(
+  rows: readonly BalanceAccountRow[],
+  brokerAccountId?: string,
+): BalanceAccountResolution {
   const [first, second] = rows;
   if (first === undefined) return { kind: 'no_user' };
   if (second !== undefined) return { kind: 'ambiguous' };
@@ -485,4 +528,20 @@ export async function resolveBalanceAccount(
     kind: 'account',
     account: { id, status, brokerUserId, accessTokenExpiresAt, userStatus, language },
   };
+}
+
+// Which account a balance read is about. Without an id, the user's only active account; with
+// one, that account whatever its status, so the caller can say it is pending or revoked.
+export async function resolveBalanceAccount(
+  db: Db,
+  { telegramUserId, brokerAccountId }: { telegramUserId: bigint; brokerAccountId?: string },
+): Promise<BalanceAccountResolution> {
+  const rows = await db
+    .select(balanceAccountColumns)
+    .from(users)
+    .leftJoin(brokerAccounts, balanceAccountFilter(brokerAccountId))
+    .where(eq(users.telegramUserId, telegramUserId))
+    .orderBy(brokerAccounts.id)
+    .limit(2);
+  return resolveAccountRows(rows, brokerAccountId);
 }

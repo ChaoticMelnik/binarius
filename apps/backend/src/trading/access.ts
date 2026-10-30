@@ -14,15 +14,12 @@ import {
 import {
   BalanceRefreshError,
   readBalanceSnapshot,
-  readStakes,
-  readTokenBalance,
-  resolveBalanceAccount,
+  readTradingAccessState,
   toBrokerBalanceView,
   toTradingAccessView,
-  isTradingOpen,
-  readTradingSwitch,
-  touchBalanceRequested,
+  touchAndReadBalanceSnapshot,
   type Db,
+  type TradingAccessState,
 } from '@binarius/db';
 import type { BalanceReconciler, BalanceRefreshOutcome } from '../broker/balance-reconciler';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
@@ -74,20 +71,13 @@ function reasonFor(outcome: BalanceRefreshOutcome): BrokerBalanceUnavailableReas
 async function brokerSection(
   { db, balance }: TradingAccessDeps,
   log: FastifyBaseLogger,
-  telegramUserId: bigint,
-  brokerAccountId: string | undefined,
+  resolved: TradingAccessState['account'],
 ): Promise<BrokerSection> {
-  const resolved = await resolveBalanceAccount(db, {
-    telegramUserId,
-    ...(brokerAccountId === undefined ? {} : { brokerAccountId }),
-  });
   switch (resolved.kind) {
     case 'not_found':
       return 'not_found';
     case 'ambiguous':
       return unavailable(BrokerBalanceUnavailableReason.AmbiguousAccount);
-    // the users row was read a statement earlier and is never deleted; no account either way
-    case 'no_user':
     case 'no_account':
       return unavailable(BrokerBalanceUnavailableReason.NoAccount);
     case 'account':
@@ -101,8 +91,7 @@ async function brokerSection(
     return unavailable(BrokerBalanceUnavailableReason.AccountRevoked);
   }
 
-  await touchBalanceRequested(db, account.id);
-  const stored = await readBalanceSnapshot(db, account.id);
+  const stored = await touchAndReadBalanceSnapshot(db, account.id);
   const view = stored === undefined ? undefined : toBrokerBalanceView(stored);
   const current = (fallback: BrokerBalanceUnavailableReason): BrokerSection =>
     view === undefined ? unavailable(fallback) : { broker: view, brokerUnavailable: null };
@@ -144,26 +133,24 @@ export function registerTradingAccess(app: FastifyInstance, deps: TradingAccessD
     if (!parsed.success) {
       return reply.code(400).send({ error: 'validation', issues: parsed.error.issues });
     }
-    const telegramUserId = BigInt(parsed.data.telegramUserId);
-    const snapshot = await readTokenBalance(deps.db, telegramUserId);
-    if (snapshot === undefined) {
+    const state = await readTradingAccessState(deps.db, {
+      telegramUserId: BigInt(parsed.data.telegramUserId),
+      ...(parsed.data.brokerAccountId === undefined
+        ? {}
+        : { brokerAccountId: parsed.data.brokerAccountId }),
+    });
+    if (state === undefined) {
       return reply.code(404).send({ error: UserErrorCode.UserNotFound });
     }
-    const section = await brokerSection(
-      deps,
-      request.log,
-      telegramUserId,
-      parsed.data.brokerAccountId,
-    );
+    const section = await brokerSection(deps, request.log, state.account);
     if (section === 'not_found') {
       return reply.code(404).send({ error: TradeIntentErrorCode.BrokerAccountNotFound });
     }
     return reply.send({
-      ...toTradingAccessView(snapshot),
+      ...toTradingAccessView(state.tokens),
       ...section,
-      tradingOpen: isTradingOpen(await readTradingSwitch(deps.db)),
-      // the users row was read above and is never deleted
-      ...((await readStakes(deps.db, telegramUserId)) ?? { demoStake: null, realStake: null }),
+      tradingOpen: state.tradingOpen,
+      ...state.stakes,
     });
   });
 }

@@ -176,6 +176,36 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     reason: NEGATIVE,
   },
   {
+    file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
+    form: 'F4',
+    match: 'await sleep(300);',
+    reason: `${NEGATIVE} (#874 BF1: no GET before the first delay)`,
+  },
+  {
+    file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
+    form: 'F4',
+    match: 'await sleep(600);',
+    reason: `${NEGATIVE} (#874 BF1: no second GET before a whole interval)`,
+  },
+  {
+    file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
+    form: 'F4',
+    match: 'await sleep(20);',
+    reason: 'lets stop() land inside the first delay (#874 BF2); nothing is asserted after it',
+  },
+  {
+    file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
+    form: 'F4',
+    match: 'await sleep(500);',
+    reason: `${NEGATIVE} (#874 BF2: past the cancelled first tick and two intervals)`,
+  },
+  {
+    file: 'apps/backend/src/mailing/engine.db.test.ts',
+    form: 'F4',
+    match: 'setTimeout(resolve, 200)',
+    reason: `${NEGATIVE} (#874 MP2: no plan from a start() after stop())`,
+  },
+  {
     file: 'apps/trading-worker/src/intents/reconciliation.db.test.ts',
     form: 'F4',
     match: 'setTimeout(resolve, 300)',
