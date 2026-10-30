@@ -272,6 +272,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 61. **Ширина ленты сессии** — пузырь текста — ширины медиа-пузыря клиента (`BOT_MESSAGE_SPACER_LENGTH` = 21), строки `<pre>` блока шага с отступами не шире распорки по `preLineBlanks` → `rules/bot-ui.md`
 62. **Пробуждение отправителя уведомлений** — тик по NOTIFY читает списки по id из payload, полный скан — только тик интервала; ожидание сигнала — один lateral на строку; refresh запасного итога без ожидания → `rules/bot-ui.md`
 63. **Тик оркестратора сессий — один батч** — константное число statement'ов и один GET каталога на тик, пробуждение с аккаунтом — скан по аккаунту без sweep'ов → `rules/trading.md`
+64. **Бюджет GET worker'а и пробуждение сверки** — потолок `WORKER_BROKER_GETS_PER_MINUTE` держит рантайм-бюджет в окне 60 с (резерв до попытки, учёт по GET), отказ завершает тик без claim'а; job сверки будит проход → `rules/trading.md`
 
 ### Map: path → rules
 
@@ -304,12 +305,12 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51, 52; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
-| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54; signal-h1 44, 45; bot-ui 18 |
-| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53; auth 12, 60 |
+| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54, 64; signal-h1 44, 45; bot-ui 18 |
+| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53, 64; auth 12, 60 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 27 |
 | `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53, 54; signal-h1 43 |
-| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48, 56; auth 12, 60 |
+| `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54, 64; signal-h1 43, 48, 56; auth 12, 60 |
 | `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 63; signal-h1 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
 | `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 58, 59, 62; payments 38 |
@@ -343,7 +344,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/stake.md` | trading 23 |
 | `docs/stars.md` | core 10; payments 39 |
 | `docs/trade-executor.md` | trading 15 |
-| `docs/trade-intent-transport.md` | trading 50, 54; auth 13 |
+| `docs/trade-intent-transport.md` | trading 50, 54, 64; auth 13 |
 | `docs/trade-log.md` | signal-h1 42, 45 |
 | `docs/trading-access.md` | bot-ui 29 |
 | `docs/trading-mode.md` | trading 36 |

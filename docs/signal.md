@@ -682,7 +682,7 @@ stand (#381) is not one of them: it runs from another IP under its own cap
 | Constant | Value | Whose |
 |---|---|---|
 | `BROKER_RATE_LIMIT_PER_MINUTE` | 600 | the broker's per-IP window |
-| `WORKER_BROKER_GETS_PER_MINUTE` | 400 | the trading worker's passes, worst case (`apps/trading-worker/src/intents/config.ts`) |
+| `WORKER_BROKER_GETS_PER_MINUTE` | 400 | the trading worker's two loops, the cap of their runtime budget (`apps/trading-worker/src/broker/get-budget.ts`) |
 | `DEFAULT_BALANCE_POLL_PER_MINUTE` | 100 | the backend's balance refresh (`BALANCE_POLL_MAX_PER_MINUTE`, 1–500) |
 | `DEFAULT_SIGNAL_SCAN_PER_MINUTE` | 100 | the signal REST: the on-demand GETs without the source and the backfill's overflow, on one pacer (`SIGNAL_SCAN_MAX_PER_MINUTE`, 25–200; the name stays for compose) |
 
