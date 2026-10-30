@@ -10,6 +10,7 @@ import {
   TRADING_INTENTS_DEAD_LETTER_QUEUE,
 } from '@binarius/shared';
 import { createBrokerRestClient } from '@binarius/broker-rest';
+import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import {
   acquireSessionLease,
   applyBalanceEvent,
@@ -32,6 +33,7 @@ import {
   createCachedAccessTokenSource,
   type AccessTokenSource,
 } from './broker/access-token';
+import { createBrokerGetBudget } from './broker/get-budget';
 import { SESSION_MANAGER_CONFIG, type SessionManagerConfig } from './broker/session-config';
 import { createBrokerSessionManager } from './broker/session-manager';
 import { noTradeSessions } from './broker/trade-session';
@@ -42,9 +44,11 @@ import { createCapacityReporter } from './fleet/capacity';
 import { FLEET_CONFIG, type FleetConfig } from './fleet/config';
 import { createFleetRegistry } from './fleet/registry';
 import {
+  BALANCE_CHECK_GETS,
   BALANCE_CHECK_TIMEOUT_MS,
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
+  CATCHUP_GETS_PER_ATTEMPT,
   CATCHUP_GRACE_MS,
   CATCHUP_MAX_TRADE_PAGES,
   CATCHUP_STALLED_RETRY_MS,
@@ -56,6 +60,7 @@ import {
   INTENT_ROUTER_STOP_BUDGET_MS,
   RECONCILE_ATTEMPT_TIMEOUT_MS,
   RECONCILE_BATCH_SIZE,
+  RECONCILE_GETS_PER_ATTEMPT,
   RECONCILE_MAX_TRADE_PAGES,
   RECONCILE_RETRY_MS,
   RECONCILE_TICK_MS,
@@ -342,10 +347,17 @@ export function createWorker({
     processor: (payload) => local(payload),
   });
 
+  // the GETs of the reconciliation pass and the settlement catch-up share the worker's share of
+  // the broker's per-IP limit at runtime (#872); the submits (POST) and the sockets are not GETs
+  // of the two loops
+  const gets = createBrokerGetBudget({ perMinute: WORKER_BROKER_GETS_PER_MINUTE });
+  const passGets = gets.meter(brokerRest);
+  const catchupGets = gets.meter(brokerRest);
+
   const pass = createReconciliationPass({
     db,
     reconciler: createRestReconciler({
-      rest: brokerRest,
+      rest: passGets.rest,
       tokens,
       linkedTradeIds: (brokerAccountId, brokerTradeIds) =>
         listLinkedBrokerTradeIds(db, { brokerAccountId, brokerTradeIds }),
@@ -357,7 +369,8 @@ export function createWorker({
         maxPages: RECONCILE_MAX_TRADE_PAGES,
       },
     }),
-    balanceCheck: createBalanceCheck({ db, rest: brokerRest, tokens, logger }),
+    balanceCheck: createBalanceCheck({ db, rest: passGets.rest, tokens, logger }),
+    budget: passGets,
     logger,
     onIntentEnded: (brokerAccountId) => tradingSessions.wake(brokerAccountId),
     config: {
@@ -366,6 +379,8 @@ export function createWorker({
       attemptTimeoutMs: RECONCILE_ATTEMPT_TIMEOUT_MS,
       batchSize: RECONCILE_BATCH_SIZE,
       balanceCheckTimeoutMs: BALANCE_CHECK_TIMEOUT_MS,
+      attemptGets: RECONCILE_GETS_PER_ATTEMPT,
+      checkGets: BALANCE_CHECK_GETS,
     },
   });
 
@@ -375,13 +390,20 @@ export function createWorker({
     logger,
     concurrency: env.workerConcurrency,
     ...prefix,
-    processor: (payload) => processReconciliationJob({ db, logger }, payload),
+    // the wake follows the job's commit of unknown -> reconciling (#872); a no-op or a throw does
+    // not wake
+    processor: async (payload) => {
+      const outcome = await processReconciliationJob({ db, logger }, payload);
+      if (outcome === 'reconciling') pass.wake();
+      return outcome;
+    },
   });
 
   // accepted intents whose close_trade.success never arrived or was dropped at a session's stop
   const catchup = createSettlementCatchup({
     db,
-    rest: brokerRest,
+    rest: catchupGets.rest,
+    budget: catchupGets,
     tokens,
     logger,
     config: {
@@ -392,6 +414,7 @@ export function createWorker({
       maxPages: CATCHUP_MAX_TRADE_PAGES,
       attemptTimeoutMs: CATCHUP_ATTEMPT_TIMEOUT_MS,
       stalledRetryMs: CATCHUP_STALLED_RETRY_MS,
+      attemptGets: CATCHUP_GETS_PER_ATTEMPT,
     },
     onIntentEnded: (brokerAccountId) => tradingSessions.wake(brokerAccountId),
   });

@@ -17,6 +17,7 @@ import {
   type ManualReviewReason,
   type TradeIntentRow,
 } from '@binarius/db';
+import type { BrokerGetMeter } from '../broker/get-budget';
 import type { BalanceCheck, BalanceCheckEnding } from './balance-check';
 import { InvalidJobError, type Logger } from './processor';
 import {
@@ -28,7 +29,7 @@ import {
 // --- The trading-reconciliation job: a hand-off to the pass ----------------------------------
 
 export type ReconciliationJobOutcome =
-  // unknown → reconciling; the pass takes it on its next interval tick
+  // unknown → reconciling; the consumer's wrapper wakes the pass after the commit (#872)
   | 'reconciling'
   // the intent is already reconciling, parked or terminal, or another delivery won the CAS
   | 'noop';
@@ -38,10 +39,10 @@ export interface ReconciliationJobDeps {
   logger: Logger;
 }
 
-// The job never asks the broker: the pass is the single attempt path. Nor does it start a tick:
-// ticks come only from the interval, which is what bounds the broker GETs a minute
-// (WORKER_BROKER_GETS_PER_MINUTE). A throw (database down)
-// fails the job into the dead-letter queue, and the outbox publisher re-pends the row while the
+// The job never asks the broker: the pass is the single attempt path. The consumer's wrapper
+// (worker.ts) wakes the pass once this returns 'reconciling', after the commit; the broker GETs a
+// minute are bounded by the runtime budget (broker/get-budget.ts, #872), not by the interval. A
+// throw (database down) fails the job into the dead-letter queue, and the outbox publisher re-pends the row while the
 // intent is still unknown, so a reconciliation dead letter is a record, not a loss.
 export async function processReconciliationJob(
   { db, logger }: ReconciliationJobDeps,
@@ -74,13 +75,19 @@ export interface ReconciliationPassConfig {
   attemptTimeoutMs: number;
   batchSize: number;
   balanceCheckTimeoutMs: number;
+  // the broker GETs reserved for one attempt and for one balance check (#872)
+  attemptGets: number;
+  checkGets: number;
 }
 
 export interface ReconciliationPassDeps {
   db: Db;
+  // the reconciler and the balance check send their GETs through this meter's rest (#872)
   reconciler: IntentReconciler;
-  // run after every recorded outcome (#92); never changes the outcome
+  // run after the tick's attempts, for every recorded outcome that is checked (#92); never
+  // changes the outcome
   balanceCheck: BalanceCheck;
+  budget: Pick<BrokerGetMeter, 'begin' | 'end'>;
   logger: Logger;
   config: ReconciliationPassConfig;
   // called after the commit of a write that ended an intent or halted its account, with that
@@ -93,6 +100,8 @@ export interface ReconciliationPass {
   start(): void;
   // resolves when the tick (the running one, if any) ends; never rejects
   tick(): Promise<void>;
+  // a tick now, or one right after the running one; never throws; after stop(), nothing (#872)
+  wake(): void;
   // stops the timer, aborts the attempt's signal and waits for the running tick
   stop(): Promise<void>;
 }
@@ -113,9 +122,17 @@ export interface TickSummary {
   // balance checks that compared at least one mode, and those that alerted (#92)
   balanceCompared: number;
   balanceMismatch: number;
+  // reservations the GET budget refused: an attempt (before its claim) or a balance check (#872)
+  budget: number;
+  // the wakes this tick answered
+  woken: number;
+  ms: number;
 }
 
-type Ending = Exclude<keyof TickSummary, 'candidates' | 'balanceCompared' | 'balanceMismatch'>;
+type Ending = Exclude<
+  keyof TickSummary,
+  'candidates' | 'balanceCompared' | 'balanceMismatch' | 'budget' | 'woken' | 'ms'
+>;
 
 // an outcome that changed what we hold at the broker, or proved what we do not (#92). Not
 // manualReview: the account is halted and alerted already, and the parked intent keeps its mode
@@ -130,6 +147,7 @@ export function createReconciliationPass({
   db,
   reconciler,
   balanceCheck,
+  budget,
   logger,
   config,
   onIntentEnded,
@@ -138,6 +156,8 @@ export function createReconciliationPass({
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
+  // wakes not yet answered by a tick's start
+  let pending = 0;
 
   // The deadline is enforced here, not delegated to the reconciler: one that ignores the signal
   // cannot hold the tick past it. A late settle is observed and dropped; a throw is logged by
@@ -270,19 +290,20 @@ export function createReconciliationPass({
   // leave an intent at the head of the order.
   async function attempt(
     id: string,
-  ): Promise<{ ending: Ending; rateLimited: boolean; check?: BalanceCheckEnding }> {
+  ): Promise<{ ending: Ending; rateLimited: boolean; brokerAccountId?: string }> {
     const claimed = await claimReconciling(db, { id, retryMs: config.retryMs });
     if (claimed === undefined) return { ending: 'skipped', rateLimited: false };
     const result = await reconcileWithDeadline(claimed);
     const rateLimited =
       result?.outcome === 'unavailable' && result.reason === ReconcileUnavailableReason.RateLimited;
     const ending = await persist(claimed, result);
-    if (stopped || !CHECKED_ENDINGS.has(ending)) return { ending, rateLimited };
-    const check = await checkWithDeadline(claimed.brokerAccountId);
-    return { ending, rateLimited: check === 'rate_limited', check };
+    return { ending, rateLimited, brokerAccountId: claimed.brokerAccountId };
   }
 
   async function runTick(): Promise<void> {
+    const woken = pending;
+    pending = 0;
+    const started = performance.now();
     const candidates = await listReconcilingCandidates(db, {
       retryMs: config.retryMs,
       limit: config.batchSize,
@@ -299,37 +320,82 @@ export function createReconciliationPass({
       failed: 0,
       balanceCompared: 0,
       balanceMismatch: 0,
+      budget: 0,
+      woken,
+      ms: 0,
     };
+    // the accounts to check, in the order of their outcomes: the checks follow every attempt of
+    // the tick, so a check's GET never delays the next intent's claim
+    const checks: string[] = [];
     for (const { id } of candidates) {
       if (stopped) break;
+      // refused before the claim: the intent keeps its place at the head of the order
+      if (!budget.begin(config.attemptGets)) {
+        summary.budget += 1;
+        break;
+      }
       try {
-        const { ending, rateLimited, check } = await attempt(id);
+        const { ending, rateLimited, brokerAccountId } = await attempt(id);
         summary[ending] += 1;
-        if (check === 'compared' || check === 'mismatch') summary.balanceCompared += 1;
-        if (check === 'mismatch') summary.balanceMismatch += 1;
-        if (rateLimited) break;
+        // a 429 is the IP's state: the tick ends, and its checks do not run either
+        if (rateLimited) {
+          checks.length = 0;
+          break;
+        }
+        if (brokerAccountId !== undefined && CHECKED_ENDINGS.has(ending)) {
+          checks.push(brokerAccountId);
+        }
       } catch (error) {
         logger.error({ ...errorLogFields(error), intentId: id }, 'reconciliation attempt failed');
         summary.failed += 1;
+      } finally {
+        budget.end();
       }
     }
+    for (const brokerAccountId of checks) {
+      if (stopped) break;
+      if (!budget.begin(config.checkGets)) {
+        summary.budget += 1;
+        break;
+      }
+      let check: BalanceCheckEnding;
+      try {
+        check = await checkWithDeadline(brokerAccountId);
+      } finally {
+        budget.end();
+      }
+      if (check === 'compared' || check === 'mismatch') summary.balanceCompared += 1;
+      if (check === 'mismatch') summary.balanceMismatch += 1;
+      if (check === 'rate_limited') break;
+    }
+    summary.ms = Math.round(performance.now() - started);
     if (candidates.length > 0) logger.info(summary, 'reconciliation tick');
   }
 
-  function tick(): Promise<void> {
-    if (stopped) return Promise.resolve();
+  function run(): Promise<void> {
     running ??= runTick()
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'reconciliation tick failed');
       })
       .finally(() => {
         running = undefined;
+        if (pending > 0 && !stopped) void run();
       });
     return running;
   }
 
+  function tick(): Promise<void> {
+    if (stopped) return Promise.resolve();
+    return run();
+  }
+
   return {
     tick,
+    wake() {
+      if (stopped) return;
+      pending += 1;
+      if (running === undefined) void run();
+    },
     start() {
       if (stopped || timer !== undefined) return;
       void tick();

@@ -31,6 +31,7 @@ import {
   intentRequest,
   seedBrokerAccount,
   seedTradingSession,
+  seedUnknownIntent,
   seedUser,
   type TempDatabase,
 } from '@binarius/db/testing';
@@ -1070,5 +1071,23 @@ describe('intent routing to the owner (#347)', () => {
       expect(broker.trades.list(account.brokerUserId)).toHaveLength(1);
     }
     expect(await shutdown(b)).toBe('clean');
+  });
+});
+
+describe('the wake of the reconciliation pass through the composition (#872)', () => {
+  it('W-WK1 a reconciliation job wakes the pass: the claim follows without the interval', async () => {
+    const w = startWorker('WK1', { sockets: false, tuning: { reconcileTickMs: 86_400_000 } });
+    await until('the start', () => logsOf(w, 'trading-worker started').length === 1);
+    const { intent } = await seedUnknownIntent(tmp.db);
+    // the intent's own submit row and its reconciliation row
+    expect(await publishPending([intent.id])).toBe(2);
+    await until(
+      'the claim',
+      async () => (await intentRows([intent.id]))[0]!.reconcileClaimedAt !== null,
+    );
+    expect(logsOf(w, 'reconciliation tick')).toEqual([
+      expect.objectContaining({ candidates: 1, woken: 1 }),
+    ]);
+    expect(await shutdown(w)).toBe('clean');
   });
 });

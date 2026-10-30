@@ -17,9 +17,11 @@ import {
 } from '@binarius/db';
 import { createTempDatabase, seedQueuedIntent, type TempDatabase } from '@binarius/db/testing';
 import type { AccessTokenOutcome, AccessTokenOptions } from '../broker/access-token';
+import { createBrokerGetBudget, type BrokerGetBudget } from '../broker/get-budget';
 import {
   CATCHUP_ATTEMPT_TIMEOUT_MS,
   CATCHUP_BATCH_SIZE,
+  CATCHUP_GETS_PER_ATTEMPT,
   CATCHUP_GRACE_MS,
   CATCHUP_MAX_TRADE_PAGES,
   CATCHUP_STALLED_RETRY_MS,
@@ -91,10 +93,17 @@ const catchupOf = (
   db: Db = tmp.db,
   rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
   onIntentEnded?: (brokerAccountId: string) => void,
-) =>
-  createSettlementCatchup({
+  // a budget no case reaches unless it passes its own
+  budget: BrokerGetBudget = createBrokerGetBudget({ perMinute: 1_000_000 }),
+) => {
+  const meter = budget.meter({
+    listTrades: (...args) => rest.listTrades(...args),
+    getUser: () => Promise.reject(new Error('the catch-up never asks for the user')),
+  });
+  return createSettlementCatchup({
     db,
-    rest,
+    rest: meter.rest,
+    budget: meter,
     tokens,
     logger,
     onIntentEnded,
@@ -107,9 +116,11 @@ const catchupOf = (
       // a real deadline over the token, the broker's page and the settle, below until's 15 s
       attemptTimeoutMs: 10_000,
       stalledRetryMs: 60_000,
+      attemptGets: 2,
       ...config,
     },
   });
+};
 
 async function tickOnce(logger: pino.Logger, config: Partial<SettlementCatchupConfig> = {}) {
   const catchup = catchupOf(logger, config);
@@ -210,6 +221,7 @@ describe('createSettlementCatchup (#90)', () => {
     maxPages: CATCHUP_MAX_TRADE_PAGES,
     attemptTimeoutMs: CATCHUP_ATTEMPT_TIMEOUT_MS,
     stalledRetryMs: CATCHUP_STALLED_RETRY_MS,
+    attemptGets: CATCHUP_GETS_PER_ATTEMPT,
   };
   it.each([5, 15])(
     'settles a %i s trade one tick after its close plus the grace, not inside the grace',
@@ -476,6 +488,69 @@ describe('createSettlementCatchup (#90)', () => {
     } finally {
       tokens.accessToken = original;
     }
+  });
+});
+
+describe('the broker GET budget (#872)', () => {
+  function fakeClock() {
+    let t = Date.now();
+    return {
+      now: () => t,
+      advance: (ms: number) => {
+        t += ms;
+      },
+    };
+  }
+  const listsSent = () => broker.rest.journal.filter((r) => r.endpoint === 'tradesList').length;
+
+  it('CG1 a refused reservation ends the tick before the token, with no hold-back', async () => {
+    const a = await acceptedAtBroker({ ageMs: 20 * 60_000 });
+    const b = await acceptedAtBroker({ ageMs: 10 * 60_000 });
+    broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+    broker.trades.settle(Number(b.trade.id), { outcome: 'win' });
+    const clock = fakeClock();
+    const budget = createBrokerGetBudget({ perMinute: 2, now: clock.now });
+    const log = capture();
+    const catchup = catchupOf(log.logger, { attemptGets: 2 }, tmp.db, undefined, undefined, budget);
+    broker.rest.clearJournal();
+    await catchup.tick();
+    expect(listsSent()).toBe(1);
+    expect(await statusOf(a.intent.id)).toBe('settled');
+    expect(askedFor(b.brokerAccountId)).toBe(0);
+    expect(log.line('settlement catch-up tick')).toMatchObject({ settled: 1, budget: 1 });
+    clock.advance(60_000);
+    await catchup.tick();
+    await catchup.stop();
+    expect(askedFor(b.brokerAccountId)).toBe(1);
+    expect(await statusOf(b.intent.id)).toBe('settled');
+  });
+
+  it('CG2 the lists sent within one window stay under the cap; the rest settle a window later', async () => {
+    const accounts = [];
+    for (let i = 0; i < 12; i += 1) {
+      const a = await acceptedAtBroker({ ageMs: (30 - i) * 60_000 });
+      broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
+      accounts.push(a);
+    }
+    const clock = fakeClock();
+    const budget = createBrokerGetBudget({ perMinute: 10, now: clock.now });
+    const log = capture();
+    const catchup = catchupOf(
+      log.logger,
+      { attemptGets: 2, batchSize: 16 },
+      tmp.db,
+      undefined,
+      undefined,
+      budget,
+    );
+    broker.rest.clearJournal();
+    await catchup.tick();
+    expect(listsSent()).toBeLessThanOrEqual(10);
+    expect(log.line('settlement catch-up tick')).toMatchObject({ overdue: 12, budget: 1 });
+    clock.advance(60_000);
+    await catchup.tick();
+    await catchup.stop();
+    for (const a of accounts) expect(await statusOf(a.intent.id)).toBe('settled');
   });
 });
 

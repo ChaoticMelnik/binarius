@@ -7,9 +7,12 @@ import {
   AccountHaltReason,
   TradeIntentStatus,
   TradeMode,
+  type BrokerTrade,
+  type BrokerUser,
   type CreateTradeIntentRequest,
   type DecimalString,
 } from '@binarius/shared';
+import { WORKER_BROKER_GETS_PER_MINUTE } from '@binarius/shared/broker-budget';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
   brokerAccounts,
@@ -32,6 +35,7 @@ import {
   seedUnknownIntent,
   type TempDatabase,
 } from '@binarius/db/testing';
+import { createBrokerGetBudget, type BrokerGetMeter, type BrokerGets } from '../broker/get-budget';
 import type { BalanceCheck, BalanceCheckEnding } from './balance-check';
 import { InvalidJobError } from './processor';
 import type { IntentReconciler, ReconcileResult } from './reconciler';
@@ -115,16 +119,37 @@ function reconcilerOf(answers: Record<string, Answer>): IntentReconciler & { cal
   return reconciler;
 }
 
+// a stand-in for the broker's REST client behind a meter: every GET is counted, none answers
+function fakeGets() {
+  let sent = 0;
+  const gets: BrokerGets = {
+    listTrades: () => {
+      sent += 1;
+      return Promise.resolve([] as BrokerTrade[]);
+    },
+    getUser: () => {
+      sent += 1;
+      return Promise.resolve({} as BrokerUser);
+    },
+  };
+  return { gets, sent: () => sent };
+}
+
+// a budget no case reaches unless it passes its own meter
+const roomyMeter = () => createBrokerGetBudget({ perMinute: 1_000_000 }).meter(fakeGets().gets);
+
 const passOf = (
   reconciler: IntentReconciler,
   logger: pino.Logger = silent,
   config: Partial<ReconciliationPassConfig> = {},
   onIntentEnded?: (brokerAccountId: string) => void,
+  budget: BrokerGetMeter = roomyMeter(),
 ) =>
   createReconciliationPass({
     db: tmp.db,
     reconciler,
     balanceCheck,
+    budget,
     logger,
     onIntentEnded,
     config: {
@@ -134,6 +159,8 @@ const passOf = (
       attemptTimeoutMs: 10_000,
       batchSize: 50,
       balanceCheckTimeoutMs: 1_000,
+      attemptGets: 4,
+      checkGets: 1,
       ...config,
     },
   });
@@ -598,16 +625,19 @@ describe('the reconciliation pass: the order and the lease', () => {
     expect(await tradesOf(intent.id)).toEqual([]);
   });
 
-  it('ends the tick on rate_limited', async () => {
+  it('RB2 ends the tick on rate_limited, and the checks of its earlier outcomes do not run', async () => {
     const a = await reconcilingIntent();
     const b = await reconcilingIntent();
+    const c = await reconcilingIntent();
     const reconciler = reconcilerOf({
-      [a.intent.id]: () => ({ outcome: 'unavailable', reason: 'rate_limited' }),
-      [b.intent.id]: () => ({ outcome: 'not_found' }),
+      [a.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
+      [b.intent.id]: () => ({ outcome: 'unavailable', reason: 'rate_limited' }),
+      [c.intent.id]: () => ({ outcome: 'not_found' }),
     });
     await tickOnce(reconciler);
-    expect(reconciler.calls).toEqual([a.intent.id]);
-    expect(await rowOf(b.intent.id)).toMatchObject({
+    expect(reconciler.calls).toEqual([a.intent.id, b.intent.id]);
+    expect(checkCalls).toEqual([]);
+    expect(await rowOf(c.intent.id)).toMatchObject({
       status: 'reconciling',
       reconcileClaimedAt: null,
     });
@@ -723,7 +753,7 @@ describe('the reconciliation pass: the balance check (#92)', () => {
     expect(log.parsed().filter((l) => l.msg === 'balance check timed out')).toHaveLength(2);
   });
 
-  it('R5 ends the tick when the check is rate limited', async () => {
+  it('R5′ a rate limited check ends the remaining checks of the tick', async () => {
     const a = await reconcilingIntent();
     const b = await reconcilingIntent();
     checkAnswer = () => Promise.resolve('rate_limited');
@@ -732,7 +762,29 @@ describe('the reconciliation pass: the balance check (#92)', () => {
       [b.intent.id]: (row) => ({ outcome: 'found', trade: openTradeFor(row) }),
     });
     await tickOnce(reconciler);
-    expect(reconciler.calls).toHaveLength(1);
+    expect(reconciler.calls).toHaveLength(2);
+    expect(checkCalls).toHaveLength(1);
+  });
+
+  it('RB1 runs the checks after every attempt of the tick, in the order of the outcomes', async () => {
+    const a = await reconcilingIntent();
+    const b = await reconcilingIntent();
+    const order: string[] = [];
+    checkAnswer = () => {
+      order.push(`check ${checkCalls.at(-1)}`);
+      return Promise.resolve('compared');
+    };
+    const found: Answer = (row) => {
+      order.push(`reconcile ${row.brokerAccountId}`);
+      return { outcome: 'found', trade: openTradeFor(row) };
+    };
+    await tickOnce(reconcilerOf({ [a.intent.id]: found, [b.intent.id]: found }));
+    expect(order).toEqual([
+      `reconcile ${a.brokerAccountId}`,
+      `reconcile ${b.brokerAccountId}`,
+      `check ${a.brokerAccountId}`,
+      `check ${b.brokerAccountId}`,
+    ]);
   });
 
   it('R6 starts no check once stop() was called', async () => {
@@ -827,6 +879,186 @@ describe('the reconciliation pass: the wake of the session orchestrator (#696)',
     ],
   ])('RW1 does not wake on %s', async (_, answer) => {
     expect(await wakesOf(answer)).toEqual([]);
+  });
+});
+
+describe('the reconciliation pass: the broker GET budget (#872)', () => {
+  const AUTH = { accessToken: 'token' };
+  function fakeClock() {
+    let t = Date.now();
+    return {
+      now: () => t,
+      advance: (ms: number) => {
+        t += ms;
+      },
+    };
+  }
+
+  // a reconciler that sends `gets` list GETs through the meter, then answers
+  function meteredReconciler(meter: BrokerGetMeter, gets: number, answer: Answer) {
+    const reconciler = {
+      calls: [] as string[],
+      reconcile: async (intent: TradeIntentRow, signal: AbortSignal) => {
+        reconciler.calls.push(intent.id);
+        for (let i = 0; i < gets; i += 1) await meter.rest.listTrades(AUTH, {}, { signal });
+        return answer(intent, signal);
+      },
+    };
+    return reconciler;
+  }
+
+  const ticksOf = (log: ReturnType<typeof capture>) =>
+    log.parsed().filter((l) => l.msg === 'reconciliation tick');
+
+  async function reconcilingIntents(count: number) {
+    const seeded = [];
+    for (let i = 0; i < count; i += 1) seeded.push(await reconcilingIntent());
+    return seeded;
+  }
+
+  it('RG1 a refused reservation ends the attempts before the claim, and then the checks', async () => {
+    const [a, b, c] = await reconcilingIntents(3);
+    const clock = fakeClock();
+    const fake = fakeGets();
+    const meter = createBrokerGetBudget({ perMinute: 8, now: clock.now }).meter(fake.gets);
+    checkAnswer = async (signal) => {
+      await meter.rest.getUser(AUTH, { signal });
+      return 'compared';
+    };
+    const reconciler = meteredReconciler(meter, 4, (row) => ({
+      outcome: 'found',
+      trade: openTradeFor(row),
+    }));
+    const log = capture('info');
+    const pass = passOf(reconciler, log.logger, { attemptGets: 4, checkGets: 1 }, undefined, meter);
+    await pass.tick();
+    expect(reconciler.calls).toEqual([a!.intent.id, b!.intent.id]);
+    expect(await rowOf(c!.intent.id)).toMatchObject({
+      status: 'reconciling',
+      reconcileClaimedAt: null,
+    });
+    expect(checkCalls).toEqual([]);
+    expect(ticksOf(log)).toEqual([
+      expect.objectContaining({ accepted: 2, budget: 2, balanceCompared: 0 }),
+    ]);
+    expect(fake.sent()).toBe(8);
+    clock.advance(60_000);
+    await pass.tick();
+    await pass.stop();
+    expect(reconciler.calls).toEqual([a!.intent.id, b!.intent.id, c!.intent.id]);
+    expect(checkCalls).toEqual([c!.brokerAccountId]);
+  });
+
+  it('RG2 one tick sends no more GETs than the worker share, and the rest wait for the window', async () => {
+    const seeded = await reconcilingIntents(101);
+    const clock = fakeClock();
+    const fake = fakeGets();
+    const meter = createBrokerGetBudget({
+      perMinute: WORKER_BROKER_GETS_PER_MINUTE,
+      now: clock.now,
+    }).meter(fake.gets);
+    const reconciler = meteredReconciler(meter, 4, () => ({
+      outcome: 'unavailable',
+      reason: 'broker_unavailable',
+    }));
+    const log = capture('info');
+    const pass = passOf(reconciler, log.logger, { batchSize: 101 }, undefined, meter);
+    await pass.tick();
+    expect(reconciler.calls).toHaveLength(100);
+    expect(fake.sent()).toBe(WORKER_BROKER_GETS_PER_MINUTE);
+    expect(ticksOf(log)).toEqual([expect.objectContaining({ unavailable: 100, budget: 1 })]);
+    clock.advance(60_000);
+    await pass.tick();
+    await pass.stop();
+    expect(reconciler.calls).toHaveLength(101);
+    expect(reconciler.calls.at(-1)).toBe(seeded.at(-1)!.intent.id);
+  });
+
+  it('RG3 a storm of wakes merges into ticks that the budget stops', async () => {
+    await reconcilingIntents(101);
+    const clock = fakeClock();
+    const fake = fakeGets();
+    const meter = createBrokerGetBudget({
+      perMinute: WORKER_BROKER_GETS_PER_MINUTE,
+      now: clock.now,
+    }).meter(fake.gets);
+    const reconciler = meteredReconciler(meter, 4, () => ({
+      outcome: 'unavailable',
+      reason: 'broker_unavailable',
+    }));
+    const log = capture('info');
+    const pass = passOf(reconciler, log.logger, { batchSize: 101 }, undefined, meter);
+    for (let i = 0; i < 50; i += 1) pass.wake();
+    await until('the woken ticks', () => ticksOf(log).length === 2);
+    await pass.stop();
+    expect(fake.sent()).toBeLessThanOrEqual(WORKER_BROKER_GETS_PER_MINUTE);
+    expect(reconciler.calls).toHaveLength(100);
+    expect(ticksOf(log)).toEqual([
+      expect.objectContaining({ woken: 1, budget: 1 }),
+      expect.objectContaining({ woken: 49, budget: 1 }),
+    ]);
+  });
+});
+
+describe('the reconciliation pass: the wake from the job (#872)', () => {
+  const job = (payload: unknown) =>
+    processReconciliationJob({ db: tmp.db, logger: silent }, payload);
+
+  it('RW2 the job wakes an idle pass: the claim follows without waiting for the interval', async () => {
+    const { intent } = await seedUnknownIntent(tmp.db);
+    const reconciler = reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) });
+    const pass = passOf(reconciler, silent, { tickMs: 86_400_000 });
+    pass.start();
+    try {
+      // the start tick is over: only the wake can start the next one
+      await pass.tick();
+      expect(await job({ intentId: intent.id })).toBe('reconciling');
+      pass.wake();
+      await until('the woken attempt', () => reconciler.calls.includes(intent.id));
+    } finally {
+      await pass.stop();
+    }
+    expect((await rowOf(intent.id)).reconcileClaimedAt).not.toBeNull();
+  });
+
+  it('RW3 a wake during a tick runs one tick right after it', async () => {
+    const a = await reconcilingIntent();
+    let release!: () => void;
+    const hanging = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const answers: Record<string, Answer> = {
+      [a.intent.id]: async () => {
+        await hanging;
+        return { outcome: 'ambiguous' };
+      },
+    };
+    const reconciler = reconcilerOf(answers);
+    const pass = passOf(reconciler, silent, { tickMs: 86_400_000 });
+    pass.start();
+    try {
+      await until('the first attempt', () => reconciler.calls.length === 1);
+      const b = await reconcilingIntent();
+      answers[b.intent.id] = () => ({ outcome: 'ambiguous' });
+      pass.wake();
+      release();
+      await until('the tick after it', () => reconciler.calls.length === 2);
+      expect(reconciler.calls).toEqual([a.intent.id, b.intent.id]);
+    } finally {
+      await pass.stop();
+    }
+  });
+
+  it('RW4 a wake after stop() starts nothing', async () => {
+    const { intent } = await reconcilingIntent();
+    const reconciler = reconcilerOf({ [intent.id]: () => ({ outcome: 'ambiguous' }) });
+    const log = capture('info');
+    const pass = passOf(reconciler, log.logger);
+    await pass.stop();
+    pass.wake();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(reconciler.calls).toEqual([]);
+    expect(log.line('reconciliation tick')).toBeUndefined();
   });
 });
 
