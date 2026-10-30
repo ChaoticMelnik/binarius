@@ -119,7 +119,7 @@ const passOf = (
   reconciler: IntentReconciler,
   logger: pino.Logger = silent,
   config: Partial<ReconciliationPassConfig> = {},
-  onIntentEnded?: () => void,
+  onIntentEnded?: (brokerAccountId: string) => void,
 ) =>
   createReconciliationPass({
     db: tmp.db,
@@ -772,14 +772,15 @@ describe('the reconciliation pass: the balance check (#92)', () => {
 });
 
 describe('the reconciliation pass: the wake of the session orchestrator (#696)', () => {
-  // one intent per tick; the callback reads the intent's committed status over the pool and the
-  // balance checks started so far
+  // one intent per tick; the callback reads the intent's committed status over the pool, the
+  // balance checks started so far and whether it named the intent's account (#871)
   async function wakesOf(answer: Answer) {
     const { intent } = await reconcilingIntent();
-    const seen: Promise<{ status: string; checks: number }>[] = [];
-    const pass = passOf(reconcilerOf({ [intent.id]: answer }), silent, {}, () => {
+    const seen: Promise<{ status: string; checks: number; ownAccount: boolean }>[] = [];
+    const pass = passOf(reconcilerOf({ [intent.id]: answer }), silent, {}, (account) => {
       const checks = checkCalls.length;
-      seen.push(rowOf(intent.id).then((row) => ({ status: row.status, checks })));
+      const ownAccount = account === intent.brokerAccountId;
+      seen.push(rowOf(intent.id).then((row) => ({ status: row.status, checks, ownAccount })));
     });
     await pass.tick();
     await pass.stop();
@@ -803,7 +804,7 @@ describe('the reconciliation pass: the wake of the session orchestrator (#696)',
   ])(
     'RW1 wakes once after the commit on %s, before the balance check',
     async (_, answer, status) => {
-      expect(await wakesOf(answer)).toEqual([{ status, checks: 0 }]);
+      expect(await wakesOf(answer)).toEqual([{ status, checks: 0, ownAccount: true }]);
     },
   );
 

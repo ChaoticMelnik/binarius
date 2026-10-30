@@ -1,15 +1,17 @@
 import {
   listRunnableSessions,
-  markSessionDecision,
-  readSessionBalance,
-  readSessionHistory,
+  markSessionDecisions,
+  readSessionBatch,
   stopExpiredSessions,
   stopHaltedSessions,
   stopPausedSessions,
-  stopTradingSession,
-  touchBalanceRequested,
+  stopTradingSessions,
+  touchBalancesRequested,
   type Db,
   type RunnableSession,
+  type SessionBalanceRead,
+  type SessionBatchRead,
+  type SessionHistory,
   type StoppedSession,
 } from '@binarius/db';
 import {
@@ -35,23 +37,24 @@ import {
   type StakeDecision,
   type StakeSizer,
 } from '@binarius/stake';
-import type { PairsSource } from './backend';
+import type { PairsOutcome, PairsSource } from './backend';
 import type { SessionOrchestratorConfig } from './config';
 
 // The session orchestrator (#287, real sessions #327, docs/trading-session.md -> The orchestrator): every tick
-// stops the sessions the kill switch, the deadline and a halt end, then makes one attempt per
-// runnable session. An attempt either writes an ending (a stop, or last_decision_at moved) or
-// holds the session back in memory. It creates no intent since #835: the backend's H1 driver opens
-// every session's trades (#707), the attempt stops the session or holds it for the driver.
-// A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once,
-// the interval is the safety net.
+// stops the sessions the kill switch, the deadline and a halt end, then decides every runnable
+// session of its batch in memory over one batched read and one pairs GET (#871). A decision either
+// writes an ending (a stop, or last_decision_at moved) or holds the session back in memory. It
+// creates no intent since #835: the backend's H1 driver opens every session's trades (#707), the
+// orchestrator stops the session or holds it for the driver.
+// A write in the worker that ends an intent or halts its account wakes it (#696): a tick at once
+// over that account's sessions (#871), the interval is the safety net.
 
 export interface SessionOrchestratorDeps {
   db: Db;
   pairs: PairsSource;
   logger: Logger;
   config: SessionOrchestratorConfig;
-  // the sizer's clock and the hold-backs, not the deadline (the database's)
+  // the tick's clock: the sizer and the hold-backs, not the deadline (the database's)
   now?: () => number;
 }
 
@@ -60,9 +63,10 @@ export interface SessionOrchestrator {
   // never rejects
   tick(): Promise<void>;
   // a tick now, or one more right after the running one (its scan may predate the caller's write);
-  // calls merge, a no-op after stop(); never throws, so a caller may call it after its commit (#696)
-  wake(): void;
-  // aborts the attempt's pairs read and waits for the running tick
+  // with an account, a tick over that account's sessions only, without the sweeps (#871); calls
+  // merge, a no-op after stop(); never throws, so a caller may call it after its commit (#696)
+  wake(brokerAccountId?: string): void;
+  // aborts the batch's pairs read and waits for the running tick
   stop(): Promise<void>;
 }
 
@@ -85,13 +89,38 @@ type Ending =
   | { kind: 'stop'; reason: TradingSessionStopReason; fields?: Record<string, unknown> }
   | { kind: 'reschedule' }
   | { kind: 'hold'; ms: number }
-  // no ending written: the deadline, a throw or the stop signal
-  | { kind: 'failed' }
-  | { kind: 'stopped' };
+  // no ending written: a throw in the session's decision
+  | { kind: 'failed' };
+
+interface LogIds {
+  sessionId: string;
+  brokerAccountId: string;
+}
+
+// a session whose settings parsed: the H1 strategy frozen in its row at the start
+interface Prepared {
+  session: RunnableSession;
+  ids: LogIds;
+  settings: TradingSessionSettings;
+  sizer: StakeSizer;
+  noSignalTimeoutMs: number;
+}
+
+// a session that passed its history and balance and waits for the pairs catalog
+interface AtPair {
+  prepared: Prepared;
+  history: SessionHistory;
+  balance: SessionBalanceRead;
+}
+
+interface BatchCounts {
+  held: number;
+  stopped: number;
+}
 
 class AttemptAborted extends Error {
   constructor() {
-    super('trading session attempt aborted');
+    super('trading session batch aborted');
     this.name = 'AttemptAborted';
   }
 }
@@ -109,8 +138,13 @@ export function createSessionOrchestrator({
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
-  // wake() calls no tick has served yet
+  // wake() calls no tick has served yet: the accounts they named, and whether one named none
   let pending = 0;
+  const pendingAccounts = new Set<string>();
+  let pendingFull = false;
+  // the tick clock of the last tick that ran the sweeps; the first tick is always full
+  let lastFullAt = Number.NEGATIVE_INFINITY;
+
   function logStop(
     row: StoppedSession,
     reason: TradingSessionStopReason,
@@ -130,17 +164,20 @@ export function createSessionOrchestrator({
     for (const row of rows) logStop(row, reason);
   }
 
-  // the strategy and its limits frozen in the session's row at the start, never the process's env
-  function sizerOf(settings: TradingSessionSettings): StakeSizer {
-    return createStakeSizer(sessionStakeParams(settings));
+  // a throw here is a bug (the predicates and the sizer do not throw on what was read): that
+  // session is held back, the rest of the batch goes on
+  function guarded<T>(ids: LogIds, decide: () => T | Ending): T | Ending {
+    try {
+      return decide();
+    } catch (error) {
+      logger.error({ ...errorLogFields(error), ...ids }, 'trading session attempt failed');
+      return { kind: 'failed' };
+    }
   }
 
-  async function attempt(session: RunnableSession, signal: AbortSignal): Promise<Ending> {
+  // the settings, before any read: an active v1-v3 row has no trader left (#835)
+  function prepare(session: RunnableSession): Prepared | Ending {
     const ids = { sessionId: session.id, brokerAccountId: session.brokerAccountId };
-    const checkpoint = () => {
-      if (signal.aborted) throw new AttemptAborted();
-    };
-
     const parsed = safeParseTradingSessionSettings(session.settings);
     if (!parsed.success) {
       return {
@@ -152,7 +189,7 @@ export function createSessionOrchestrator({
     const settings = parsed.data;
     let sizer: StakeSizer;
     try {
-      sizer = sizerOf(settings);
+      sizer = createStakeSizer(sessionStakeParams(settings));
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       return {
@@ -161,9 +198,8 @@ export function createSessionOrchestrator({
         fields: { error: error.name },
       };
     }
-
     // #835: only an H1 session (settings v5; a read-only v4 row of #670) is traded, by its driver
-    // (#707); an active v1-v3 row has no trader left and stops before any read
+    // (#707)
     if (!isH1Settings(settings)) {
       return {
         kind: 'stop',
@@ -171,21 +207,23 @@ export function createSessionOrchestrator({
         fields: { version: settings.version },
       };
     }
+    return {
+      session,
+      ids,
+      settings,
+      sizer,
+      noSignalTimeoutMs: sessionNoSignalTimeoutMs(settings.durationSec, config.noSignalCandles),
+    };
+  }
 
-    const noSignalTimeoutMs = sessionNoSignalTimeoutMs(
-      settings.durationSec,
-      config.noSignalCandles,
-    );
-    const history = await readSessionHistory(db, session.id, {
-      maxDurationMs: config.maxDurationMs,
-      noSignalTimeoutMs,
-    });
-    if (history === undefined) {
+  // the history and the balance: none of these stops waits for the catalog
+  function beforePair(prepared: Prepared, read: SessionBatchRead | undefined): AtPair | Ending {
+    const { ids, settings } = prepared;
+    if (read === undefined) {
       logger.warn(ids, 'trading session vanished');
       return { kind: 'hold', ms: config.retryMs };
     }
-    // the step the driver's next intent takes
-    const step = history.intents.length + 1;
+    const { history, balance } = read;
     // the scan skips expired sessions; this catches one whose deadline passed since the scan.
     // The H1 driver (#707) skips on the same reasons, so its intents never outrun these stops
     const block = sessionIntentBlock(history, settings);
@@ -212,28 +250,18 @@ export function createSessionOrchestrator({
           return assertExhausted(block, 'session intent block');
       }
     }
-
-    const snapshot = await readSessionBalance(db, session.id, { waitMs: noSignalTimeoutMs });
-    if (snapshot === undefined) {
+    if (balance === undefined) {
       return { kind: 'stop', reason: TradingSessionStopReason.BalanceUnavailable };
     }
-    // the executor sends the intent's mode, so the stake is sized against the same mode's balance
-    const available = snapshot.available;
-    // #696: a settlement on the account in the session's mode (this session's, an earlier one's, a
-    // bot's one-off) is newer than the balance; its update_balance, the pass's check or the
-    // backend's refresh brings the payout. Until the no-signal limit counted from that settlement
-    // the step waits a tick (a hold: a wake does not attempt again inside it), then the sizer's
-    // stop stands
-    const waitsForBalance = (decision: StakeDecision) =>
-      decision.kind === StakeKind.Stop &&
-      decision.reason === StopReason.InsufficientBalance &&
-      snapshot.awaitsBalance;
-    checkpoint();
-    // keeps the account "in work": the balance refresh and the broker session stay on it
-    await touchBalanceRequested(db, session.brokerAccountId);
+    return { prepared, history, balance };
+  }
 
-    const catalog = await pairs.read({ signal });
-    checkpoint();
+  function atPair(
+    { prepared, history, balance }: AtPair,
+    catalog: PairsOutcome,
+    tickAt: number,
+  ): Ending {
+    const { ids, settings, sizer, noSignalTimeoutMs, session } = prepared;
     if (!catalog.ok || !catalog.catalog.fresh) {
       logger.warn(
         catalog.ok
@@ -254,8 +282,7 @@ export function createSessionOrchestrator({
     // A closed pair waits until the no-signal limit (#509, owner), config.noSignalCandles candles
     // of the session's duration (#637; 5 s since #828); the no_signal wait is the driver's (#775).
     // A failure to read the pairs is not a wait for a signal: it neither stops nor moves the count.
-    const nowMs = now();
-    if (!isPairOpen(pair, nowMs)) {
+    if (!isPairOpen(pair, tickAt)) {
       if (history.waitExpired) {
         return {
           kind: 'stop',
@@ -264,23 +291,32 @@ export function createSessionOrchestrator({
         };
       }
       logger.info({ ...ids, assetId: pair.id }, 'trading session waits for the pair to open');
-      return { kind: 'hold', ms: Math.min(pair.scheduledUntil - nowMs, config.retryMs) };
+      return { kind: 'hold', ms: Math.min(pair.scheduledUntil - tickAt, config.retryMs) };
     }
     // since #631 no payout refuses a session, not even at the start (#509 kept the floor
     // there); an H1 session has no floor either (#775, В2)
 
+    // the executor sends the intent's mode, so the stake is sized against the same mode's balance
     const decision = sizer.next(
       sessionStakeInput({
         intents: history.intents,
         payout: pair.payout,
-        minTradeAmount: snapshot.minTradeAmount,
-        available,
+        minTradeAmount: balance.minTradeAmount,
+        available: balance.available,
         sessionStartedAtMs: session.startedAt.getTime(),
-        nowMs: now(),
+        nowMs: tickAt,
       }),
     );
-    if (waitsForBalance(decision)) {
-      logger.info({ ...ids, step }, 'trading session waits for the balance');
+    // #696: a settlement on the account in the session's mode (this session's, an earlier one's, a
+    // bot's one-off) is newer than the balance; its update_balance, the pass's check or the
+    // backend's refresh brings the payout. Until the no-signal limit counted from that settlement
+    // the step waits a tick (a hold: a wake does not attempt again inside it), then the sizer's
+    // stop stands
+    if (waitsForBalance(decision, balance)) {
+      logger.info(
+        { ...ids, step: history.intents.length + 1 },
+        'trading session waits for the balance',
+      );
       return { kind: 'hold', ms: config.tickMs };
     }
     if (decision.kind === StakeKind.Stop) {
@@ -291,86 +327,175 @@ export function createSessionOrchestrator({
       };
     }
     // the no-signal stop of an H1 session is the driver's, on the seconds it decided no_signal
-    // (#775, review round 1): this attempt has no evidence that H1 was asked at all
+    // (#775, review round 1): this check has no evidence that H1 was asked at all
     logger.debug(ids, 'trading session waits for the H1 driver');
     return { kind: 'hold', ms: config.h1CheckMs };
   }
 
+  const waitsForBalance = (decision: StakeDecision, balance: SessionBalanceRead) =>
+    decision.kind === StakeKind.Stop &&
+    decision.reason === StopReason.InsufficientBalance &&
+    balance.awaitsBalance;
+
+  // The batch (#871): the reads, the decisions up to the pair step, one pairs GET when any session
+  // reached it, the rest of the decisions, then the writes - one statement per stop reason, one
+  // decision mark, one balance touch - and the hold-backs. After every await a checkpoint: past the
+  // deadline or the stop signal nothing more is written and nothing is held back.
+  async function runBatch(
+    runnable: readonly RunnableSession[],
+    tickAt: number,
+    signal: AbortSignal,
+  ): Promise<BatchCounts> {
+    const checkpoint = () => {
+      if (signal.aborted) throw new AttemptAborted();
+    };
+    const endings: [RunnableSession, Ending][] = [];
+    const prepared: Prepared[] = [];
+    for (const session of runnable) {
+      const ids = { sessionId: session.id, brokerAccountId: session.brokerAccountId };
+      const result = guarded(ids, () => prepare(session));
+      if ('kind' in result) endings.push([session, result]);
+      else prepared.push(result);
+    }
+
+    const reads = await readSessionBatch(
+      db,
+      prepared.map(({ session, noSignalTimeoutMs }) => ({ id: session.id, noSignalTimeoutMs })),
+      { maxDurationMs: config.maxDurationMs },
+    );
+    checkpoint();
+    const waiting: AtPair[] = [];
+    for (const one of prepared) {
+      const result = guarded(one.ids, () => beforePair(one, reads.get(one.session.id)));
+      if ('kind' in result) endings.push([one.session, result]);
+      else waiting.push(result);
+    }
+
+    if (waiting.length > 0) {
+      const catalog = await pairs.read({ signal });
+      checkpoint();
+      for (const one of waiting) {
+        endings.push([
+          one.prepared.session,
+          guarded(one.prepared.ids, () => atPair(one, catalog, tickAt)),
+        ]);
+      }
+    }
+
+    const stops = new Map<
+      TradingSessionStopReason,
+      Map<string, Record<string, unknown> | undefined>
+    >();
+    const marked: string[] = [];
+    const holds: [string, number][] = [];
+    for (const [session, ending] of endings) {
+      switch (ending.kind) {
+        case 'stop': {
+          const group = stops.get(ending.reason) ?? new Map();
+          group.set(session.id, ending.fields);
+          stops.set(ending.reason, group);
+          break;
+        }
+        case 'hold':
+          holds.push([session.id, ending.ms]);
+          marked.push(session.id);
+          break;
+        case 'reschedule':
+          marked.push(session.id);
+          break;
+        case 'failed':
+          holds.push([session.id, config.retryMs]);
+          break;
+        default:
+          assertExhausted(ending, 'session ending');
+      }
+    }
+    for (const [reason, group] of stops) {
+      const rows = await stopTradingSessions(db, { ids: [...group.keys()], reason });
+      for (const row of rows) logStop(row, reason, group.get(row.id));
+      checkpoint();
+    }
+    await markSessionDecisions(db, marked);
+    checkpoint();
+    // keeps the accounts "in work": the balance refresh and the broker session stay on them
+    await touchBalancesRequested(db, [
+      ...new Set(waiting.map((one) => one.prepared.session.brokerAccountId)),
+    ]);
+    checkpoint();
+    for (const [id, ms] of holds) heldUntil.set(id, tickAt + Math.max(ms, config.tickMs));
+    return {
+      held: holds.length,
+      stopped: endings.filter(([, ending]) => ending.kind === 'stop').length,
+    };
+  }
+
   // The race bounds the tick's wait, not a statement: an abort does not cancel a pg query, so a
-  // statement that outlives the deadline still lands, and the next attempt reads its result.
-  function attemptWithDeadline(session: RunnableSession): Promise<Ending> {
+  // statement that outlives the deadline still lands (a mark, a touch - idempotent; a stop - its
+  // CAS), and the next tick reads its result. Undefined: the deadline or the stop signal ended it.
+  async function batchWithDeadline(
+    runnable: readonly RunnableSession[],
+    tickAt: number,
+    startedMs: number,
+  ): Promise<BatchCounts | undefined> {
     const deadline = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    const expired = new Promise<Ending>((resolve) => {
+    const expired = new Promise<'expired'>((resolve) => {
       timeout = setTimeout(() => {
         deadline.abort();
-        logger.warn(
-          { sessionId: session.id, brokerAccountId: session.brokerAccountId },
-          'trading session attempt timed out',
-        );
-        resolve({ kind: 'failed' });
+        resolve('expired');
       }, config.attemptTimeoutMs);
     });
     const signal = AbortSignal.any([stopping.signal, deadline.signal]);
     const run = Promise.resolve()
-      .then(() => attempt(session, signal))
-      .catch((error: unknown): Ending => {
-        if (stopping.signal.aborted) return { kind: 'stopped' };
-        if (error instanceof AttemptAborted) return { kind: 'failed' };
-        logger.error(
-          {
-            ...errorLogFields(error),
-            sessionId: session.id,
-            brokerAccountId: session.brokerAccountId,
-          },
-          'trading session attempt failed',
-        );
-        return { kind: 'failed' };
+      .then(() => runBatch(runnable, tickAt, signal))
+      .catch((error: unknown): undefined => {
+        if (stopping.signal.aborted || error instanceof AttemptAborted) return undefined;
+        throw error;
       });
-    return Promise.race([run, expired]).finally(() => clearTimeout(timeout));
-  }
-
-  const hold = (sessionId: string, ms: number) => {
-    heldUntil.set(sessionId, now() + Math.max(ms, config.tickMs));
-  };
-
-  async function apply(session: RunnableSession, ending: Ending): Promise<void> {
-    switch (ending.kind) {
-      case 'stop': {
-        const row = await stopTradingSession(db, { id: session.id, reason: ending.reason });
-        if (row !== undefined) logStop(session, ending.reason, ending.fields);
-        return;
-      }
-      case 'hold':
-        hold(session.id, ending.ms);
-        await markSessionDecision(db, { id: session.id });
-        return;
-      case 'reschedule':
-        await markSessionDecision(db, { id: session.id });
-        return;
-      case 'failed':
-        hold(session.id, config.retryMs);
-        return;
-      case 'stopped':
-        return;
+    try {
+      const outcome = await Promise.race([run, expired]);
+      if (outcome !== 'expired') return outcome;
+      logger.warn(
+        { runnable: runnable.length, ms: Math.round(performance.now() - startedMs) },
+        'trading session batch timed out',
+      );
+      run.catch((error: unknown) => {
+        logger.error(errorLogFields(error), 'trading session tick failed');
+      });
+      return undefined;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
   async function runTick(): Promise<void> {
+    const startedMs = performance.now();
+    // one reading of the tick's clock (#871): the hold-backs, the pair's hours and the sizer
+    const tickAt = now();
     // before the first await: a wake() after this line is served by the next tick
     const woken = pending;
     pending = 0;
-    const paused = await stopPausedSessions(db, { limit: config.batchSize });
-    logStops(paused, TradingSessionStopReason.KillSwitch);
-    const expired = await stopExpiredSessions(db, {
-      maxDurationMs: config.maxDurationMs,
-      limit: config.batchSize,
-    });
-    logStops(expired, TradingSessionStopReason.Timeout);
-    const halted = await stopHaltedSessions(db, { limit: config.batchSize });
-    logStops(halted, TradingSessionStopReason.ManualReview);
+    const accounts = [...pendingAccounts];
+    pendingAccounts.clear();
+    // a timer tick merged into a run of woken ones still sweeps: a tick a tick after the last full
+    // one is full
+    const full = pendingFull || accounts.length === 0 || tickAt - lastFullAt >= config.tickMs;
+    pendingFull = false;
+    let swept = 0;
+    if (full) {
+      const paused = await stopPausedSessions(db, { limit: config.batchSize });
+      logStops(paused, TradingSessionStopReason.KillSwitch);
+      const expired = await stopExpiredSessions(db, {
+        maxDurationMs: config.maxDurationMs,
+        limit: config.batchSize,
+      });
+      logStops(expired, TradingSessionStopReason.Timeout);
+      const halted = await stopHaltedSessions(db, { limit: config.batchSize });
+      logStops(halted, TradingSessionStopReason.ManualReview);
+      swept = paused.length + expired.length + halted.length;
+      lastFullAt = tickAt;
+    }
 
-    const tickAt = now();
     for (const [id, until] of heldUntil) {
       if (until > tickAt) continue;
       heldUntil.delete(id);
@@ -379,18 +504,27 @@ export function createSessionOrchestrator({
       limit: config.batchSize,
       maxDurationMs: config.maxDurationMs,
       exclude: [...heldUntil.keys()],
+      ...(full ? {} : { accounts }),
     });
-    const summary = { runnable: runnable.length, attempted: 0, held: 0, stopped: 0, woken };
-    for (const session of runnable) {
-      if (stopped) break;
-      summary.attempted += 1;
-      const ending = await attemptWithDeadline(session);
-      if (ending.kind === 'stopped') break;
-      await apply(session, ending);
-      if (ending.kind === 'hold' || ending.kind === 'failed') summary.held += 1;
-      if (ending.kind === 'stop') summary.stopped += 1;
+    const summary = {
+      runnable: runnable.length,
+      attempted: 0,
+      held: 0,
+      stopped: 0,
+      woken,
+      accounts: full ? 0 : accounts.length,
+      ms: 0,
+    };
+    if (!stopped && runnable.length > 0) {
+      summary.attempted = runnable.length;
+      const counts = await batchWithDeadline(runnable, tickAt, startedMs);
+      if (counts !== undefined) {
+        summary.held = counts.held;
+        summary.stopped = counts.stopped;
+      }
     }
-    summary.stopped += paused.length + expired.length + halted.length;
+    summary.stopped += swept;
+    summary.ms = Math.round(performance.now() - startedMs);
     logger.debug(summary, 'trading session tick');
   }
 
@@ -407,8 +541,10 @@ export function createSessionOrchestrator({
     return running;
   }
 
-  function wake() {
+  function wake(brokerAccountId?: string) {
     pending += 1;
+    if (brokerAccountId === undefined) pendingFull = true;
+    else pendingAccounts.add(brokerAccountId);
     if (running === undefined) void tick();
   }
 

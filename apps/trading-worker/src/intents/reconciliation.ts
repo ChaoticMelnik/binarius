@@ -83,9 +83,9 @@ export interface ReconciliationPassDeps {
   balanceCheck: BalanceCheck;
   logger: Logger;
   config: ReconciliationPassConfig;
-  // called after the commit of a write that ended an intent or halted its account; never throws
-  // (#696)
-  onIntentEnded?: () => void;
+  // called after the commit of a write that ended an intent or halted its account, with that
+  // account; never throws (#696)
+  onIntentEnded?: (brokerAccountId: string) => void;
 }
 
 export interface ReconciliationPass {
@@ -262,7 +262,7 @@ export function createReconciliationPass({
       { intentId: claimed.id, outcome: result.outcome, status: row.status },
       'reconciliation outcome recorded',
     );
-    if (ENDED_INTENT.has(ending)) onIntentEnded?.();
+    if (ENDED_INTENT.has(ending)) onIntentEnded?.(claimed.brokerAccountId);
     return ending;
   }
 

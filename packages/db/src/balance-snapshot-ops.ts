@@ -217,6 +217,23 @@ export async function touchBalanceRequested(db: Db, brokerAccountId: string): Pr
   return rows.length > 0;
 }
 
+// touchBalanceRequested for the orchestrator's batch in one statement (#871): the number of
+// accounts that have a snapshot; none for an empty list.
+export async function touchBalancesRequested(
+  db: Db,
+  brokerAccountIds: readonly string[],
+): Promise<number> {
+  if (brokerAccountIds.length === 0) return 0;
+  const rows = await db
+    .update(brokerBalanceSnapshots)
+    .set({ lastRequestedAt: sql`now()`, updatedAt: sql`now()` })
+    .where(
+      sql`${brokerBalanceSnapshots.brokerAccountId} = any(${sql.param([...brokerAccountIds])}::uuid[])`,
+    )
+    .returning({ id: brokerBalanceSnapshots.brokerAccountId });
+  return rows.length;
+}
+
 // Whole seconds since a timestamp by the database clock; a future timestamp (clock step) is 0.
 const ageSecOf = (at: SQL) => sql`greatest(0, floor(extract(epoch from now() - ${at})))::int`;
 // NULL stays NULL: greatest(0, NULL) would be 0, a missing time read as a fresh one

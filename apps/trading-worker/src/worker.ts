@@ -261,7 +261,9 @@ export function createWorker({
               applyBalanceEvent(db, { brokerAccountId, mode, balance }),
             closedTrades: async (brokerAccountId, trades) => {
               const outcomes = await settleClosedTrades(db, { brokerAccountId, trades });
-              if (outcomes.some((outcome) => outcome.result === 'settled')) tradingSessions.wake();
+              if (outcomes.some((outcome) => outcome.result === 'settled')) {
+                tradingSessions.wake(brokerAccountId);
+              }
               return outcomes;
             },
           },
@@ -313,6 +315,7 @@ export function createWorker({
         },
         payload,
       );
+      // a full tick: the outcome carries no account, and these endings are rare (refusals)
       if (JOB_OUTCOME_ENDS_INTENT[outcome]) tradingSessions.wake();
       return outcome;
     };
@@ -356,7 +359,7 @@ export function createWorker({
     }),
     balanceCheck: createBalanceCheck({ db, rest: brokerRest, tokens, logger }),
     logger,
-    onIntentEnded: () => tradingSessions.wake(),
+    onIntentEnded: (brokerAccountId) => tradingSessions.wake(brokerAccountId),
     config: {
       tickMs: tuning.reconcileTickMs,
       retryMs: tuning.reconcileRetryMs,
@@ -390,7 +393,7 @@ export function createWorker({
       attemptTimeoutMs: CATCHUP_ATTEMPT_TIMEOUT_MS,
       stalledRetryMs: CATCHUP_STALLED_RETRY_MS,
     },
-    onIntentEnded: () => tradingSessions.wake(),
+    onIntentEnded: (brokerAccountId) => tradingSessions.wake(brokerAccountId),
   });
 
   const capacity = createCapacityReporter({

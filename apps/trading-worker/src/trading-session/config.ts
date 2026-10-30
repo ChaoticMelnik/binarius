@@ -11,10 +11,12 @@ import { isTimerMs } from '@binarius/broker-socket';
 
 // The session orchestrator's constants (docs/trading-session.md -> Constants and the chain), each
 // bounding one thing:
-//   TRADING_SESSION_TICK_MS             — the scan interval: the three stop sweeps, the scan, the attempts
-//   TRADING_SESSION_BATCH_SIZE          — runnable sessions attempted per tick, one after another
-//   TRADING_SESSION_ATTEMPT_TIMEOUT_MS  — how long the tick waits for one attempt: the pairs GET
-//                                         and the statements
+//   TRADING_SESSION_TICK_MS             — the scan interval: the three stop sweeps, the scan, the batch
+//   TRADING_SESSION_BATCH_SIZE          — runnable sessions decided per tick in one batch, and the
+//                                         rows each stop sweep takes (#871: the pilot's 1-3k
+//                                         sessions in one tick)
+//   TRADING_SESSION_ATTEMPT_TIMEOUT_MS  — how long the tick waits for its batch: the two reads,
+//                                         the pairs GET and the writes (#871)
 //   TRADING_SESSION_PAIRS_TIMEOUT_MS    — the pairs GET (a cache read on the backend)
 //   TRADING_SESSION_RETRY_MS            — the hold-back after a transient failure or a throw
 //   SESSION_MAX_DURATION_MS (shared)    — the session's deadline from started_at (database clock);
@@ -30,7 +32,7 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         driver) before no_signal_timeout (#509, in candles since
 //                                         #637), from the later of started_at and its last
 //                                         intent's change (database clock)
-// The chain: the pairs GET fits one attempt (PAIRS < ATTEMPT); a held-back session skips at least
+// The chain: the pairs GET fits the batch (PAIRS < ATTEMPT); a held-back session skips at least
 // one tick (TICK < RETRY); an H1 session is checked again no sooner than the next tick and before
 // a hold-back would end (TICK <= H1_CHECK < RETRY); the no-signal count is an integer >= 2, so a
 // session gets several decisions before the limit; a hold-back never outlives the shortest limit
@@ -44,7 +46,7 @@ import { isTimerMs } from '@binarius/broker-socket';
 // every *_MS is an integer in [1, MAX_TIMER_MS].
 // The link to the shutdown budget is in intents/config.ts.
 export const TRADING_SESSION_TICK_MS = 5_000;
-const TRADING_SESSION_BATCH_SIZE = 200;
+const TRADING_SESSION_BATCH_SIZE = 3_000;
 export const TRADING_SESSION_ATTEMPT_TIMEOUT_MS = 10_000;
 export const TRADING_SESSION_PAIRS_TIMEOUT_MS = 4_000;
 export const TRADING_SESSION_RETRY_MS = 60_000;

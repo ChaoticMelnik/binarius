@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, isNotNull, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
-import type { SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
+import type { SQL, SQLWrapper } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -191,7 +191,13 @@ export interface RunnableSessionsOptions {
   maxDurationMs: number;
   // the sessions the caller holds back in memory
   exclude?: readonly string[];
+  // only these accounts' sessions: the orchestrator's woken tick (#871); undefined is every account
+  accounts?: readonly string[];
 }
+
+// one array parameter, not a list of N parameters (renewSessionLeases' form)
+const uuidIn = (column: SQLWrapper, ids: readonly string[]) =>
+  sql`${column} = any(${sql.param([...ids])}::uuid[])`;
 
 // started_at + maxDurationMs passed, on the database clock: stopExpiredSessions stops these, the
 // scan skips them and the history flags them, all with the same boundary
@@ -204,8 +210,9 @@ const pastDeadline = (maxDurationMs: number) =>
 // over from a new trade. The least recently decided first, never-decided before all.
 export async function listRunnableSessions(
   db: Db,
-  { limit, maxDurationMs, exclude = [] }: RunnableSessionsOptions,
+  { limit, maxDurationMs, exclude = [], accounts }: RunnableSessionsOptions,
 ): Promise<RunnableSession[]> {
+  if (accounts?.length === 0) return [];
   return db
     .select({
       id: tradingSessions.id,
@@ -225,7 +232,8 @@ export async function listRunnableSessions(
            where ${tradeIntents.brokerAccountId} = ${tradingSessions.brokerAccountId}
              and ${tradeIntents.status} not in (${sqlLiteralList(TERMINAL_TRADE_INTENT_STATUSES)})
         )`,
-        exclude.length === 0 ? undefined : notInArray(tradingSessions.id, [...exclude]),
+        exclude.length === 0 ? undefined : sql`not ${uuidIn(tradingSessions.id, exclude)}`,
+        accounts === undefined ? undefined : uuidIn(tradingSessions.brokerAccountId, accounts),
       ),
     )
     .orderBy(sql`${tradingSessions.lastDecisionAt} asc nulls first`, asc(tradingSessions.createdAt))
@@ -354,6 +362,23 @@ export interface SessionHistory {
   intents: SessionHistoryIntent[];
 }
 
+// SessionHistory.waitExpired; limit: a literal or the batch's per-session column.
+// greatest() skips a NULL: no intent leaves started_at
+const waitExpiredSql = (limit: number | SQL) => sql<boolean>`greatest(
+  ${tradingSessions.startedAt},
+  (select max(${tradeIntents.updatedAt}) from ${tradeIntents}
+    where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
+) < ${millisecondsAgo(limit)}`;
+
+const historyIntentColumns = {
+  id: tradeIntents.id,
+  action: tradeIntents.action,
+  status: tradeIntents.status,
+  amount: tradeIntents.amount,
+  profit: brokerTrades.profit,
+  lastError: tradeIntents.lastError,
+};
+
 // The session's own intents in creation order: a bot trade on the same account (NULL session) is
 // neither a step nor a rejection of the session.
 export async function readSessionHistory(
@@ -365,12 +390,7 @@ export async function readSessionHistory(
     .select({
       telegramUserId: users.telegramUserId,
       expired: sql<boolean>`${pastDeadline(maxDurationMs)}`,
-      // greatest() skips a NULL: no intent leaves started_at
-      waitExpired: sql<boolean>`greatest(
-        ${tradingSessions.startedAt},
-        (select max(${tradeIntents.updatedAt}) from ${tradeIntents}
-          where ${tradeIntents.tradingSessionId} = ${tradingSessions.id})
-      ) < ${millisecondsAgo(noSignalTimeoutMs)}`,
+      waitExpired: waitExpiredSql(noSignalTimeoutMs),
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -378,14 +398,7 @@ export async function readSessionHistory(
     .where(eq(tradingSessions.id, sessionId));
   if (owner === undefined) return undefined;
   const intents = await db
-    .select({
-      id: tradeIntents.id,
-      action: tradeIntents.action,
-      status: tradeIntents.status,
-      amount: tradeIntents.amount,
-      profit: brokerTrades.profit,
-      lastError: tradeIntents.lastError,
-    })
+    .select(historyIntentColumns)
     .from(tradeIntents)
     .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
     .where(eq(tradeIntents.tradingSessionId, sessionId))
@@ -461,6 +474,34 @@ export async function markSessionDecision(db: Db, { id }: { id: string }): Promi
     .where(
       and(eq(tradingSessions.id, id), eq(tradingSessions.status, TradingSessionStatus.Active)),
     );
+}
+
+// markSessionDecision for a tick's batch in one statement (#871); none for an empty list.
+export async function markSessionDecisions(db: Db, ids: readonly string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await db
+    .update(tradingSessions)
+    .set({ lastDecisionAt: sql`now()`, updatedAt: sql`now()` })
+    .where(
+      and(uuidIn(tradingSessions.id, ids), eq(tradingSessions.status, TradingSessionStatus.Active)),
+    );
+}
+
+// The batch's stops of one reason in one statement (#871): the CAS on status = active as in
+// stopTradingSession, so a session another writer stopped first keeps its reason and is not
+// returned. None for an empty list.
+export async function stopTradingSessions(
+  db: Db,
+  { ids, reason }: { ids: readonly string[]; reason: TradingSessionStopReason },
+): Promise<StoppedSession[]> {
+  if (ids.length === 0) return [];
+  return db
+    .update(tradingSessions)
+    .set(stoppedBy(reason))
+    .where(
+      and(uuidIn(tradingSessions.id, ids), eq(tradingSessions.status, TradingSessionStatus.Active)),
+    )
+    .returning(stoppedColumns);
 }
 
 export interface CreateSessionIntentInput {
@@ -666,7 +707,7 @@ const sessionBalanceCurrent = sql<boolean>`not exists (
 // pass's check, the backend's refresh) all land after the settle's commit. A settled intent's
 // updated_at is its settle's database clock, written once (settled is terminal). The wait is
 // bounded from that settlement, not from this session's intents.
-const awaitsBalanceSql = (waitMs: number) => sql<boolean>`exists (
+const awaitsBalanceSql = (waitMs: number | SQL) => sql<boolean>`exists (
   select 1 from ${tradeIntents}
    where ${tradeIntents.brokerAccountId} = ${tradingSessions.brokerAccountId}
      and ${tradeIntents.mode} = ${tradingSessions.mode}
@@ -704,6 +745,89 @@ export async function readSessionBalance(
     )
     .where(eq(tradingSessions.id, sessionId));
   return row;
+}
+
+export interface SessionBatchRead {
+  history: SessionHistory;
+  // undefined without a balance snapshot of the session's account
+  balance: SessionBalanceRead | undefined;
+}
+
+export interface SessionBatchItem {
+  id: string;
+  // the session's own no-signal limit (its candle, #637): waitExpired and awaitsBalance
+  noSignalTimeoutMs: number;
+}
+
+// The orchestrator's tick (#871): readSessionHistory and readSessionBalance for every session of
+// the batch in two statements, the same fragments per fact. A session id that has no row (or no
+// owner) is missing from the map. The amounts stay numeric strings (Rule 2).
+export async function readSessionBatch(
+  db: Db,
+  items: readonly SessionBatchItem[],
+  { maxDurationMs }: { maxDurationMs: number },
+): Promise<Map<string, SessionBatchRead>> {
+  const reads = new Map<string, SessionBatchRead>();
+  if (items.length === 0) return reads;
+  const limit = sql`v.limit_ms`;
+  const rows = await db
+    .select({
+      id: tradingSessions.id,
+      telegramUserId: users.telegramUserId,
+      expired: sql<boolean>`${pastDeadline(maxDurationMs)}`,
+      waitExpired: waitExpiredSql(limit),
+      snapshotOf: brokerBalanceSnapshots.brokerAccountId,
+      available: sql<DecimalString | null>`${sessionAvailable}`,
+      minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
+      awaitsBalance: awaitsBalanceSql(limit),
+    })
+    .from(tradingSessions)
+    .innerJoin(
+      sql`unnest(${sql.param(items.map((item) => item.id))}::uuid[], ${sql.param(
+        items.map((item) => item.noSignalTimeoutMs),
+      )}::int[]) as v(id, limit_ms)`,
+      sql`v.id = ${tradingSessions.id}`,
+    )
+    .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
+    .innerJoin(users, eq(users.id, brokerAccounts.userId))
+    .leftJoin(
+      brokerBalanceSnapshots,
+      eq(brokerBalanceSnapshots.brokerAccountId, tradingSessions.brokerAccountId),
+    );
+  if (rows.length === 0) return reads;
+  const intents = await db
+    .select({ sessionId: tradeIntents.tradingSessionId, ...historyIntentColumns })
+    .from(tradeIntents)
+    .leftJoin(brokerTrades, eq(brokerTrades.intentId, tradeIntents.id))
+    .where(
+      uuidIn(
+        tradeIntents.tradingSessionId,
+        rows.map((row) => row.id),
+      ),
+    )
+    .orderBy(asc(tradeIntents.createdAt), asc(tradeIntents.id));
+  for (const row of rows) {
+    reads.set(row.id, {
+      history: {
+        telegramUserId: row.telegramUserId.toString(),
+        expired: row.expired,
+        waitExpired: row.waitExpired,
+        intents: [],
+      },
+      balance:
+        row.snapshotOf === null || row.available === null || row.minTradeAmount === null
+          ? undefined
+          : {
+              available: row.available,
+              minTradeAmount: row.minTradeAmount,
+              awaitsBalance: row.awaitsBalance,
+            },
+    });
+  }
+  for (const { sessionId, ...intent } of intents) {
+    if (sessionId !== null) reads.get(sessionId)?.history.intents.push(intent);
+  }
+  return reads;
 }
 
 // The session as the owner's bot sees it (#283). Scoped by the owner: another user's session and

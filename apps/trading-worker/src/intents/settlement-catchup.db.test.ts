@@ -90,7 +90,7 @@ const catchupOf = (
   config: Partial<SettlementCatchupConfig> = {},
   db: Db = tmp.db,
   rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
-  onIntentEnded?: () => void,
+  onIntentEnded?: (brokerAccountId: string) => void,
 ) =>
   createSettlementCatchup({
     db,
@@ -480,14 +480,15 @@ describe('createSettlementCatchup (#90)', () => {
 });
 
 describe('the wake of the session orchestrator (#696)', () => {
-  // the callback reads the intent's committed status over the pool at the moment it is called
+  // the callback reads the intent's committed status over the pool at the moment it is called,
+  // and the account it names (#871: the orchestrator's woken tick runs over that account)
   async function wakesOf(
     intentId: string,
     rest: Pick<BrokerRestClient, 'listTrades'> = createBrokerRestClient({ baseUrl: broker.url }),
   ) {
-    const seen: Promise<string>[] = [];
-    const catchup = catchupOf(capture().logger, {}, tmp.db, rest, () => {
-      seen.push(statusOf(intentId));
+    const seen: Promise<{ status: string; account: string }>[] = [];
+    const catchup = catchupOf(capture().logger, {}, tmp.db, rest, (account) => {
+      seen.push(statusOf(intentId).then((status) => ({ status, account })));
     });
     await catchup.tick();
     await catchup.stop();
@@ -497,7 +498,7 @@ describe('the wake of the session orchestrator (#696)', () => {
   it('CW1 an attempt that settles wakes once, after the commit', async () => {
     const a = await acceptedAtBroker();
     broker.trades.settle(Number(a.trade.id), { outcome: 'win' });
-    expect(await wakesOf(a.intent.id)).toEqual(['settled']);
+    expect(await wakesOf(a.intent.id)).toEqual([{ status: 'settled', account: a.brokerAccountId }]);
   });
 
   it('CW1 an intent settled by someone else meanwhile (left) does not wake', async () => {
