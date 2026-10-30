@@ -86,8 +86,9 @@ switch is hidden and the system setting decides.
 `GET /admin` redirects to `/admin/overview`; after a login the landing page is still
 `/admin/sessions`. Timestamps are printed as the ISO instants the backend sent.
 
-The lists (#656) — users, staff sessions, intents, trading sessions, the token ledger, deposits,
-broker accounts, Stars refunds, and the tables of the user card — are one table component
+The lists (#656, #817) — users, staff sessions, intents, trading sessions, the token ledger,
+deposits, broker accounts, service accounts, Stars refunds, the audit log, and the tables of the
+user card — are one table component
 ([admin-design-system.md → Table and row card](admin-design-system.md#table-and-row-card)): from
 64rem a dense table, one line a row, a table wider than the content column scrolling inside its own
 frame (the header row is not pinned); below 64rem every row is a card, each value under its
@@ -96,8 +97,7 @@ is the table in that section); «В начало»/«Далее» look like butt
 «… нет.». The ids a page prints as a code (an account, a payment, a reference of the ledger, the
 ids of the user and intent cards) carry a «Копировать» button; it is there only with JavaScript and
 a browser clipboard (an https page), and the id stays selectable without it. The cards are a framed
-list of fields per section. The audit log and the service accounts keep their tables from before
-(#817), as do the bot texts (#657).
+list of fields per section. The bot texts keep their tables from before (#657).
 
 ### Overview — `GET /admin/overview`
 
@@ -436,7 +436,9 @@ address, broker id, the owner's Telegram id (a link to the card), status, «В �
 «нет: <reason>» (`пользователь заблокирован`, `не подтверждён в боте`, `отозван (<the revocation
 reason>)`, `токен истёк`, in the token service's order of checks) —, token expiry, token rotation,
 «Служебный с» and the «Снять» button. One `SELECT` joined to `users` (`listServiceAccountStates`),
-through the same column constant as the card and the list.
+through the same column constant as the card and the list. «В работе» and the status are badges
+(#817): a green «да» or a red «нет: <reason>», the status in the colours of the broker accounts;
+below 64rem every account is a card, and a long badge wraps inside it.
 
 **Marking.** «Сделать служебным» (the card and the broker accounts list) and «Снять» (all three
 pages) post `service=on|off` and `return=<the page>` to `POST /admin/broker-accounts/<id>/service`.
@@ -494,7 +496,9 @@ page of 50. A cursor of the wrong shape → 302 without it.
 lists: one `SELECT` left-joined to `staff` for the actor's login (`listAuditForAdmin`,
 `packages/db/src/admin-audit-ops.ts`). Columns: the time of the row; who — the staff login, else the
 raw `actor_id`, else «—», then `actor_type` as its code; the action as its code; the entity — its type
-as a code and its id; the payload.
+as a code and its id; the payload. The table is the component (#817): at full width the payload
+cell wraps up to 28rem (`td.payload`) and the rest of the row stays on one line; an entity id with
+no card to link to carries the copy button, a linked one is only the link.
 
 **Filters are exact matches**, each optional, all of them combined:
 

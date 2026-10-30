@@ -5,8 +5,8 @@ stays as it was: routes, staff sessions, audit and the `Origin` check do not cha
 This document is what a new admin section is laid out from. The pages themselves are described in
 [admin-pages.md](admin-pages.md).
 
-Screenshots of part 1 and of the lists and cards of #656 (dark/light, desktop 1280×800 and phone
-375×812): `docs/admin/screenshots/`.
+Screenshots of part 1, of the lists and cards of #656 and of the audit log and the service accounts
+of #817 (dark/light, desktop 1280×800 and phone 375×812): `docs/admin/screenshots/`.
 
 ## Files
 
@@ -169,8 +169,8 @@ All defined in `admin.css`; markup to use:
 | empty state | `empty(text)`: `<p class="empty">…</p>`, in place of the table |
 | copy an id | `idCode(value)`: `<code>…</code>` and its copy button (see Table and row card) |
 
-The lists and the user and intent cards are built from these components (#656). The audit log, the
-service accounts (#817) and the bot texts (#657) keep their markup from before #459; the element
+The lists, the audit log, the service accounts and the user and intent cards are built from these
+components (#656, #817). The bot texts (#657) keep their markup from before #459; the element
 rules (`table`, `dl`, `form.search`, `label`, `details`, `.tg-bubble`, …) restyle it, and each of
 their tables (`main table:not(.table)`) is as wide as its content and scrolls inside itself when
 that is wider than the page, so no page scrolls sideways. #657 removes that rule with the last such
@@ -188,7 +188,8 @@ owner of the broker accounts and Stars payments lists) builds the column and the
 condition, so a label never shifts.
 
 From 64rem: a dense table, one line a row (`white-space: nowrap`; a `.wrap` cell — a note, a user
-agent — wraps up to 22rem). A table wider than the content column (broker accounts, 15 columns;
+agent — wraps up to 22rem; the audit payload, `td.payload` with its `code.payload` pre-wrapped, up
+to 28rem). A table wider than the content column (broker accounts, 15 columns;
 trading sessions, 13) scrolls inside `.table-wrap` (`overflow-x: auto`); the page itself never
 scrolls sideways. **The header row is not sticky**: `.table-wrap` with `overflow-x: auto` is a
 scroll container, and a sticky `<thead>` sticks to its nearest scroll container — one that does not
@@ -198,7 +199,9 @@ chosen (#656, manager's decision on clarify).
 
 Below 64rem (CSS only, no script): `thead` is hidden, each `<tr>` is a framed card and each `<td>`
 a line of it — `td::before { content: attr(data-label) }` in the muted colour, floated into the
-cell's left padding (`--card-label-w`, 7rem), the value in the rest; a long id or time wraps.
+cell's left padding (`--card-label-w`, 7rem), the value in the rest; a long id or time wraps, and
+so does a badge (`.table .badge { white-space: normal }` below 64rem): «нет: отозван
+(refresh_outcome_unknown)» of the service accounts is wider than the value column of a 375 px card.
 
 Statuses are badges; the colour of each status (`satisfies Record<Status, BadgeVariant>` in
 `pages.ts`, so a new status does not compile without one):
@@ -213,6 +216,9 @@ Statuses are badges; the colour of each status (`satisfies Record<Status, BadgeV
 | `StarPaymentStatus` | `paid` | `held` | | | `refunded` |
 
 Modes, directions, stop reasons, kinds and errors stay plain `<code>`: they are codes, not states.
+«В работе» of a service account is a badge too — `success` «да», `danger` «нет: <reason>»
+(`workingBadge`, `pages.ts`): a state, not a code. In the audit log an entity id with no card to
+link to goes through `idCode`; a linked one is the link.
 
 **Copy an id.** `idCode(value)` prints `<code>value</code>` and
 `<button type="button" class="icon-btn copy no-js-hidden" data-copy="value" aria-label="Копировать" data-label-copy="Копировать" data-label-copied="Скопировано">`
