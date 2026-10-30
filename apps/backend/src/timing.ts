@@ -361,15 +361,25 @@ export const BALANCE_STALLED_RETRY_MS = 300_000;
 
 // --- The first tick of the broker loops (#874) ------------------------------------------------
 // docs/broker-balance.md → Start and shutdown. The balance reconciler and the service-account
-// keeper tick first at firstTickDelayMs after start(), and their interval runs from that tick:
-// the spacing of the ticks is the interval's from the first one on, so the first minute after a
-// start never holds more ticks than a steady minute. The floor leaves the worker's own start burst
-// (its reconnections and catch-up) the first seconds.
+// keeper tick first at firstTickAtMs after start(): no sooner than the jitter, and no sooner than
+// one interval after the newest attempt any process recorded (by the database clock), so a
+// restart puts no two ticks of the old and the new process closer than an interval. The interval
+// runs from the first tick. The jitter's floor leaves the worker's own start burst (its
+// reconnections and catch-up) the first seconds.
 export const BALANCE_FIRST_TICK_MIN_MS = 5_000;
 export const SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS = 5_000;
 // in [minMs, intervalMs) for random() in [0, 1)
 export const firstTickDelayMs = (minMs: number, intervalMs: number, random: () => number) =>
   minMs + random() * (intervalMs - minMs);
+// in [jitterMs, intervalMs]; a mark in the future (a clock step) counts as age 0
+export const firstTickAtMs = (
+  jitterMs: number,
+  intervalMs: number,
+  lastAttemptAgeMs: number | null,
+): number =>
+  lastAttemptAgeMs === null
+    ? jitterMs
+    : Math.max(jitterMs, intervalMs - Math.max(0, lastAttemptAgeMs));
 // The links of the chain, a function so a test can show which value breaks them: each floor is
 // below the shortest interval of its loop, so the jitter's range is never empty.
 export const firstTickBoundsHold = ({

@@ -434,11 +434,26 @@ describe('the keeper as a loop', () => {
     expect(logged).not.toContain('Служебных');
   });
 
-  // #874, Rule 65: the first tick at firstTickDelayMs (random 0: the floor), the interval from it.
-  // The waits below run on the real clock the fake one leaves alone.
+  // #874, Rule 65: the first tick at firstTickAtMs (random 0: the jitter is the floor), the
+  // interval from it. The waits below run on the real clock the fake one leaves alone; the first
+  // delay is armed once the read of the last rotation answered, real I/O the fake clock does not
+  // touch.
   const realSetTimeout = globalThis.setTimeout;
   const realSleep = (ms: number) => new Promise((resolve) => realSetTimeout(resolve, ms));
   const FIRST_MS = 200;
+  // the jitter is drawn right before the first delay is armed, in the same callback
+  let drawn = false;
+  const random = () => {
+    drawn = true;
+    return 0;
+  };
+  const armed = async () => {
+    for (let i = 0; i < 100 && !drawn; i += 1) await realSleep(20);
+    expect(drawn).toBe(true);
+  };
+  beforeEach(() => {
+    drawn = false;
+  });
 
   it('K12 ticks first at its floor after start(), then every tickMs, and reuses a tick still running', async () => {
     await serviceAccount({ expiresInHours: 1 });
@@ -454,9 +469,10 @@ describe('the keeper as a loop', () => {
     const { instance } = keeper({
       accessToken: token,
       config: { firstTickMinMs: FIRST_MS },
-      random: () => 0,
+      random,
     });
     instance.start();
+    await armed();
     vi.advanceTimersByTime(FIRST_MS - 1);
     await realSleep(100);
     expect(token.calls).toHaveLength(0);
@@ -481,13 +497,40 @@ describe('the keeper as a loop', () => {
   it('K13 a stop() inside the first delay leaves the keeper without an exchange', async () => {
     await serviceAccount({ expiresInHours: 1 });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
-    const { instance, token } = keeper({ config: { firstTickMinMs: FIRST_MS }, random: () => 0 });
+    const { instance, token } = keeper({ config: { firstTickMinMs: FIRST_MS }, random });
     instance.start();
+    await armed();
     vi.advanceTimersByTime(FIRST_MS - 1);
     await instance.stop();
     vi.advanceTimersByTime(10 * CONFIG.tickMs);
     await realSleep(100);
     expect(token.calls).toHaveLength(0);
+  });
+
+  // a marked account rotated 400 ms ago stands for the previous process's last exchange: the
+  // jitter is FIRST_MS, the floor about tickMs − 400 = 600 ms
+  it('K14 ticks first no sooner than an interval after the last rotation of a marked account', async () => {
+    const due = await serviceAccount({ expiresInHours: 1 });
+    const recent = await serviceAccount({ expiresInHours: 720 });
+    try {
+      await tmp.db
+        .update(brokerAccounts)
+        .set({ tokenRotatedAt: sql`now() - interval '400 milliseconds'` })
+        .where(eq(brokerAccounts.id, recent));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
+      const { instance, token } = keeper({ config: { firstTickMinMs: FIRST_MS }, random });
+      instance.start();
+      await armed();
+      vi.advanceTimersByTime(400);
+      await realSleep(100);
+      expect(token.calls).toHaveLength(0);
+      vi.advanceTimersByTime(300);
+      for (let i = 0; i < 100 && token.calls.length === 0; i += 1) await realSleep(20);
+      expect(token.calls.map((call) => call.accountId)).toEqual([due]);
+      await instance.stop();
+    } finally {
+      await setAccount(recent, { serviceSince: null });
+    }
   });
 });
 

@@ -157,6 +157,7 @@ import {
   DEFAULT_BALANCE_RECONCILE_INTERVAL_MS,
   SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
   firstTickBoundsHold,
+  firstTickAtMs,
   firstTickDelayMs,
 } from './timing';
 import { balanceTickLimit } from './broker/balance-reconciler';
@@ -727,5 +728,15 @@ describe('the first tick of the broker loops', () => {
       balanceTickLimit(DEFAULT_BALANCE_POLL_PER_MINUTE, DEFAULT_BALANCE_RECONCILE_INTERVAL_MS);
     expect(gets).toBe(100);
     expect(gets).toBeLessThanOrEqual(DEFAULT_BALANCE_POLL_PER_MINUTE);
+  });
+
+  it.each([
+    { age: null, at: 5_000, why: 'no recorded attempt' },
+    { age: 10_000, at: 50_000, why: 'the floor' },
+    { age: 58_000, at: 5_000, why: 'the jitter wins' },
+    { age: 0, at: 60_000, why: 'an attempt just now' },
+    { age: -3_000, at: 60_000, why: 'a future mark' },
+  ])('FT4 puts the first tick at $at for the last attempt $age ms ago ($why)', ({ age, at }) => {
+    expect(firstTickAtMs(5_000, 60_000, age)).toBe(at);
   });
 });

@@ -96,6 +96,22 @@ export async function listServiceRenewalCandidates(
   return rows.map((row) => row.id);
 }
 
+// The keeper's first tick at start() (#874): ms since the newest token rotation of a marked
+// account, by the database clock; null when none is marked or none has rotated. Unmarked accounts
+// are left out: user logins rotate them all the time, which would cost the jitter and bound
+// nothing the keeper does.
+export async function latestServiceRotationAgeMs(db: Db): Promise<number | null> {
+  const [row] = await db
+    .select({
+      ageMs: sql<
+        number | null
+      >`(extract(epoch from now() - max(${brokerAccounts.tokenRotatedAt})) * 1000)::float8`,
+    })
+    .from(brokerAccounts)
+    .where(marked);
+  return row?.ageMs ?? null;
+}
+
 export type ServiceAccountState = AdminBrokerAccountRow & {
   userId: string;
   telegramUserId: bigint;
