@@ -4,6 +4,7 @@ import {
   BOT_MESSAGE_SPACER,
   BOT_MESSAGE_SPACER_LENGTH,
   BOT_TEXT_LIMIT,
+  PRE_BLOCK_BLANKS,
   PRE_CHAR_BLANKS,
   PRE_EMOJI_BLANKS,
   preLineBlanks,
@@ -71,16 +72,23 @@ describe('stripMessageSpacer', () => {
   });
 });
 
-describe('preLineBlanks (#887)', () => {
+// One spacer blank on the owner's iPhone screenshots (#896): 921 px wide, 24.3 px a blank.
+const IPHONE_BLANK_PX = 24.3;
+
+describe('preLineBlanks (#887, #896)', () => {
   it.each([
-    ['🟢 $10.00 → +$19.60', 16.87],
-    ['⏳ $1 000.00 · ⬇️ Вниз', 19.64],
-    ['↩️ ставка вернулась', 16.87],
-    ['🟢 $1 000.00 → +$1 960.00', 22.15],
-    ['⏳ Ставка: $2.00 · ⬆️ Вверх · сделка открыта', 39.0],
-  ])('F1 «%s» is %f blanks as CoreText measured it', (line, measured) => {
-    expect(Math.abs(preLineBlanks(line) - measured)).toBeLessThanOrEqual(0.05);
-  });
+    ['$17.05 → +$33.418', 279 / IPHONE_BLANK_PX, 'iPhone'],
+    ['🟢 ', 51 / IPHONE_BLANK_PX, 'iPhone'],
+    ['$17.05 → +$33.418', 11.45, 'CoreText Menlo 13 pt'],
+    ['🟢 $1 000.00 → +$1 960.00', 16.95, 'CoreText Menlo 13 pt'],
+    ['⏳ $1 000.00 · ⬆️ Вверх', 15.72, 'CoreText Menlo 13 pt'],
+  ])(
+    'F1 the model of «%s» is no narrower than the measured %f blanks (%s) and at most 10 %% wider',
+    (line, measured) => {
+      expect(preLineBlanks(line)).toBeGreaterThanOrEqual(measured);
+      expect(preLineBlanks(line)).toBeLessThanOrEqual(measured * 1.1);
+    },
+  );
 
   it('F2 counts an emoji as an emoji, a character as a character, and the marks as nothing', () => {
     expect(preLineBlanks('a ж')).toBeCloseTo(3 * PRE_CHAR_BLANKS);
@@ -135,10 +143,10 @@ describe.each([BotLanguage.Ru, BotLanguage.En])(
     );
     const widest = (lines: readonly string[]) => Math.max(...lines.map(preLineBlanks));
 
-    it('F3 no line of a block is wider than the spacer', () => {
+    it('F3 no line of a block, with the block’s insets, is wider than the spacer', () => {
       const over = [...Object.values(results), ...opens]
         .flat()
-        .filter((line) => preLineBlanks(line) > BOT_MESSAGE_SPACER_LENGTH);
+        .filter((line) => preLineBlanks(line) + PRE_BLOCK_BLANKS > BOT_MESSAGE_SPACER_LENGTH);
       expect(over).toEqual([]);
     });
 

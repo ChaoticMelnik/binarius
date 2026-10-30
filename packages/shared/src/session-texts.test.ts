@@ -137,7 +137,7 @@ describe('the English session words (#633)', () => {
 });
 
 describe('sessionCycleText (#551)', () => {
-  const ADAPTIVE = '🔄 Адаптивная ставка включена';
+  const ADAPTIVE = '🔄 Адаптивная ставка';
   const text = (trades: SessionTradeNotice[]) => session.sessionCycleText(trades).value;
 
   it('a cycle of one trade is its block alone: the cycle and step, stake → stake + profit, the prices', () => {
@@ -230,7 +230,7 @@ describe('sessionCycleText (#551)', () => {
 });
 
 describe('sessionCycleText with the open trade (#700)', () => {
-  const ADAPTIVE = '🔄 Адаптивная ставка включена';
+  const ADAPTIVE = '🔄 Адаптивная ставка';
   const open = (patch: Partial<SessionOpenNotice> = {}): SessionOpenNotice => ({
     amount: d('11.50000000'),
     action: TradeAction.Up,
