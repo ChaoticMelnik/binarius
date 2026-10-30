@@ -61,6 +61,7 @@ export const TEST_WORKER_TUNING: Partial<WorkerTuning> = {
     attemptTimeoutMs: 2_000,
     retryMs: 1_000,
     h1CheckMs: 100,
+    holdSlackMs: 10,
     maxDurationMs: SESSION_MAX_DURATION_MS,
     noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
   },

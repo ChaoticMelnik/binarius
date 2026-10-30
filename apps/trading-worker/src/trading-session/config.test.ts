@@ -12,6 +12,7 @@ import {
   TRADING_SESSION_CHAIN_HOLDS,
   TRADING_SESSION_CONFIG,
   TRADING_SESSION_H1_CHECK_MS,
+  TRADING_SESSION_HOLD_SLACK_MS,
   TRADING_SESSION_PAIRS_TIMEOUT_MS,
   TRADING_SESSION_RETRY_MS,
   TRADING_SESSION_TICK_MS,
@@ -29,6 +30,9 @@ describe('the trading session constants', () => {
     expect(TRADING_SESSION_TICK_MS).toBeLessThanOrEqual(TRADING_SESSION_H1_CHECK_MS);
     expect(TRADING_SESSION_H1_CHECK_MS).toBeLessThan(TRADING_SESSION_RETRY_MS);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(SESSION_MAX_DURATION_MS);
+    // K-HS (#871): the hold release's slack, a tenth of a tick at most
+    expect(TRADING_SESSION_CONFIG.holdSlackMs).toBe(TRADING_SESSION_HOLD_SLACK_MS);
+    expect(TRADING_SESSION_HOLD_SLACK_MS * 10).toBeLessThanOrEqual(TRADING_SESSION_TICK_MS);
     // the deadline is the shared one the start route and the CLI check against
     expect(TRADING_SESSION_CONFIG.maxDurationMs).toBe(SESSION_MAX_DURATION_MS);
     // #509, #637: the shared count the bot's stop line prints
@@ -59,11 +63,16 @@ describe('the trading session constants', () => {
     ['K-H1 an H1 hold shorter than a tick (#670)', { h1CheckMs: TRADING_SESSION_TICK_MS - 1 }],
     ['K-H1 an H1 hold as long as a hold-back (#670)', { h1CheckMs: TRADING_SESSION_RETRY_MS }],
     ['K-H1 a fractional H1 hold (#670)', { h1CheckMs: 5_000.5 }],
+    [
+      'K-HS a hold slack above a tenth of a tick (#871)',
+      { holdSlackMs: TRADING_SESSION_TICK_MS / 10 + 1 },
+    ],
+    ['K-HS no hold slack (#871)', { holdSlackMs: 0 }],
     ['a wait past the timer limit', { maxDurationMs: MAX_TIMER_MS + 1 }],
     ['no session per tick', { batchSize: 0 }],
     [
       'one candle (#637) - with a tick and a hold-back below one 5 s candle, so only the count refuses it',
-      { noSignalCandles: 1, tickMs: 1_000, retryMs: 2_000 },
+      { noSignalCandles: 1, tickMs: 1_000, retryMs: 2_000, holdSlackMs: 100 },
     ],
     ['12.5 candles (#637)', { noSignalCandles: 12.5 }],
     ['12 candles of 5 s, the hold-back (#637)', { noSignalCandles: 12 }],

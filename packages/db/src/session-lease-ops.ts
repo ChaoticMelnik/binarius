@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { Db } from './client';
 import { brokerSessionLeases } from './schema/broker-session-leases';
+import { uuidIn } from './sql-array';
 import { millisecondsFromNow } from './sql-time';
 
 // The broker session lease (#93, docs/broker-session.md → The lease). Each operation is one
@@ -50,7 +51,7 @@ export async function renewSessionLeases(
     .set({ expiresAt: sql`greatest(${l.expiresAt}, ${millisecondsFromNow(ttlMs)})` })
     .where(
       sql`${l.ownerId} = ${ownerId}
-        and ${l.brokerAccountId} = any(${sql.param([...accountIds])}::uuid[])
+        and ${uuidIn(l.brokerAccountId, accountIds)}
         and ${l.expiresAt} > now()`,
     )
     .returning({ id: l.brokerAccountId });

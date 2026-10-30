@@ -27,6 +27,9 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         orchestrator's checks: its driver opens the trades, the
 //                                         orchestrator only stops it (cycles, the sizer, the
 //                                         pair, no_signal_timeout - #775)
+//   TRADING_SESSION_HOLD_SLACK_MS       — the hold-back release's tolerance for the interval's
+//                                         timer jitter: two ticks of the interval may read the
+//                                         clock a few ms less than a tick apart (#871)
 //   SESSION_NO_SIGNAL_CANDLES (shared)  — how many candles of its duration a session waits on a
 //                                         closed pair (the attempt) and without an H1 signal (the
 //                                         driver) before no_signal_timeout (#509, in candles since
@@ -34,7 +37,9 @@ import { isTimerMs } from '@binarius/broker-socket';
 //                                         intent's change (database clock)
 // The chain: the pairs GET fits the batch (PAIRS < ATTEMPT); a held-back session skips at least
 // one tick (TICK < RETRY); an H1 session is checked again no sooner than the next tick and before
-// a hold-back would end (TICK <= H1_CHECK < RETRY); the no-signal count is an integer >= 2, so a
+// a hold-back would end (TICK <= H1_CHECK < RETRY); a hold of a tick still ends at the next tick
+// of the interval, and a woken tick decides a session again at most a tenth of a tick before its
+// hold ends (HOLD_SLACK x 10 <= TICK); the no-signal count is an integer >= 2, so a
 // session gets several decisions before the limit; a hold-back never outlives the shortest limit
 // (RETRY < NO_SIGNAL x the shortest candle); on the scanner's candles (5 s since #685, the one
 // duration an H1 session has) the limit comes before the deadline (NO_SIGNAL x 5 s <
@@ -51,6 +56,7 @@ export const TRADING_SESSION_ATTEMPT_TIMEOUT_MS = 10_000;
 export const TRADING_SESSION_PAIRS_TIMEOUT_MS = 4_000;
 export const TRADING_SESSION_RETRY_MS = 60_000;
 export const TRADING_SESSION_H1_CHECK_MS = 5_000;
+export const TRADING_SESSION_HOLD_SLACK_MS = 250;
 
 export interface SessionOrchestratorConfig {
   tickMs: number;
@@ -58,6 +64,7 @@ export interface SessionOrchestratorConfig {
   attemptTimeoutMs: number;
   retryMs: number;
   h1CheckMs: number;
+  holdSlackMs: number;
   maxDurationMs: number;
   noSignalCandles: number;
 }
@@ -68,6 +75,7 @@ export const TRADING_SESSION_CONFIG: Readonly<SessionOrchestratorConfig> = Objec
   attemptTimeoutMs: TRADING_SESSION_ATTEMPT_TIMEOUT_MS,
   retryMs: TRADING_SESSION_RETRY_MS,
   h1CheckMs: TRADING_SESSION_H1_CHECK_MS,
+  holdSlackMs: TRADING_SESSION_HOLD_SLACK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 });
@@ -86,6 +94,7 @@ export function sessionOrchestratorConfigHolds(
     isTimerMs(config.attemptTimeoutMs) &&
     isTimerMs(config.retryMs) &&
     isTimerMs(config.h1CheckMs) &&
+    isTimerMs(config.holdSlackMs) &&
     isTimerMs(config.maxDurationMs) &&
     isTimerMs(pairsTimeoutMs) &&
     Number.isSafeInteger(config.batchSize) &&
@@ -94,6 +103,7 @@ export function sessionOrchestratorConfigHolds(
     config.tickMs < config.retryMs &&
     config.tickMs <= config.h1CheckMs &&
     config.h1CheckMs < config.retryMs &&
+    config.holdSlackMs * 10 <= config.tickMs &&
     Number.isSafeInteger(config.noSignalCandles) &&
     config.noSignalCandles >= 2 &&
     config.retryMs < config.noSignalCandles * SIGNAL_SHORTEST_INTERVAL_MS &&
