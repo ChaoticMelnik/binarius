@@ -15,6 +15,7 @@ import {
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until } from '@binarius/shared/testing';
 import {
+  createDb,
   createSessionIntent,
   createTradingSession,
   journalEntryOf,
@@ -22,8 +23,7 @@ import {
   listPendingSessionNotices,
   markIntentAccepted,
   outboxEvents,
-  readSessionBalance,
-  readSessionHistory,
+  readSessionBatch,
   readTradeLogPage,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
@@ -33,6 +33,7 @@ import {
   takeIntent,
   tradeIntents,
   tradingSessions,
+  type Db,
   type TradeIntentRow,
 } from '@binarius/db';
 import {
@@ -51,6 +52,7 @@ import {
   h1ShownStartDecisionInput,
   type H1Driver,
   type H1DriverDeps,
+  type H1DriverSessions,
 } from './driver';
 
 // The driver against the real operations (#707, docs/h1.md -> The driver) on a temporary migrated
@@ -166,7 +168,15 @@ async function botSession() {
   return { seed, session };
 }
 
-function driverOn(series: ReturnType<typeof scriptedSeries>) {
+const readOn =
+  (db: Db): H1DriverSessions['read'] =>
+  async (id, { maxDurationMs, noSignalTimeoutMs }) =>
+    (await readSessionBatch(db, [{ id, noSignalTimeoutMs }], { maxDurationMs })).get(id);
+
+function driverOn(
+  series: ReturnType<typeof scriptedSeries>,
+  read: H1DriverSessions['read'] = readOn(tmp.db),
+) {
   const wakes = { n: 0 };
   const driver: H1Driver = createH1Driver({
     series: series.api,
@@ -174,8 +184,7 @@ function driverOn(series: ReturnType<typeof scriptedSeries>) {
     streaming: () => true,
     sessions: {
       list: () => listActiveH1Sessions(tmp.db),
-      history: (id, options) => readSessionHistory(tmp.db, id, options),
-      balance: (id, options) => readSessionBalance(tmp.db, id, options),
+      read,
       createIntent: (input) => createSessionIntent(tmp.db, input, { demoOnly: false }),
       stop: (id, reason) => stopTradingSession(tmp.db, { id, reason }),
       record: (input) => recordSignalDecision(tmp.db, input),
@@ -196,10 +205,10 @@ function driverOn(series: ReturnType<typeof scriptedSeries>) {
 // 300 flat seconds, then one ramp second at F
 const RAMP = [...Array<number>(300).fill(1.1), 1.1001];
 
-async function tradeOnce() {
+async function tradeOnce(read?: H1DriverSessions['read']) {
   const { seed, session } = await botSession();
   const series = scriptedSeries();
-  const { driver, wakes } = driverOn(series);
+  const { driver, wakes } = driverOn(series, read);
   driver.start();
   await driver.scan();
   const t = Math.floor(Date.now() / 1000) * 1000 - 300_000;
@@ -275,6 +284,34 @@ describe('the H1 driver on the database (#707)', () => {
     expect(own).toHaveLength(1);
     const entry = h1ShadowEntrySchema.parse(journalEntryOf(own[0]!.decision));
     expect(replayH1Entry(entry)).toEqual(own[0]!.decision.decision);
+  });
+
+  // #874: the trade's history and balance in one read of 2 statements (readSessionBatch). Each
+  // read gets a logging Db of its own, so reads of other sessions do not mix into the count; the
+  // intent's transaction is on tmp.db, not counted
+  it("H1-DB9: the trade's read is 2 statements", async () => {
+    for (const active of await listActiveH1Sessions(tmp.db)) {
+      await stopTradingSession(tmp.db, {
+        id: active.id,
+        reason: TradingSessionStopReason.UserStopped,
+      });
+    }
+    const reads: { id: string; statements: number }[] = [];
+    const { session } = await tradeOnce(async (id, options) => {
+      const statements: string[] = [];
+      const counted = createDb(tmp.pool, {
+        logger: { logQuery: (query) => void statements.push(query) },
+      });
+      const read = await readOn(counted)(id, options);
+      reads.push({ id, statements: statements.length });
+      return read;
+    });
+    const [intent] = await tmp.db
+      .select({ id: tradeIntents.id })
+      .from(tradeIntents)
+      .where(eq(tradeIntents.tradingSessionId, session.id));
+    expect(intent).toBeDefined();
+    expect(reads).toEqual([{ id: session.id, statements: 2 }]);
   });
 });
 

@@ -26,12 +26,14 @@ import {
 } from '@binarius/db/testing';
 import {
   brokerBalanceSnapshots,
+  createDb,
   openTrading,
   setStake,
   setTradingMode,
   tokenLedger,
   tradingSwitch,
   users,
+  type Db,
 } from '@binarius/db';
 import type { AccessTokenResult } from '../auth/token-service';
 import { createBalanceReconciler, type BalanceReconciler } from '../broker/balance-reconciler';
@@ -57,9 +59,9 @@ const tokenAnswers = new Map<string, AccessTokenResult>();
 // registerTradingAccess call both live in the plugin, and a dependency buildApp gains later
 // (#138's `pairs`) does not reach this file. No case here asserts a 500 body or an unknown
 // route — those are buildApp's handlers (app.test.ts).
-const createReconciler = () =>
+const createReconciler = (db: Db = tmp.db) =>
   createBalanceReconciler({
-    db: tmp.db,
+    db,
     client: createBrokerRestClient({ baseUrl: broker.url }),
     accessToken: (accountId) =>
       Promise.resolve(
@@ -69,10 +71,13 @@ const createReconciler = () =>
     config: { intervalMs: 60_000, maxPerMinute: 200 },
   });
 
-async function buildAccessApp(reconciler: BalanceReconciler): Promise<FastifyInstance> {
+async function buildAccessApp(
+  reconciler: BalanceReconciler,
+  db: Db = tmp.db,
+): Promise<FastifyInstance> {
   const built = Fastify();
   await built.register(tradingRoutes, {
-    db: tmp.db,
+    db,
     internalApiToken: TOKEN,
     onIntentQueued: () => {},
     balance: reconciler,
@@ -525,5 +530,70 @@ describe('POST /trading/access → broker', () => {
     expect(Date.now() - started).toBeLessThan(TRADING_ACCESS_BUDGET_MS);
     expect(response.json()).toMatchObject({ brokerUnavailable: null, broker: { fresh: false } });
     expect((await snapshotRow(user.accountId))!.lastRefreshError).toBeNull();
+  });
+});
+
+// The round trips of one request (#874), counted on a second app over a logging Db; the main
+// app's answer for the same request is the behaviour oracle.
+describe('POST /trading/access round trips', () => {
+  const statements: string[] = [];
+  let counted: FastifyInstance;
+  let countedBalance: BalanceReconciler;
+  beforeAll(async () => {
+    const db = createDb(tmp.pool, {
+      logger: { logQuery: (query) => void statements.push(query) },
+    });
+    countedBalance = createReconciler(db);
+    counted = await buildAccessApp(countedBalance, db);
+  });
+  afterAll(async () => {
+    await counted.close();
+    await countedBalance.stop();
+  });
+  const countedAccess = async (payload: unknown) => {
+    statements.length = 0;
+    const response = await post('/trading/access', payload, `Bearer ${TOKEN}`, counted);
+    return { response, statements: statements.length };
+  };
+
+  it('AC1 a fresh snapshot: 2 statements, the same answer as the main app', async () => {
+    const user = await linkedUser();
+    await access({ telegramUserId: user.telegramUserId });
+    const expected = (await access({ telegramUserId: user.telegramUserId })).json();
+    const { response, statements: n } = await countedAccess({
+      telegramUserId: user.telegramUserId,
+    });
+    // readTradingAccessState, touchAndReadBalanceSnapshot
+    expect(n).toBe(2);
+    expect(response.json()).toEqual(expected);
+  });
+
+  it('AC2 a stale snapshot refreshed from the broker: 4 statements', async () => {
+    const user = await linkedUser();
+    await access({ telegramUserId: user.telegramUserId });
+    await age(user.accountId, '-61 seconds');
+    const { response, statements: n } = await countedAccess({
+      telegramUserId: user.telegramUserId,
+    });
+    expect(response.json().broker.fresh).toBe(true);
+    // readTradingAccessState, touchAndReadBalanceSnapshot, the refresh's upsert, the re-read;
+    // the faked accessToken makes none (in production its fast-path SELECT is a fifth)
+    expect(n).toBe(4);
+  });
+
+  it('AC3 no account: 1 statement', async () => {
+    const user = await seedUser(tmp.db);
+    const { response, statements: n } = await countedAccess({
+      telegramUserId: user.telegramUserId,
+    });
+    expect(response.json().brokerUnavailable).toBe('no_account');
+    expect(n).toBe(1);
+  });
+
+  it('AC4 an unknown user: 1 statement and 404', async () => {
+    const { response, statements: n } = await countedAccess({ telegramUserId: '999999998' });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: UserErrorCode.UserNotFound });
+    expect(n).toBe(1);
   });
 });

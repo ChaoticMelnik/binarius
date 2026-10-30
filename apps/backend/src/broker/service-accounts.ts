@@ -3,6 +3,7 @@ import { AccessTokenRefusal, assertExhausted, errorLogFields } from '@binarius/s
 import { listServiceAccountStates, listServiceRenewalCandidates, type Db } from '@binarius/db';
 import { ADMIN_TEXTS } from '../admin/texts';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
+import { SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS, firstTickDelayMs } from '../timing';
 
 // The service-account keeper (#391, docs/service-accounts.md → The keeper). Each tick renews the
 // service tokens that are due, then counts the working service accounts against the minimum and
@@ -18,6 +19,8 @@ export interface ServiceAccountKeeperConfig {
   perTick: number;
   stalledRetryMs: number;
   minWorking: number;
+  // the first tick's floor after start() (#874)
+  firstTickMinMs?: number;
 }
 
 export interface ServiceAccountKeeperDeps {
@@ -27,6 +30,8 @@ export interface ServiceAccountKeeperDeps {
   notifyStaff: (text: string, signal: AbortSignal) => Promise<{ sent: number; failed: number }>;
   logger: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
   config: ServiceAccountKeeperConfig;
+  // the first tick's jitter; Math.random by default
+  random?: () => number;
 }
 
 export interface ServiceAccountKeeper {
@@ -209,13 +214,26 @@ export function createServiceAccountKeeper(deps: ServiceAccountKeeperDeps): Serv
 
   return {
     tick,
+    // the first tick at a jittered delay inside the first interval, the interval from it (#874,
+    // Rule 65)
     start() {
       if (stopped || timer !== undefined) return;
-      timer = setInterval(() => void tick(), config.tickMs);
+      timer = setTimeout(
+        () => {
+          timer = setInterval(() => void tick(), config.tickMs);
+          void tick();
+        },
+        firstTickDelayMs(
+          config.firstTickMinMs ?? SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
+          config.tickMs,
+          deps.random ?? Math.random,
+        ),
+      );
     },
     async stop() {
       stopped = true;
-      clearInterval(timer);
+      // the pending first tick or the interval: one handle at a time
+      clearTimeout(timer);
       timer = undefined;
       stopping.abort();
       await running;

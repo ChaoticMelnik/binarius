@@ -226,10 +226,10 @@ export const MINI_APP_AUTHORIZE_PARAM = 'authorize';
 // every field of the callback at its schema maximum (256 + 512 + 4096) plus the JSON around them.
 export const OAUTH_CALLBACK_BODY_LIMIT_BYTES = 8 * 1024;
 
-// How long the backend may hold POST /auth/binodex/callback: the code exchange and the push that
-// follows (database work is ordinary latency). It lives here rather than in either process because
-// both size their own chains against it — apps/backend/src/timing.ts must fit inside it,
-// apps/web/src/timing.ts must wait longer than it.
+// How long the backend may hold POST /auth/binodex/callback: the code exchange (database work is
+// ordinary latency); the push follows the response (#874). It lives here rather than in either
+// process because both size their own chains against it — apps/backend/src/timing.ts must fit
+// inside it, apps/web/src/timing.ts must wait longer than it.
 export const OAUTH_CALLBACK_BUDGET_MS = 8_000;
 
 // a measured initData with photo_url is ~300 bytes; the bound only stops an unbounded field

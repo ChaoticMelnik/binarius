@@ -37,6 +37,7 @@ import {
   BrokerOAuthErrorCode,
   type BrokerOAuthClient,
 } from '../broker/oauth-client';
+import { createInFlight, type InFlight } from '../in-flight';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
 import { internalBearerAuth } from './internal';
 import { LinkPushKind, type ClientPush, type LinkPushOutcome } from './client-push';
@@ -79,6 +80,8 @@ export interface AuthRoutesDeps {
   clientPush: ClientPush;
   // proves which Telegram user finished the login on the callback
   initDataVerifier: InitDataVerifier;
+  // the callback's pushes after the response, awaited by app.close(); a seam for the tests
+  linkPushes?: InFlight;
   // lowered by tests; production runs on the constants above
   callbackMaxPerMinute?: number;
   callbackMaxFailuresPerMinute?: number;
@@ -87,10 +90,15 @@ export interface AuthRoutesDeps {
 }
 
 export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) => {
+  const linkPushes = deps.linkPushes ?? createInFlight();
+  // shutdown phase 1 (app.close()) waits for the pushes in flight; the pool closes after it
+  app.addHook('onClose', () => linkPushes.settle());
+
   // One attempt, after the link has committed and outside any transaction. Its outcome never
-  // changes the response: a push that never arrives is made up for by the confirm button on the
-  // user's next /start (#10). A 403 writes one fact, the Telegram block (#119). The push is in the
-  // user's language (#633), Russian without a users row; a failed read is a push not sent.
+  // changes the response, so the callback answers first and the push runs after it (#874): a push
+  // that never arrives is made up for by the confirm button on the user's next /start (#10). A 403
+  // writes one fact, the Telegram block (#119). The push is in the user's language (#633),
+  // Russian without a users row; a failed read is a push not sent.
   const push = async (
     log: FastifyBaseLogger,
     telegramUserId: bigint,
@@ -113,6 +121,13 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
       await recordTelegramSendFailure({ db: deps.db, log }, telegramUserId, error);
     }
   };
+
+  const pushAfter = (log: FastifyBaseLogger, telegramUserId: bigint, outcome: LinkPushOutcome) =>
+    linkPushes.add(
+      push(log, telegramUserId, outcome).catch((error: unknown) => {
+        log.error(errorLogFields(error), 'link push failed');
+      }),
+    );
 
   // the bot confirms a login and runs the email login, so this half keeps the internal-token
   // pattern its neighbours use
@@ -324,7 +339,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             { outcome: OAuthErrorCode.TelegramUserMismatch },
             "the callback came from a Telegram user other than the state's owner",
           );
-          await push(request.log, consumed.telegramUserId, { kind: LinkPushKind.Mismatch });
+          pushAfter(request.log, consumed.telegramUserId, { kind: LinkPushKind.Mismatch });
           return reply.code(403).send({ error: OAuthErrorCode.TelegramUserMismatch });
         }
 
@@ -343,7 +358,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
             'the authorization code could not be exchanged',
           );
           // the state is spent, so the message says to start over rather than to retry
-          await push(request.log, consumed.telegramUserId, { kind: LinkPushKind.ExchangeFailed });
+          pushAfter(request.log, consumed.telegramUserId, { kind: LinkPushKind.ExchangeFailed });
           return reply.code(status).send({ error: code });
         }
 
@@ -356,7 +371,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
         if (!linked.ok) {
           const blocked = linked.reason === 'user_blocked';
           // to the Telegram user who started this login, never to the account's owner
-          await push(request.log, consumed.telegramUserId, {
+          pushAfter(request.log, consumed.telegramUserId, {
             kind: blocked ? LinkPushKind.Blocked : LinkPushKind.Taken,
           });
           return reply.code(409).send({
@@ -368,7 +383,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesDeps> = async (app, deps) 
         // the push and the response read one projection of the row, so they agree on the address
         const account = toBrokerAccountView(linked.account);
         // one button, for the account this login linked; any other waiting link is /start's
-        await push(
+        pushAfter(
           request.log,
           consumed.telegramUserId,
           account.status === BrokerAccountStatus.Pending

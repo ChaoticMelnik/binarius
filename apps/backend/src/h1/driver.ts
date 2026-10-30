@@ -44,9 +44,8 @@ import {
   type ActiveH1Session,
   type CreateSessionIntentInput,
   type CreateTradeIntentResult,
-  type SessionBalanceRead,
+  type SessionBatchRead,
   type SessionHistory,
-  type readSessionHistory,
   type SignalDecisionInput,
 } from '@binarius/db';
 import { assertH1WindowFits, createH1Detector, type H1Detector } from '@binarius/signal';
@@ -93,12 +92,12 @@ export interface H1DriverConfig {
 
 export interface H1DriverSessions {
   list(): Promise<ActiveH1Session[]>;
-  history(
+  // the session's history and balance as the orchestrator's tick reads them (Rule 48, #871):
+  // readSessionBatch for this one session; undefined when the session row is gone
+  read(
     id: string,
-    options: Parameters<typeof readSessionHistory>[2],
-  ): Promise<SessionHistory | undefined>;
-  // the session's balance as the orchestrator reads it (#696): awaitsBalance within waitMs
-  balance(id: string, options: { waitMs: number }): Promise<SessionBalanceRead | undefined>;
+    options: { maxDurationMs: number; noSignalTimeoutMs: number },
+  ): Promise<SessionBatchRead | undefined>;
   createIntent(input: CreateSessionIntentInput): Promise<CreateTradeIntentResult>;
   // the CAS stop: undefined when another writer stopped the session first
   stop(id: string, reason: TradingSessionStopReason): Promise<unknown>;
@@ -668,8 +667,8 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     return pair;
   }
 
-  const historyOf = (state: Tracked) =>
-    sessions.history(state.session.id, {
+  const readOf = (state: Tracked) =>
+    sessions.read(state.session.id, {
       maxDurationMs: SESSION_MAX_DURATION_MS,
       noSignalTimeoutMs: sessionNoSignalTimeoutMs(state.settings.durationSec),
     });
@@ -680,14 +679,16 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
   async function trade(state: Tracked, plan: H1TradePlan | null, trigger: H1RepeatTrigger) {
     const { session, settings } = state;
     const ids = { sessionId: session.id, brokerAccountId: session.brokerAccountId };
-    // the orchestrator's reading of the same history (Rule 48): the driver skips where it stops
-    const history = await historyOf(state);
+    // the orchestrator's reading of the same history and balance (Rule 48): the driver skips
+    // where it stops
+    const read = await readOf(state);
     if (stopped) return;
-    if (history === undefined) {
+    if (read === undefined) {
       counts.gone += 1;
       forget(session.id);
       return;
     }
+    const { history, balance } = read;
     const block = sessionIntentBlock(history, settings);
     if (block !== null) {
       state.repeatPending = false;
@@ -712,10 +713,6 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
     }
     const payout =
       pair?.payout ?? (plan!.kind === 'signal' ? plan!.signal.payout : plan!.pair.payout);
-    const balance = await sessions.balance(session.id, {
-      waitMs: sessionNoSignalTimeoutMs(settings.durationSec),
-    });
-    if (stopped) return;
     if (balance === undefined) {
       state.repeatPending = false;
       skippedLimits.balance_unavailable = (skippedLimits.balance_unavailable ?? 0) + 1;
@@ -868,13 +865,14 @@ export function createH1Driver(deps: H1DriverDeps): H1Driver {
   // no-signal limit reached and the database's wait expired too, the stop
   async function onNoSignal(state: Tracked, facts: H1DriverDecisionFacts) {
     const { settings } = state;
-    const history = await historyOf(state);
+    const read = await readOf(state);
     if (stopped) return;
-    if (history === undefined) {
+    if (read === undefined) {
       counts.gone += 1;
       forget(state.session.id);
       return;
     }
+    const { history } = read;
     if (sessionIntentBlock(history, settings) !== null) return;
     if (repeatDue(history, settings) !== null) {
       state.repeatPending = true;

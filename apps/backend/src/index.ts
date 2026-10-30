@@ -23,8 +23,7 @@ import {
   listActiveH1Sessions,
   listBotTextOverrides,
   listServiceBrokerAccounts,
-  readSessionBalance,
-  readSessionHistory,
+  readSessionBatch,
   recordSignalDecision,
   SESSION_NOTICE_CHANNEL,
   setLastAnalysis,
@@ -504,8 +503,8 @@ function createMarketData(
     streaming: () => manager.streaming(),
     sessions: {
       list: () => listActiveH1Sessions(db),
-      history: (id, options) => readSessionHistory(db, id, options),
-      balance: (id, options) => readSessionBalance(db, id, options),
+      read: async (id, { maxDurationMs, noSignalTimeoutMs }) =>
+        (await readSessionBatch(db, [{ id, noSignalTimeoutMs }], { maxDurationMs })).get(id),
       createIntent: (input) => createSessionIntent(db, input, { demoOnly: env.demoOnly }),
       stop: (id, reason) => stopTradingSession(db, { id, reason }),
       record: (input) => recordSignalDecision(db, input),
@@ -591,7 +590,8 @@ queueRedis.on('error', (error) =>
 
 let shuttingDown = false;
 
-// Phase 1 stops intake (HTTP and the publisher loop, which finishes its current row); phase 2
+// Phase 1 stops intake (HTTP, whose close also waits for the OAuth callback's pushes in flight,
+// #874, and the publisher loop, which finishes its current row); phase 2
 // closes connections and runs only if phase 1 finished — closing the pool under the publisher's
 // open transaction would abort it, so a stuck or failed phase 1 exits hard and lets the outbox
 // recover. A phase-2 failure is reported through the exit code too. Budgets: timing.ts.
@@ -696,7 +696,6 @@ if (!shuttingDown) {
   depositModeSwitcher.start();
   sessionNotices.start();
   sessionNoticeListener.start();
-  starReconciler.start();
   serviceAccounts.start();
   marketData?.manager.start();
   marketData?.backfill.start();
@@ -707,3 +706,8 @@ if (!shuttingDown) {
   // every staff login then answers 503 with a row in audit_log saying why.
   adminBot.start();
 }
+// The Stars reconciler's first tick is at start() (#874, Rule 65) and may push a credit in the
+// client texts: it starts after the overrides' first load, which settles within
+// BOT_TEXTS_LOAD_BUDGET_MS, failed or not, or on stop()
+await botTexts.loaded();
+if (!shuttingDown) starReconciler.start();

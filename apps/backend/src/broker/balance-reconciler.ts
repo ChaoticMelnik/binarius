@@ -19,7 +19,12 @@ import {
   type Db,
 } from '@binarius/db';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
-import { BALANCE_POLL_CONCURRENCY, BALANCE_STALLED_RETRY_MS } from '../timing';
+import {
+  BALANCE_FIRST_TICK_MIN_MS,
+  BALANCE_POLL_CONCURRENCY,
+  BALANCE_STALLED_RETRY_MS,
+  firstTickDelayMs,
+} from '../timing';
 
 // The REST side of the broker balance snapshot (docs/broker-balance.md): one refresh per account
 // at a time, called by POST /trading/access and by a background tick over the accounts in work.
@@ -49,6 +54,8 @@ export interface BalanceReconcilerConfig {
   concurrency?: number;
   watchWindowMs?: number;
   stalledRetryMs?: number;
+  // the first tick's floor after start() (#874)
+  firstTickMinMs?: number;
 }
 
 export interface BalanceReconcilerDeps {
@@ -57,6 +64,8 @@ export interface BalanceReconcilerDeps {
   accessToken: (accountId: string, options: AccessTokenOptions) => Promise<AccessTokenResult>;
   logger: Pick<FastifyBaseLogger, 'info' | 'warn' | 'error'>;
   config: BalanceReconcilerConfig;
+  // the first tick's jitter; Math.random by default
+  random?: () => number;
 }
 
 export interface BalanceReconciler {
@@ -106,7 +115,7 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
   const stalled = new Map<string, number>();
   const stopping = new AbortController();
   let stopped = false;
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: NodeJS.Timeout | undefined;
   let running: Promise<void> | undefined;
 
   async function fail(accountId: string, error: BalanceRefreshError): Promise<Attempt> {
@@ -328,13 +337,27 @@ export function createBalanceReconciler(deps: BalanceReconcilerDeps): BalanceRec
   return {
     refresh,
     tick,
+    // The first tick at a jittered delay inside the first interval, the interval from it (#874,
+    // Rule 65): the first minute after a start holds no more GETs than a steady one
     start() {
       if (stopped || timer !== undefined) return;
-      timer = setInterval(() => void tick(), deps.config.intervalMs);
+      const { intervalMs } = deps.config;
+      timer = setTimeout(
+        () => {
+          timer = setInterval(() => void tick(), intervalMs);
+          void tick();
+        },
+        firstTickDelayMs(
+          deps.config.firstTickMinMs ?? BALANCE_FIRST_TICK_MIN_MS,
+          intervalMs,
+          deps.random ?? Math.random,
+        ),
+      );
     },
     async stop() {
       stopped = true;
-      clearInterval(timer);
+      // the pending first tick or the interval: one handle at a time
+      clearTimeout(timer);
       timer = undefined;
       stopping.abort();
       await Promise.allSettled([running, ...[...flights.values()].map((flight) => flight.promise)]);

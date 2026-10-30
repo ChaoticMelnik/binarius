@@ -25,17 +25,19 @@ export interface TokenBalanceSnapshot {
   tradingMode: TradeMode;
 }
 
+export const tokenBalanceColumns = {
+  status: users.status,
+  balance: users.tokenBalance,
+  reserved: users.tokenReserved,
+  tradingMode: users.tradingMode,
+};
+
 export async function readTokenBalance(
   exec: DbExecutor,
   telegramUserId: bigint,
 ): Promise<TokenBalanceSnapshot | undefined> {
   const [row] = await exec
-    .select({
-      status: users.status,
-      balance: users.tokenBalance,
-      reserved: users.tokenReserved,
-      tradingMode: users.tradingMode,
-    })
+    .select(tokenBalanceColumns)
     .from(users)
     .where(eq(users.telegramUserId, telegramUserId));
   return row;
