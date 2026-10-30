@@ -69,9 +69,10 @@ working has one reason, in the token service's order of checks:
 
 `createServiceAccountKeeper` (`apps/backend/src/broker/service-accounts.ts`), one per backend
 process, built in `index.ts` with the token service's `accessToken` and the staff bot's
-`notifyStaff`. `start()` runs after `listen()` with the other loops; a tick every
-`SERVICE_ACCOUNTS_TICK_MS`, single-flight (a tick longer than the interval makes the next one a
-no-op). Each tick:
+`notifyStaff`. `start()` runs after `listen()` with the other loops; the first tick at a random
+point in `[SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS, SERVICE_ACCOUNTS_TICK_MS)` after it (#874, Rule 65),
+then a tick every `SERVICE_ACCOUNTS_TICK_MS` from that one, single-flight (a tick longer than the
+interval makes the next one a no-op). Each tick:
 
 1. **Renewals.** `listServiceRenewalCandidates`: marked, active, the user active, the token expiring
    within `SERVICE_TOKEN_RENEW_AHEAD_MS`, `coalesce(token_rotated_at, created_at)` older than
@@ -123,6 +124,7 @@ failed }` follows each attempt. No token, no account id and never the text are l
 | Constant | Value | Bounds |
 |---|---|---|
 | `SERVICE_ACCOUNTS_TICK_MS` | 60 000 | the keeper's period |
+| `SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS` | 5 000 | the first tick's floor after `start()` (#874), below `SERVICE_ACCOUNTS_TICK_MS` by the chain (`firstTickBoundsHold`) |
 | `SERVICE_TOKEN_RENEW_AHEAD_MS` | 86 400 000 | how long before its expiry a token is exchanged: a 429 leaves a day of retries a minute apart (the token lives 7 days, docs/binodex-oauth.md) |
 | `SERVICE_TOKEN_ROTATION_GAP_MS` | 3 600 000 | at most one timer exchange an hour per account, whatever lifetime the broker answers |
 | `SERVICE_RENEWALS_PER_TICK` | 5 | exchanges a tick |
@@ -139,7 +141,9 @@ worst case, about one per service account every six days in practice.
 ## Start and shutdown
 
 The keeper starts after `listen()` with the other loops and stops in phase 1 of the shutdown: the
-current tick finishes its exchange in flight, sends nothing more, and `stop()` resolves.
+current tick finishes its exchange in flight, sends nothing more, and `stop()` resolves. A `stop()`
+before the first tick cancels it (#874; the shape is the balance reconciler's,
+[broker-balance.md → Start and shutdown](broker-balance.md#start-and-shutdown)).
 
 ## The Rule 12 exception
 
@@ -235,7 +239,7 @@ Bringing it up the first time) and the backend and web running:
 
 ## Running it on the pilot (the owner's step)
 
-After the deploy, the first tick (a minute after the backend starts) finds no service account and
+After the deploy, the first tick (5–60 s after the backend starts) finds no service account and
 tells every active staff member once: «Служебных аккаунтов брокера в работе: 0 из минимум 3
 (отмечено: 0).» A process started below the minimum says so once (The alert). Then: admin →
 «Пользователи» → search `dimmelya@gmail.com` → the card → «Брокерские аккаунты» → «Сделать

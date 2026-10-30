@@ -37,8 +37,9 @@ web ──POST /auth/binodex/callback (public, no bearer), the body unchanged─
         │  initData signature + age (no query) ──▶ CAS on the state row
         │  ──▶ initData user == state's Telegram id ──▶ exchange code
         │  ──▶ link user + broker account (pending)
-        │  after the commit: sendMessage to the state's Telegram id ──▶ "✅ Подтвердить" button (#128)
         ◀── { account }                       web ──▶ page: { outcome } ──▶ its text
+        │  after the response: sendMessage to the state's Telegram id ──▶ "✅ Подтвердить" button
+        │  (#128; after the response since #874)
 user ──/start──▶ bot: pendingBrokerAccounts is not empty ──▶ "✅ Подтвердить" button (#10)
 bot ──POST /auth/binodex/confirm (internal token)──▶ backend   pending ──▶ active, starter pack
         ◀── { account, grant }
@@ -212,8 +213,9 @@ are answered before the `/oauth/*` hook and carry the admin defaults: the admin 
 same on both.
 
 **Timeouts.** The backend may hold the callback for `OAUTH_CALLBACK_BUDGET_MS` (8 s,
-`packages/shared/src/oauth.ts`): the code exchange (5 s) and the push (3 s); its timing chain
-checks that the two fit and that the budget fits in shutdown phase 1. `apps/web` waits 10 s for
+`packages/shared/src/oauth.ts`): the code exchange (5 s); the push (3 s) follows the response
+(#874). Its timing chain checks that the exchange fits, that the budget fits in shutdown phase 1,
+and that the push does too, since `app.close()` waits for it. `apps/web` waits 10 s for
 the forward (`OAUTH_CALLBACK_REQUEST_TIMEOUT_MS`), above the budget so it never gives up on a link
 that is still going to happen; its shutdown budget is 11 s and the compose `stop_grace_period`
 14 s. Both chains throw at import when out of order.
@@ -333,10 +335,14 @@ to the chat.
 | a database failure | 500 | none: the outcome is unknown |
 
 One attempt, after `linkBrokerAccount` has committed and outside any transaction, bounded by
-`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`; the code exchange plus
-the push stay inside shutdown phase 1, which the timing chain checks at import). The route
-awaits it, so the page can wait up to those 3 s longer (plus, after a 403, one database write),
-but its response does not depend on it: the status and body are the ones in the table whatever
+`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS` (3 s, `apps/backend/src/timing.ts`). Since #874 the route
+answers first and the push runs after the response, in an in-flight set
+(`apps/backend/src/in-flight.ts`) the auth plugin's `onClose` hook waits for: `app.close()`, shutdown
+phase 1, ends only after the pushes in flight, while the pool is still open for their two
+statements (the language read, the 403's write); the timing chain checks
+`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` at import. The page no longer
+waits for Telegram, and the message arrives a moment after it. The response does not depend on the
+push: the status and body are the ones in the table whatever
 Telegram answers, and nothing is written about the push, with one exception: a 403 marks the
 user as having blocked the bot (#119,
 [bot-start.md → Blocking the bot](bot-start.md#blocking-the-bot-119)) — their pending

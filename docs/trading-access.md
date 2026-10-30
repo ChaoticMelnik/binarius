@@ -12,7 +12,7 @@ side may refresh the snapshot.
 | Part | File | What it holds |
 | --- | --- | --- |
 | Contract | `packages/shared/src/trading-access.ts` | request and response schemas, `safeParseTradingAccessRequest` / `safeParseTradingAccessResponse`; `tokenCountSchema` (`trading.ts`) is the one spelling of a non-negative token count on the wire; a positive count (`linkBonusGrantViewSchema.tokens`, `oauth.ts`) keeps its own pattern |
-| Read | `packages/db/src/token-balance-ops.ts` | `readTokenBalance` (one `select` of the users row) and the allowlisted projection `toTradingAccessView` |
+| Read | `packages/db/src/trading-access-ops.ts`, `token-balance-ops.ts` | `readTradingAccessState` (#874): one `select` of the users row with the stakes, the trading switch and the account; `readTokenBalance` and the allowlisted projection `toTradingAccessView` |
 | Route | `apps/backend/src/trading/access.ts` | `registerTradingAccess`, registered inside the `tradingRoutes` plugin (`routes.ts`), so its bearer hook covers it; the broker section through `TradingRoutesDeps.balance` |
 | Broker contract | `packages/shared/src/broker-balance.ts` | `brokerBalanceViewSchema`, `BrokerBalanceUnavailableReason`, `TRADING_ACCESS_BUDGET_MS` |
 | Tests | `token-balance-ops.db.test.ts`, `access.db.test.ts`, `trading-access.test.ts`, `broker-balance.test.ts` | the cache against the ledger, concurrency, the HTTP outcomes against the mock broker, the parsers |
@@ -21,8 +21,9 @@ side may refresh the snapshot.
 
 ```text
 bot  → POST /trading/access { telegramUserId, brokerAccountId? }   (Authorization: Bearer INTERNAL_API_TOKEN)
-back → SELECT status, token_balance, token_reserved FROM users WHERE telegram_user_id = $1
-back → the account and its snapshot; at most one GET /v1/broker/user (Broker balance below)
+back → SELECT the token columns, the stakes, the trading switch and the account
+         FROM users ⟕ broker_accounts WHERE telegram_user_id = $1 LIMIT 2   (readTradingAccessState)
+back → UPDATE … RETURNING the snapshot; at most one GET /v1/broker/user (Broker balance below)
 back → 200 { status, tokens: { balance, reserved, available }, tradingMode, broker, brokerUnavailable,
              tradingOpen, demoStake, realStake }
        or 404 { error: 'user_not_found' } / 404 { error: 'broker_account_not_found' }
@@ -69,7 +70,8 @@ sends one, so for the bot's parser such a body is a contract violation, not numb
 ## Freshness and concurrency
 
 "Reflects `token_ledger`" means: the committed state of the user's row at the moment the one
-`select` takes its snapshot.
+`select` takes its snapshot. Since #874 that statement also carries the stakes, the trading
+switch and the account, so they are read before the broker step, not after it.
 
 - `balance` and `reserved` come from one statement, so from one committed version of the row. A
   reserve (`createInTransaction`: the users `UPDATE` and the ledger row in one transaction) is
@@ -156,8 +158,9 @@ What the route does, in order:
 
 1. Resolve the account. With `brokerAccountId`, the user's own account of that id whatever its
    status; without it, the user's only active account.
-2. Move `last_requested_at` and read the snapshot. A fresh one is answered from the database,
-   with no broker call.
+2. Move `last_requested_at` and read the snapshot, in one `UPDATE … RETURNING`
+   (`touchAndReadBalanceSnapshot`, #874). A fresh one is answered from the database, with no
+   broker call: the whole answer is two statements.
 3. A blocked user never reaches the broker (Rule 12). What is stored is still answered.
 4. If `ensureFreshAccessToken` would hand out the stored token as it is (same comparison and
    clock), one `GET /v1/broker/user` runs, bounded by `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 s).
