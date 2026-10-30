@@ -687,9 +687,9 @@ tr.current > td {
   margin: 0;
 }
 
-/* A table not yet on the component (the audit log and the service accounts until #817, the bot
-   texts until #657) is as wide as its content and scrolls inside itself when that is wider than
-   the page, so the page itself never scrolls sideways. #657 removes this with the last one. */
+/* A table not yet on the component (the bot texts until #657) is as wide as its content and
+   scrolls inside itself when that is wider than the page, so the page itself never scrolls
+   sideways. #657 removes this with the last one. */
 main table:not(.table) {
   display: block;
   width: max-content;
@@ -815,6 +815,16 @@ main table:not(.table) {
 
   .table td.agent {
     max-width: none;
+  }
+
+  .table td.payload {
+    max-width: none;
+  }
+
+  /* «нет: отозван (refresh_outcome_unknown)» of the service accounts is wider than the value
+     column of a 375 px card. */
+  .table .badge {
+    white-space: normal;
   }
 
   .table tbody tr:hover > td {

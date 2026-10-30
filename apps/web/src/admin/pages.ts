@@ -1318,7 +1318,15 @@ const auditActor = (entry: AdminAuditEntryView): SafeHtml => {
   return html`${name} ${code(entry.actorType)}${link}`;
 };
 
-// Only a user and an intent have a page; a type without an id links nowhere.
+const AUDIT_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnAuditAt },
+  { label: TEXTS.columnActor },
+  { label: TEXTS.columnAuditAction },
+  { label: TEXTS.columnEntity },
+  { label: TEXTS.columnPayload, className: 'payload' },
+];
+
+// Only a user and an intent have a page; an id without one is copied, a linked one is the link.
 const auditEntity = (entry: AdminAuditEntryView): SafeHtml => {
   const { entityType, entityId } = entry;
   if (entityId !== null && entityType === AuditEntityType.User) {
@@ -1327,21 +1335,18 @@ const auditEntity = (entry: AdminAuditEntryView): SafeHtml => {
   if (entityId !== null && entityType === AuditEntityType.TradeIntent) {
     return html`${code(entityType)} <a href="/admin/intents/${entityId}">${entityId}</a>`;
   }
-  return html`${code(entityType)} ${orNone(entityId)}`;
+  return html`${code(entityType)} ${idCodeOrNone(entityId)}`;
 };
 
-const auditRow = (entry: AdminAuditEntryView): SafeHtml =>
-  html`<tr>
-    <td>${when(entry.createdAt)}</td>
-    <td>${auditActor(entry)}</td>
-    <td>${code(entry.action)}</td>
-    <td>${auditEntity(entry)}</td>
-    <td class="payload">
-      <code class="payload">${entry.payload}</code>${
-        entry.payloadTruncated ? html` ${TEXTS.auditPayloadTruncated}` : ''
-      }
-    </td>
-  </tr>`;
+const auditCells = (entry: AdminAuditEntryView): Cell[] => [
+  when(entry.createdAt),
+  auditActor(entry),
+  code(entry.action),
+  auditEntity(entry),
+  html`<code class="payload">${entry.payload}</code>${
+      entry.payloadTruncated ? html` ${TEXTS.auditPayloadTruncated}` : ''
+    }`,
+];
 
 export const auditPage = (
   entries: readonly AdminAuditEntryView[],
@@ -1406,21 +1411,8 @@ export const auditPage = (
       <p class="hint">${TEXTS.auditFilterHint}</p>
       ${
         entries.length === 0
-          ? html`<p>${TEXTS.auditEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnAuditAt}</th>
-                  <th>${TEXTS.columnActor}</th>
-                  <th>${TEXTS.columnAuditAction}</th>
-                  <th>${TEXTS.columnEntity}</th>
-                  <th>${TEXTS.columnPayload}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${entries.map(auditRow)}
-              </tbody>
-            </table>`
+          ? empty(TEXTS.auditEmpty)
+          : table(AUDIT_COLUMNS, entries.map(auditCells))
       }
       <p class="pager">
         ${
@@ -1618,6 +1610,34 @@ const notWorkingLabel = (account: AdminServiceAccountView): string => {
   );
 };
 
+const SERVICE_ACCOUNT_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnEmail },
+  { label: TEXTS.columnBrokerUserId },
+  { label: TEXTS.columnTelegramId },
+  { label: TEXTS.columnStatus },
+  { label: TEXTS.columnWorking },
+  { label: TEXTS.columnTokenExpiresAt },
+  { label: TEXTS.columnTokenRotatedAt },
+  { label: TEXTS.columnServiceSince },
+  { label: '' },
+];
+
+// «да» green, «нет: <reason>» red: a state, as the statuses are
+const workingBadge = (account: AdminServiceAccountView): SafeHtml =>
+  badge(account.notWorkingReason === null ? 'success' : 'danger', notWorkingLabel(account));
+
+const serviceAccountCells = (account: AdminServiceAccountView): Cell[] => [
+  orNone(account.email),
+  account.brokerUserId,
+  html`<a href="/admin/users/${account.userId}">${account.telegramUserId}</a>`,
+  badge(ACCOUNT_STATUS_BADGE[account.status], TEXTS.accountStatus[account.status]),
+  workingBadge(account),
+  when(account.accessTokenExpiresAt),
+  whenOrNone(account.tokenRotatedAt),
+  whenOrNone(account.serviceSince),
+  serviceMarkForm(account.id, false, SERVICE_ACCOUNTS_PATH),
+];
+
 export const serviceAccountsPage = ({
   me,
   min,
@@ -1633,40 +1653,8 @@ export const serviceAccountsPage = ({
       <p class="hint">${TEXTS.serviceAccountsHint}</p>
       ${
         accounts.length === 0
-          ? html`<p>${TEXTS.serviceAccountsEmpty}</p>`
-          : html`<table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnEmail}</th>
-                  <th>${TEXTS.columnBrokerUserId}</th>
-                  <th>${TEXTS.columnTelegramId}</th>
-                  <th>${TEXTS.columnStatus}</th>
-                  <th>${TEXTS.columnWorking}</th>
-                  <th>${TEXTS.columnTokenExpiresAt}</th>
-                  <th>${TEXTS.columnTokenRotatedAt}</th>
-                  <th>${TEXTS.columnServiceSince}</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                ${accounts.map(
-                  (account) =>
-                    html`<tr>
-                      <td>${orNone(account.email)}</td>
-                      <td>${account.brokerUserId}</td>
-                      <td>
-                        <a href="/admin/users/${account.userId}">${account.telegramUserId}</a>
-                      </td>
-                      <td>${TEXTS.accountStatus[account.status]}</td>
-                      <td>${notWorkingLabel(account)}</td>
-                      <td>${when(account.accessTokenExpiresAt)}</td>
-                      <td>${whenOrNone(account.tokenRotatedAt)}</td>
-                      <td>${whenOrNone(account.serviceSince)}</td>
-                      <td>${serviceMarkForm(account.id, false, SERVICE_ACCOUNTS_PATH)}</td>
-                    </tr>`,
-                )}
-              </tbody>
-            </table>`
+          ? empty(TEXTS.serviceAccountsEmpty)
+          : table(SERVICE_ACCOUNT_COLUMNS, accounts.map(serviceAccountCells))
       }`,
   });
 

@@ -48,4 +48,10 @@ describe('the admin stylesheet (#459)', () => {
     expect(ADMIN_CSS).toContain('main table:not(.table) {');
     expect(ADMIN_CSS).not.toMatch(/main table\s*\{/);
   });
+
+  // #817: in a 375 px card a long service-account badge wraps and the audit payload has no cap
+  it('S8 wraps a badge and uncaps the payload cell in the row card', () => {
+    expect(ADMIN_CSS).toMatch(/\.table \.badge\s*\{[^}]*white-space:\s*normal/);
+    expect(ADMIN_CSS).toMatch(/\.table td\.payload\s*\{[^}]*max-width:\s*none/);
+  });
 });

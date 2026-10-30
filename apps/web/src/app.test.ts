@@ -25,6 +25,7 @@ import {
   TOKEN_ADJUSTMENT_MAX_TOKENS,
   TOKEN_LEDGER_NOTE_MAX,
   H1_R1_PARAMS,
+  ServiceAccountNotWorkingReason,
   TokenLedgerKind,
   TradeIntentStatus,
   UNNAMED_ERROR_MESSAGE,
@@ -46,6 +47,8 @@ import { SESSION_COOKIE, CHALLENGE_COOKIE } from './admin/routes';
 import {
   SAMPLE_ADJUSTED,
   SAMPLE_AUDIT,
+  SAMPLE_AUDIT_ENTRY,
+  SAMPLE_AUDIT_ENTRY_INTENT,
   SAMPLE_AUDIT_ENTRY_NULLS,
   SAMPLE_BOT_TEXT,
   SAMPLE_BOT_TEXTS,
@@ -84,10 +87,12 @@ import {
 import { ADMIN_CLIENT_JS } from './admin/client';
 import { EXPORTED_PAGES } from './admin/export-pages';
 import {
+  auditPage,
   brokerAccountsPage,
   depositsPage,
   intentPage,
   intentsPage,
+  serviceAccountsPage,
   sessionsPage,
   starRefundsPage,
   tokensPage,
@@ -2135,7 +2140,7 @@ describe('the audit log page (#110)', () => {
 
     expect(systemRow).toContain('cli <code>system</code>');
     expect(response.body).not.toContain('href="/admin/audit?actorId=cli"');
-    expect(systemRow).toMatch(/<td>\s*— —\s*<\/td>/);
+    expect(systemRow).toContain(`<td data-label="${TEXTS.columnEntity}">— —</td>`);
     expect(systemRow).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
     expect(systemRow).not.toContain('<script>');
     expect(systemRow).toContain(TEXTS.auditPayloadTruncated);
@@ -2158,8 +2163,8 @@ describe('the audit log page (#110)', () => {
     const response = await get('/admin/audit', withCookie);
 
     const [only = ''] = rowsOf(response.body);
-    expect(only).toMatch(/<td>\s*— <code>system<\/code>\s*<\/td>/);
-    expect(only).toMatch(/<td>\s*<code>user<\/code> —\s*<\/td>/);
+    expect(only).toContain(`<td data-label="${TEXTS.columnActor}">— <code>system</code></td>`);
+    expect(only).toContain(`<td data-label="${TEXTS.columnEntity}"><code>user</code> —</td>`);
     expect(response.body).not.toContain('href="/admin/users/null"');
   });
 
@@ -4056,8 +4061,8 @@ describe('the service accounts (#391)', () => {
       'ada@example.com',
       'broker-7',
       `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
-      TEXTS.accountStatus.active,
-      'да',
+      `<span class="badge badge-success">${TEXTS.accountStatus.active}</span>`,
+      '<span class="badge badge-success">да</span>',
       time(w?.accessTokenExpiresAt ?? ''),
       TEXTS.none,
       time(w?.serviceSince ?? ''),
@@ -4066,10 +4071,10 @@ describe('the service accounts (#391)', () => {
       TEXTS.none,
       'broker-&lt;b&gt;',
       `<a href="/admin/users/${SAMPLE_USER_ID}">4242</a>`,
-      TEXTS.accountStatus.revoked,
-      'нет: отозван (refresh_outcome_unknown)',
+      `<span class="badge badge-danger">${TEXTS.accountStatus.revoked}</span>`,
+      '<span class="badge badge-danger">нет: отозван (refresh_outcome_unknown)</span>',
     ]);
-    expect(cellsOf(expired)[4]).toBe('нет: токен истёк');
+    expect(cellsOf(expired)[4]).toBe('<span class="badge badge-danger">нет: токен истёк</span>');
     expect(working).toMatch(formOf('off', '/admin/service-accounts', w?.id));
     expect(revoked).toMatch(formOf('off', '/admin/service-accounts', r?.id));
     expect(expired).toMatch(formOf('off', '/admin/service-accounts', e?.id));
@@ -4407,7 +4412,9 @@ describe('the admin lists and cards (#656)', () => {
     'tokens',
     'deposits',
     'broker-accounts',
+    'service-accounts',
     'star-refunds',
+    'audit',
   ] as const;
   const render = (name: string): string => EXPORTED_PAGES[name]?.().value ?? '';
   const attrOf = (tag: string, name: string): string | undefined =>
@@ -4497,6 +4504,16 @@ describe('the admin lists and cards (#656)', () => {
         })),
         { nextCursor: null, login: LOGIN },
       ).value,
+    serviceAccount: (status) =>
+      serviceAccountsPage({
+        ...SAMPLE_SERVICE_ACCOUNTS,
+        accounts: [
+          {
+            ...SAMPLE_SERVICE_ACCOUNTS.accounts[0]!,
+            status: status as typeof SAMPLE_BROKER_ACCOUNT.status,
+          },
+        ],
+      }).value,
   };
   const codeOf = (status: string) => `<code>${status}</code>`;
   // the expected colour of every status, written out here rather than read from pages.ts
@@ -4528,6 +4545,9 @@ describe('the admin lists and cards (#656)', () => {
     ['account', 'active', 'success', TEXTS.accountStatus.active],
     ['account', 'pending', 'warning', TEXTS.accountStatus.pending],
     ['account', 'revoked', 'danger', TEXTS.accountStatus.revoked],
+    ['serviceAccount', 'active', 'success', TEXTS.accountStatus.active],
+    ['serviceAccount', 'pending', 'warning', TEXTS.accountStatus.pending],
+    ['serviceAccount', 'revoked', 'danger', TEXTS.accountStatus.revoked],
     ['deposit', 'received', 'info', codeOf('received')],
     ['deposit', 'credited', 'success', codeOf('credited')],
     ['deposit', 'ignored', 'neutral', codeOf('ignored')],
@@ -4542,11 +4562,12 @@ describe('the admin lists and cards (#656)', () => {
     expect(body).toContain(`<span class="badge badge-${variant}">${text}</span>`);
   });
 
-  it('L2 covers every status of the six sets', () => {
+  it('L2 covers every status of the seven sets', () => {
     const covered = (set: string) => BADGES.filter(([s]) => s === set).map(([, status]) => status);
     expect(covered('user').sort()).toEqual(['active', 'blocked']);
     expect(covered('intent').sort()).toEqual(Object.values(TradeIntentStatus).sort());
     expect(covered('account').sort()).toEqual(Object.values(BrokerAccountStatus).sort());
+    expect(covered('serviceAccount').sort()).toEqual(Object.values(BrokerAccountStatus).sort());
     expect(covered('deposit').sort()).toEqual(Object.values(DepositEventStatus).sort());
   });
 
@@ -4582,6 +4603,16 @@ describe('the admin lists and cards (#656)', () => {
       'Stars refunds',
       () => starRefundsPage([], { nextCursor: null, login: LOGIN }).value,
       TEXTS.starRefundsEmpty,
+    ],
+    [
+      'service accounts',
+      () => serviceAccountsPage({ ...SAMPLE_SERVICE_ACCOUNTS, accounts: [] }).value,
+      TEXTS.serviceAccountsEmpty,
+    ],
+    [
+      'audit',
+      () => auditPage([], { filters: {}, nextCursor: null, login: LOGIN }).value,
+      TEXTS.auditEmpty,
     ],
   ];
 
@@ -4667,6 +4698,13 @@ describe('the admin lists and cards (#656)', () => {
         starRefundsPage(SAMPLE_STAR_REFUNDS.requests, { cursor, nextCursor: next, login: LOGIN })
           .value,
     ],
+    [
+      '/admin/audit',
+      TEXTS.auditFirst,
+      (cursor, next = CURSOR) =>
+        auditPage([SAMPLE_AUDIT_ENTRY], { filters: {}, cursor, nextCursor: next, login: LOGIN })
+          .value,
+    ],
   ];
 
   it.each(PAGED)('L4 the pager of %s is plain links, to the first and the next page', (path, first, page) => {
@@ -4716,5 +4754,70 @@ describe('the admin lists and cards (#656)', () => {
 
   it.each(Object.keys(EXPORTED_PAGES))('L5 %s has no inline event handler', (name) => {
     expect(render(name)).not.toMatch(/\son[a-z]+=/i);
+  });
+});
+
+describe('the audit log and the service accounts on the components (#817)', () => {
+  const LOGIN = SAMPLE_ME.login;
+  const count = (body: string, text: string) => body.split(text).length - 1;
+  const badgeOf = (variant: string, text: string) =>
+    `<span class="badge badge-${variant}">${text}</span>`;
+
+  it('K1 «В работе» is a green «да» or a red «нет: <reason>», the texts as before', () => {
+    const body = serviceAccountsPage(SAMPLE_SERVICE_ACCOUNTS).value;
+    expect(
+      count(
+        body,
+        `<td data-label="${TEXTS.columnWorking}">${badgeOf('success', TEXTS.serviceWorking)}</td>`,
+      ),
+    ).toBe(1);
+    expect(body).toContain(badgeOf('danger', 'нет: отозван (refresh_outcome_unknown)'));
+    expect(body).toContain(badgeOf('danger', 'нет: токен истёк'));
+  });
+
+  it.each(Object.values(ServiceAccountNotWorkingReason))(
+    'K1 a service account not working because of %s is a red badge with its reason',
+    (reason) => {
+      const body = serviceAccountsPage({
+        ...SAMPLE_SERVICE_ACCOUNTS,
+        accounts: [
+          {
+            ...SAMPLE_SERVICE_ACCOUNTS.accounts[0]!,
+            working: false,
+            notWorkingReason: reason,
+            authRevokedReason: null,
+          },
+        ],
+      }).value;
+      expect(body).toContain(
+        `<td data-label="${TEXTS.columnWorking}">${badgeOf('danger', TEXTS.serviceNotWorking(TEXTS.serviceReason[reason]))}</td>`,
+      );
+    },
+  );
+
+  it('K2 the audit log copies an entity id with no card, a linked or missing one has no button', () => {
+    const id = SAMPLE_BROKER_ACCOUNT.id;
+    const body = auditPage(
+      [
+        SAMPLE_AUDIT_ENTRY,
+        SAMPLE_AUDIT_ENTRY_INTENT,
+        { ...SAMPLE_AUDIT_ENTRY_NULLS, entityType: AuditEntityType.BrokerAccount, entityId: id },
+        SAMPLE_AUDIT_ENTRY_NULLS,
+      ],
+      { filters: {}, nextCursor: null, login: LOGIN },
+    ).value;
+    expect([...body.matchAll(/data-copy="([^"]*)"/g)].map((m) => m[1])).toEqual([id]);
+    expect(body).toContain(
+      `<td data-label="${TEXTS.columnEntity}"><code>broker_account</code> <code>${id}</code><button type="button" class="icon-btn copy no-js-hidden" data-copy="${id}"`,
+    );
+    expect(body).not.toContain(`href="/admin/users/${id}"`);
+  });
+
+  it('K3 the payload cell keeps its class through the component, the truncation note inside it', () => {
+    const body = EXPORTED_PAGES.audit?.().value ?? '';
+    expect(
+      count(body, `<td data-label="${TEXTS.columnPayload}" class="payload"><code class="payload">`),
+    ).toBe(SAMPLE_AUDIT.entries.length);
+    expect(count(body, `</code> ${TEXTS.auditPayloadTruncated}</td>`)).toBe(1);
   });
 });
