@@ -485,8 +485,9 @@ The plain `up -d` recreates the worker with a gap in which no process takes jobs
 - ARCH-05: #87 the load stand, #88 degradation.
 - #92 shipped: the writers' dead letters above, and the balance check after a reconciliation
   (docs/trade-intent-transport.md). #274 shipped (`not_found` on a proven absence, demo). #278, #279; #281 shipped (risk 2). The session orchestrator (#287, shipped, docs/trading-session.md)
-  keeps its account in work between trades through `touchBalanceRequested`, so its socket stays open
-  while the next attempt comes within `BALANCE_WATCH_WINDOW_MS` (10 min); its hold of
+  keeps its account in work between trades through the tick's batch touch (`touchBalancesRequested`,
+  #871), so its socket stays open while the next check comes within `BALANCE_WATCH_WINDOW_MS`
+  (10 min); its hold of
   `TRADING_SESSION_H1_CHECK_MS` keeps it inside (the candle waits of 15m–1h sessions that could
   drop out ended with the candle path in #835;
   [trading-session.md → The orchestrator](trading-session.md#the-orchestrator)).

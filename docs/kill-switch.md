@@ -17,8 +17,9 @@ While the switch is closed:
   next tick stops a session before its catalog read; an intent the driver creates in that window
   is refused `trading_paused` and the driver stops the session `kill_switch`
   ([h1.md](h1.md)); the orchestrator creates no intent since #835. How long that takes is not bounded by `TRADING_SESSION_TICK_MS`:
-  a tick runs its attempts one after another, and the sweep stops at most
-  `TRADING_SESSION_BATCH_SIZE` sessions per tick ([trading-session.md](trading-session.md));
+  a tick waits for its batch (at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`), a woken tick runs no
+  sweep (#871), and the sweep stops at most `TRADING_SESSION_BATCH_SIZE` sessions per tick
+  ([trading-session.md](trading-session.md));
 - trades already open, the broker sockets, reconciliation, settlement catch-up, the balance tick
   and the signal route go on as before.
 

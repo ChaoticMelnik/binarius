@@ -35,9 +35,9 @@ pnpm test --project integration apps/trading-worker/src/trading-session/orchestr
 | Pair predicates (#283) | `packages/shared/src/catalog.ts` | `isPairOpen`, `pairAcceptsDuration`; the bot's demo checks and the start route both call them |
 | Routes (#283) | `apps/backend/src/trading/session-routes.ts` | `POST /trading/sessions`, `GET /trading/sessions/:id`, `POST /trading/sessions/:id/stop`, `POST /trading/sessions/:id/summary` (#318, #537), `POST /trading/sessions/:id/share` (#538), `POST /trading/sessions/stop` (#122), `POST /trading/sessions/:id/status-message`, `POST /trading/sessions/:id/status-message/lost` and `GET /trading/sessions/tracked` (#567) behind the internal bearer |
 | Table | `packages/db/src/schema/trading-sessions.ts`, migration `0018_trading_session_orchestration` | the columns and constraints below |
-| Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the start check and the owner-scoped view (#283) |
+| Operations | `packages/db/src/trading-session-ops.ts` | create, the runnable scan, the two stop sweeps, the history, the CAS stop, the decision mark, the session intent; the orchestrator's batch read, batch stop and batch mark (#871); the start check and the owner-scoped view (#283) |
 | Session lock | `packages/db/src/trade-intent-ops.ts` → `createInTransaction` | the session row locked inside the intent's creation transaction |
-| Orchestrator (#287) | `apps/trading-worker/src/trading-session/orchestrator.ts` | the tick, the three sweeps, the attempt and its endings |
+| Orchestrator (#287) | `apps/trading-worker/src/trading-session/orchestrator.ts` | the tick, the three sweeps, the batch (#871): its reads, its decisions in memory and its writes |
 | Backend client (#287) | `apps/trading-worker/src/trading-session/backend.ts` | `GET /trading/pairs` under the internal bearer (the signal source removed in #835) |
 | Constants (#287) | `apps/trading-worker/src/trading-session/config.ts` | `TRADING_SESSION_*`, the chain checked at import |
 | CLI (#670, #830) | `apps/backend/src/cli/h1.ts`, `h1-session.ts` | `h1 session start|stop|status`: a session on any account, [h1.md → Sessions](h1.md#sessions-670) |
@@ -215,14 +215,17 @@ session trades on its signals ([The payout order key](#the-payout-order-key-379-
 | `checkTradingSessionStart(db, { telegramUserId, brokerAccountId?, mode })` | plain selects, no lock | the start route's refusals, the first that applies wins: the trading switch (`trading_paused` while it is closed, #144), the user (`user_not_found`, `user_blocked`), the account by `resolveTradingAccount` — the single trade's rule (`broker_account_not_found`, `account_not_confirmed`, `ambiguous_broker_account`) —, its status (`account_revoked`, `account_not_confirmed`, `account_halted`), an active session of the account (`active_session_exists` with its id and the account), then fewer than one available token (`insufficient_tokens`). On success: the account and its token expiry |
 | `readTradingSessionView(db, id, telegramUserId)` | three selects in one `REPEATABLE READ` read-only transaction | the session joined to its account's user, so another user's id and a missing one are both `undefined`; the counters over the session's own intents (`settled`, `rejected`; `won`/`lost`/`tied` by the sign of the linked `broker_trades.profit`, compared in SQL); the newest intent by `created_at desc, id desc`, whose `action` is `signalAction`, else the row's `start_signal_action` (#568). `settings` that fail every version read as `null`, with `cycles` `{ planned: 0, closed: 0 }`; otherwise `cycles` is `sessionProgress` over the same counters (#552) |
 | `readActiveTradingSessionView(db, brokerAccountId, telegramUserId)` | `readTradingSessionView`'s three selects, the first by the account and `status = active` | the account's active session as its owner sees it, in one snapshot: `undefined` when it has none, so a session stopped before the read is never returned (#283 m3, `trading-session-ops.db.test.ts` V1, V2) |
-| `listRunnableSessions(db, { limit, maxDurationMs, exclude })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw |
+| `listRunnableSessions(db, { limit, maxDurationMs, exclude, accounts? })` | one select (`trading_sessions_runnable_idx`) | `active`, within the deadline (`started_at >= now() − maxDurationMs`, the expiry sweep's boundary on the database clock, so a session the capped sweep left over is never listed), and no non-terminal intent on the account (the active-intent index's own predicate, so a bot trade holds the session too); `last_decision_at asc nulls first, created_at`; `settings` raw. `exclude` and `accounts` (#871: a woken tick's accounts; an empty list scans nothing, R5) are one `uuid[]` parameter each (`= any(…)`) |
 | `stopExpiredSessions(db, { maxDurationMs, limit })` | one UPDATE | `started_at < now() − maxDurationMs` → `stopped`/`timeout` |
 | `stopHaltedSessions(db, { limit })` | one UPDATE | the account `trading_halted`, or an intent of the session in `manual_review` → `stopped`/`manual_review` |
 | `stopPausedSessions(db, { limit })` | one UPDATE | every active session while the trading switch is closed (`not tradingOpenSql`) → `stopped`/`kill_switch` (#144); only a person starts one again. The orchestrator's tick runs it first |
 | `stopTradingSession(db, { id, reason })` | one UPDATE | CAS on `status = active`: a second stop finds nothing and the first reason stays |
 | `stopUserSessions(exec, { telegramUserId })` | one UPDATE | the stop routes pass `db`, `setTradingMode` its transaction (#327); every `active` session whose account belongs to `users.telegram_user_id` → `stopped`/`user_stopped` (#122); the owner is the predicate (a subquery joining `broker_accounts` and `users`, no lock on them), so another user's id stops nothing; `status = active` is the CAS, so a session another writer stopped first keeps its reason and is not returned. No limit: one active session per account |
 | `markSessionDecision(db, { id })` | one UPDATE | `last_decision_at = now()` on an active session |
-| `readSessionHistory(db, sessionId, { maxDurationMs, noSignalTimeoutMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read), `waitExpired` ([the no-signal limit](#the-no-signal-limit-509)) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit` |
+| `readSessionHistory(db, sessionId, { maxDurationMs, noSignalTimeoutMs })` | two selects | the owner's `telegram_user_id`, `expired` (the same deadline boundary, database clock, at this read), `waitExpired` ([the no-signal limit](#the-no-signal-limit-509)) and the session's own intents in creation order with `action`, `status`, `amount`, `last_error` and the linked `broker_trades.profit`; the H1 driver's read |
+| `readSessionBatch(db, [{ id, noSignalTimeoutMs }], { maxDurationMs })` (#871) | two selects | `readSessionHistory` and `readSessionBalance` for every session of the orchestrator's batch: the rows over `unnest($ids::uuid[], $limits::int[])` (each session's own no-signal limit) with the owner, `expired`, `waitExpired`, and the snapshot as a LEFT JOIN (none → `balance: undefined`); then every intent of the batch, grouped in memory. The same SQL fragments as the single reads, one formula per fact (B1–B6); a missing id is missing from the map; nothing for an empty list |
+| `markSessionDecisions(db, ids)` (#871) | one UPDATE | `markSessionDecision` over the list, `status = active` in the WHERE (D2); nothing for an empty list |
+| `stopTradingSessions(db, { ids, reason })` (#871) | one UPDATE | `stopTradingSession`'s CAS over the list, `RETURNING` the sessions it stopped (T2); nothing for an empty list |
 | `createSessionIntent(db, input)` | `createTradeIntent`'s transaction | the request key `session:<id>:<step>`, so a repeated step is a replay and the same step with other terms is `client_request_id_conflict`; the session lock below |
 
 Every stop writes `ended_at`, `last_decision_at` and `updated_at` as `now()`; every UPDATE that
@@ -493,7 +496,7 @@ T3). One indexed read, no broker call.
 three UPDATEs that match nothing and one indexed scan. There is no env variable. Since #835 it
 creates no intent and asks no signal: every session is an H1 session (settings v5; a read-only v4
 row of #670) whose trades the backend's H1 driver opens ([h1.md → The driver](h1.md#the-driver-707)),
-and the attempt stops the session or holds it for the driver.
+and the tick stops the session or holds it for the driver.
 
 **The tick** (every `TRADING_SESSION_TICK_MS`, one at a time, the first at `start()`, and at once
 on a wake, #696), in this order:
@@ -502,58 +505,82 @@ on a wake, #696), in this order:
    `TRADING_SESSION_BATCH_SIZE` per tick). It runs first, so a switch closed before the tick stops
    a session before its catalog read (`orchestrator.db.test.ts` K1). A switch closed during a tick
    does not interrupt it; an intent the driver creates in that window is refused `trading_paused`
-   and the driver stops the session `kill_switch`. A tick runs its attempts one after another, so
-   it can take longer than `TRADING_SESSION_TICK_MS`.
+   and the driver stops the session `kill_switch`. A tick waits for its batch (step 6, at most
+   `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`), so it can take longer than `TRADING_SESSION_TICK_MS`.
 2. `stopExpiredSessions` with `SESSION_MAX_DURATION_MS` → `timeout`, even with a live intent (E7).
 3. `stopHaltedSessions` → `manual_review` (E6).
-4. The in-memory hold-backs whose time has passed are dropped.
-5. `listRunnableSessions({ limit: TRADING_SESSION_BATCH_SIZE, maxDurationMs, exclude: <held back> })`:
-   a session past the deadline is never listed, even when more expired than the sweep's cap (E7b),
-   and neither is one whose account has a live intent.
-6. One attempt per runnable session, one after another. Each runs under
+4. The in-memory hold-backs that end at or before the tick's clock are dropped.
+5. `listRunnableSessions({ limit: TRADING_SESSION_BATCH_SIZE, maxDurationMs, exclude: <held back> })`,
+   on a woken tick with `accounts` ([The wake](#the-orchestrator)): a session past the deadline is
+   never listed, even when more expired than the sweep's cap (E7b), and neither is one whose
+   account has a live intent.
+6. **The batch** (#871), every runnable session at once: the settings of each in memory (the
+   `invalid_settings` stops need no read); `readSessionBatch` for the rest — two statements; the
+   decisions up to the pair step ([The decision](#the-orchestrator)); one `pairs.read` when any
+   session reached that step, none otherwise (P1); the rest of the decisions; then the writes —
+   `stopTradingSessions` once per stop reason (S1), `markSessionDecisions` once for every hold-back
+   and reschedule, `touchBalancesRequested` once for the accounts of the sessions that reached the
+   pair step — and the hold-backs in memory. The batch runs under
    `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (a race, as in the settlement catch-up: the race bounds the
-   tick's wait, not a statement; a statement that outlives it still lands, and the next attempt
-   reads its result).
-7. One `debug` line `trading session tick`, `{ runnable, attempted, held, stopped, woken }`;
-   `woken` is the number of `wake()` calls this tick served (0 on a tick of the interval).
+   tick's wait, not a statement). Past it — one `warn` `trading session batch timed out`, nothing
+   more is written and nothing is held back, so the next tick takes the batch again (T1); a
+   statement already sent still lands (a mark, a touch — idempotent; a stop — its CAS) and the next
+   tick reads its result. A checkpoint after every await (the deadline, `stop()`) keeps a batch the
+   race left behind from writing.
+7. One `debug` line `trading session tick`, `{ runnable, attempted, held, stopped, woken, accounts,
+   ms }`; `woken` is the number of `wake()` calls this tick served (0 on a tick of the interval),
+   `accounts` the accounts of a woken tick over its accounts only (0 on a full tick), `ms` the
+   tick's wall time.
 
-A throw out of steps 1–5, or out of an ending's write after an attempt (`stopTradingSession`,
-`markSessionDecision`), is one `error` line, `trading session tick failed`; the rest of that tick's
-batch is skipped and the next tick runs as usual. Every sweep carries `status = 'active'` in its WHERE, so a session stopped by one writer
-keeps the first reason.
+The tick reads the worker's clock once, before step 1 (`tickAt`): the hold-backs (step 4 and their
+ends), the pair's hours and the sizer's `nowMs` read it; the deadline, `waitExpired`,
+`awaitsBalance` and the order key are the database's, inside the statements. A tick is a constant
+number of statements and HTTP calls, whatever the number of sessions: a full tick — three sweeps,
+the scan, the batch's two reads, at most one pairs GET, one stop per reason, at most one mark and
+one touch (eight for 3 000 held sessions, N1); a woken tick — the same without the sweeps (WK7).
+Rule 63. The batch is statement after statement on one `Db`: the orchestrator holds at most one
+pool connection at a time (#867 is the bounded parallelism).
 
-**The attempt.** The first row that applies is the ending:
+A throw out of a sweep, the scan, the batch's read, the pairs source or a write
+(`stopTradingSessions`, `markSessionDecisions`, `touchBalancesRequested`) is one `error` line,
+`trading session tick failed`; the rest of that tick is skipped, nothing is held back, and the next
+tick runs as usual (F1′). Every sweep and every stop carries `status = 'active'` in its WHERE, so a
+session stopped by one writer keeps the first reason.
+
+**The decision.** Each session of the batch is decided in memory over the batch's read and the
+tick's one catalog, in this order; the first row that applies is the ending:
 
 | Step | Outcome | Ending |
 |---|---|---|
 | `settings` (`safeParseTradingSessionSettings`), the sizer from `sessionStakeParams(settings)` (#450: the row's strategy and limits) | fails | stop `invalid_settings` (E9c) |
 | `isH1Settings(settings)` | false (v1–v3, #835) | stop `invalid_settings`, `version` in the line, before any read (V1) |
-| `readSessionHistory` (with `waitExpired`, [the no-signal limit](#the-no-signal-limit-509)) | the row is gone (a race with a delete) | hold back `TRADING_SESSION_RETRY_MS` |
+| the batch's history (`readSessionBatch`, with `waitExpired`, [the no-signal limit](#the-no-signal-limit-509)) | the row is gone (a race with a delete) | hold back `TRADING_SESSION_RETRY_MS` |
 | | `expired`: the deadline passed since the scan (database clock) | stop `timeout`, before any backend call (E7c′) |
 | | an intent of the session is live (a race with the scan) | reschedule |
 | | `sessionProgress(settings, { settled, won })`: done ≥ planned (#552; `won` — a settled intent whose profit reads positive) | stop `completed` (E1′; a loss never completes a martingale session, H1-O2, H1-O2b, H1-O2c) |
 | | the last two intents are `rejected` | stop `rejected_twice` (H1-O9, R3′) |
-| `readSessionBalance` (#696: the amount of the session's mode, `minTradeAmount` and `awaitsBalance` in one statement) | no row | stop `balance_unavailable` (E9c, H1-O8) |
+| the batch's balance (#696: the amount of the session's mode, `minTradeAmount` and `awaitsBalance` in the batch's first statement) | no row | stop `balance_unavailable` (E9c, H1-O8) |
 | | a row | `available` = the balance of the session's mode (`real.available` for a real session, E9a′); `awaitsBalance` — a settle of any intent on the session's account in its mode (this session's, an earlier session's, a bot's one-off trade) is newer than that mode's newest observation and less than the no-signal limit old (`trade_intents.updated_at` of the `settled` row, the database clock); wider than the view's `balance.current`, which counts this session's trades only (SB1–SB9) |
-| `touchBalanceRequested` | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades while the next attempt comes within `BALANCE_WATCH_WINDOW_MS` (10 min); the hold of `TRADING_SESSION_H1_CHECK_MS` keeps the next attempt inside it |
-| `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f) |
+| `touchBalancesRequested`, one for the batch (the tick's writes) | — | keeps the account "in work", so the balance refresh and the broker socket stay on it between trades while the next check comes within `BALANCE_WATCH_WINDOW_MS` (10 min); the hold of `TRADING_SESSION_H1_CHECK_MS` keeps the next check inside it |
+| the tick's one `pairs.read` | `catalog_unavailable`, a backend failure, or `fresh: false` | hold back `TRADING_SESSION_RETRY_MS` (E9f); the stops above of the same tick land without the catalog (P2) |
 | | the pair absent, or `!pairAcceptsDuration(pair, durationSec)` | stop `pair_unavailable` (E9c, H1-O5) |
-| | `!isPairOpen(pair, now)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (H1-O6′) |
-| | `!isPairOpen(pair, now)` | hold back `min(scheduledUntil − now, TRADING_SESSION_RETRY_MS)` (E9e′) |
+| | `!isPairOpen(pair, tickAt)` and `waitExpired` | stop `no_signal_timeout`, `waited: pair_closed` (H1-O6′) |
+| | `!isPairOpen(pair, tickAt)` | hold back `min(scheduledUntil − tickAt, TRADING_SESSION_RETRY_MS)` (E9e′) |
 | | the payout below `MIN_CYCLE_PAYOUT_PCT` | nothing: no payout holds a session (#509), and since #631 none refuses its start either (H1-O7) |
-| the sizer (`nowMs = max(now, started_at)`, E11′) | `stop` `insufficient_balance` while `awaitsBalance` | hold `TRADING_SESSION_TICK_MS`, `info` `trading session waits for the balance`; a wake inside the hold does not attempt again (H1-BW, BW4′, BW5′, #696); past the limit counted from that settlement — the row below (BW3′) |
+| the sizer (`nowMs = max(tickAt, started_at)`, E11′) | `stop` `insufficient_balance` while `awaitsBalance` | hold `TRADING_SESSION_TICK_MS`, `info` `trading session waits for the balance`; a wake inside the hold does not attempt again (H1-BW, BW4′, BW5′, #696); past the limit counted from that settlement — the row below (BW3′) |
 | | `stop` | a martingale limit: stop with its own reason (#450, G3′–G6′, H1-O3′); any other code: stop `stake_stop` (H1-O8, E9a′); the code in the line |
 | | `stake` | hold `TRADING_SESSION_H1_CHECK_MS`, `debug` `trading session waits for the H1 driver`: the trades are the driver's (H1-O1) |
-| anywhere | the attempt's deadline, a throw, or `stop()` | no ending written; hold back `TRADING_SESSION_RETRY_MS` in memory |
+| anywhere | a throw in the decision (a bug: a race row of Logs) | no ending written; hold back `TRADING_SESSION_RETRY_MS` in memory; the rest of the batch goes on |
+| the batch | its deadline, a throw of a statement or of the pairs source, or `stop()` | no ending written for any session of the batch, no hold-back |
 
-The attempt does not stop a session for no signal (#775, review round 1; H1-O5″): it never asks H1,
+The decision does not stop a session for no signal (#775, review round 1; H1-O5″): it never asks H1,
 so it has no evidence that a signal was looked for — a backend restart's warm-up, a source down or a
 stale catalog would read as «no signal». That stop is the driver's, on the seconds it decided
 `no_signal`, with `waitExpired` as a conjunct ([h1.md → The no-signal limit](h1.md#the-driver-707)).
 A v4 row runs with its fixed stake and no `maxLoss` (H1-O10). Since #707 the checks from the hour to
-the two rejections are one function the attempt and the driver both read (`sessionIntentBlock`,
+the two rejections are one function the decision and the driver both read (`sessionIntentBlock`,
 `packages/shared/src/trading-session.ts`, H1-S7–S10), and since #775 both size with the same sizer
-over the same input (`@binarius/stake`, `sessionStakeInput`): the driver skips where the attempt
+over the same input (`@binarius/stake`, `sessionStakeInput`): the driver skips where the decision
 stops, so its intents never outrun these stops. The refusals of the driver's `createSessionIntent`
 are its own table (`SESSION_INTENT_REFUSALS`, [h1.md](h1.md)).
 
@@ -561,58 +588,70 @@ Since #835 the orchestrator writes no `signal_decisions` row: the rows are the d
 start route's ([trade-log.md](trade-log.md)); its v2 rows until then are historical.
 
 - **The progress rule.** Every ending that leaves the session `active` and was reached — reschedule,
-  every hold-back — moves `last_decision_at` (`markSessionDecision`), and every hold-back is at
+  every hold-back — moves `last_decision_at` (`markSessionDecisions`), and every hold-back is at
   least one tick. So a session never sits at the head of the scan twice in a row, and with a full
-  batch the head rotates. Only "no ending written" leaves the key unmoved, and it is a hold-back in
-  memory.
-- **The deadline.** The scan never lists an expired session, and the attempt stops one whose
-  deadline passed after the scan before any backend call; the residual window is the driver's
-  ([h1.md](h1.md)).
+  batch the head rotates. A throw in one decision leaves its key unmoved and holds it back in
+  memory; a batch that wrote nothing (its deadline, a throw of a statement, `stop()`) leaves every
+  key of the batch unmoved and holds none, so the next tick takes the same batch from the head
+  (risk 14).
+- **The deadline.** The scan never lists an expired session, and the batch's read stops one whose
+  deadline passed after the scan before any backend call (E7c′); the residual window is the
+  driver's ([h1.md](h1.md)).
 - **Clocks.** The deadline and the order key are the database's. The hold-backs and the sizer's
-  `nowMs` are the worker's; `nowMs` is clamped to `started_at`, because the sizer throws when the
-  clock is behind the session's start (E11′).
-- **`stop()`** clears the timer, aborts the attempt's pairs read and waits for the running tick:
-  one attempt at most, which `intents/config.ts` keeps inside the shutdown's phase 1. An attempt cut
-  by the stop writes nothing (E10′).
+  `nowMs` are the worker's, one reading per tick (`tickAt`); `nowMs` is clamped to `started_at`,
+  because the sizer throws when the clock is behind the session's start (E11′).
+- **`stop()`** clears the timer, aborts the batch's pairs read and waits for the running tick:
+  one batch at most, which `intents/config.ts` keeps inside the shutdown's phase 1. A batch cut
+  by the stop writes nothing after its checkpoint (E10′).
 - **Hold-backs live in memory**, keyed by session id, in one worker container (two during a
   deploy's overlap or until an operator resolves an interrupted run, #95, worker-deploy.md; #815:
   several processes; #93's lease and #94's registry cover the broker sockets only);
-  a restart drops them, and the next attempt is idempotent
-  ([Recovery after a restart](#recovery-after-a-restart-131)).
+  a restart drops them, and the next check is idempotent
+  ([Recovery after a restart](#recovery-after-a-restart-131)). A hold-back ends at `tickAt +
+  max(ms, TRADING_SESSION_TICK_MS)` of the tick that decided it (#871), so a hold of
+  `TRADING_SESSION_TICK_MS` or `TRADING_SESSION_H1_CHECK_MS` ends at the next tick of the interval
+  and an H1 session is checked every tick; the scan's `exclude` carries only the longer ones.
 
-**The wake (#696).** `wake()` takes no argument: it runs a tick now, or, while a tick runs (its scan
+**The wake (#696).** `wake(brokerAccountId?)` runs a tick now, or, while a tick runs (its scan
 may predate the caller's write), one more right after it. Calls merge: several during one tick make
-one more tick, whose `woken` is their count. After `stop()` it does nothing, and `stop()` starts no
-deferred tick; it never throws, so its callers make it after their commit without a guard. The
-worker calls it after the commit of every write of its own that ends an intent or halts its account:
+one more tick, whose `woken` is their count. With an account (#871) that tick is over the named
+accounts' sessions only (`listRunnableSessions` `accounts`, WK6) and runs no sweep; without one it
+is a full tick. A tick is full as well when its clock is `TRADING_SESSION_TICK_MS` or more after the
+last full tick's, so a tick of the interval merged into a run of woken ones still sweeps (WK7); the
+first tick is always full. After `stop()` it does nothing, and `stop()` starts no deferred tick; it
+never throws, so its callers make it after their commit without a guard. The worker calls it after
+the commit of every write of its own that ends an intent or halts its account:
 
-- the writer `closedTrades` of the broker sessions (`close_trade.success`), when an outcome is
-  `settled` — one wake per call, not per trade;
+- the writer `closedTrades` of the broker sessions (`close_trade.success`), with its account, when
+  an outcome is `settled` — one wake per call, not per trade;
 - the wrapper of the intent consumer's processor (`worker.ts`), on a job outcome `rejected` or
-  `expired` (`JOB_OUTCOME_ENDS_INTENT`, one entry per `ProcessOutcome`); a throw passes through
-  without a wake;
-- the settlement catch-up's `onIntentEnded`, when its settle of a page settled any trade;
-- the reconciliation pass's `onIntentEnded`, on `settled`, `rejected` (`not_found`) and
-  `manual_review` (a halt), before the balance check (#92). An open trade found (`accepted`) does not
-  wake. A woken attempt on a balance older than the settlement waits for that check's write ([the
-  balance wait](#the-orchestrator) in The attempt).
+  `expired` (`JOB_OUTCOME_ENDS_INTENT`, one entry per `ProcessOutcome`), without an account (the
+  outcome carries none; these endings are rare), so a full tick; a throw passes through without a
+  wake;
+- the settlement catch-up's `onIntentEnded(brokerAccountId)`, the overdue intent's account, when its
+  settle of a page settled any trade (CW1);
+- the reconciliation pass's `onIntentEnded(brokerAccountId)`, the claimed intent's account, on
+  `settled`, `rejected` (`not_found`) and `manual_review` (a halt), before the balance check (#92,
+  RW1). An open trade found (`accepted`) does not wake. A woken check on a balance older than the
+  settlement waits for that check's write ([the balance wait](#the-orchestrator) in The
+  decision). The halt's `manual_review` stop is the halt sweep's, on the next full tick (risk 15).
 
 A writer that throws after a partial settle (`settleClosedTrades` commits one transaction per
 trade: trade k settled, trade k+1 threw) does not wake — the rejection skips the check of the
 outcomes; the timer's tick finds the session, and the replay from the dead letter answers
 `already_settled`, which does not wake either.
 
-A wake changes no decision: the tick by a wake is the same tick (the sweeps, the scan, one attempt
-per session in the SQL order), and the hold-backs keep the sessions they hold. It only takes away
+A wake changes no decision: a woken tick decides its accounts' sessions as any tick does, and the
+hold-backs keep the sessions they hold; only the sweeps wait for the next full tick (risk 15). It only takes away
 the wait between a settlement and the next check: a completed session stops within a second of its
 last settlement (WK1′, H10′), and two rejections stop it (H1-O9, R3′). A wake for an intent of no
 session or of another session (a bot's one-off trade, the intent an earlier session left live at
 its stop) is idle only when no session is active on that account; otherwise that intent held the
-session out of the scan, and the wake checks it at once, on the balance wait of The attempt. The
+session out of the scan, and the wake checks it at once, on the balance wait of The decision. The
 backend's own terminal writes (the publisher's rejection of a `queued` intent, an operator's settle
 out of `manual_review`) are another process: the timer's tick finds them. `TRADING_SESSION_TICK_MS`
 is the safety net for those and for a wake lost to a restart. Tests: `orchestrator.db.test.ts`
-WK1′–WK5, `worker.handoff.db.test.ts` H10′–H13′, `reconciliation.db.test.ts` RW1,
+WK1′–WK7, `worker.handoff.db.test.ts` H10′–H13′, `reconciliation.db.test.ts` RW1,
 `settlement-catchup.db.test.ts` CW1. The backend's sender of the trade messages has a wake of its
 own (#723): `transitionIntent` notifies Postgres on an accept or a settle of a session's intent, and
 the backend's listener wakes the sender ([bot-session.md → Rate and timing](bot-session.md#rate-and-timing));
@@ -640,19 +679,19 @@ the session (`listRunnableSessions` skips an account with a non-terminal intent)
 | `planned`/`reserved` | cannot happen: created and queued in one transaction |
 | `queued` | waits; a job delivered after `INTENT_MAX_AGE_MS` (60 s) ends `rejected` with `last_error = expired` (`rejectExpiredIntent`), which counts towards `rejected_twice` like any `rejected` (R3′) |
 | `submitting`, `unknown`, `reconciling`, `reconciling` with the dead worker's claim | waits; a redelivered job never sends again (R1b); the claim is a lease of `RECONCILE_RETRY_MS` (60 s) (R1′) |
-| …and the pass finds the trade | the intent goes `accepted`/`settled`, then the attempt holds the session for the driver (R1′, H9′) |
+| …and the pass finds the trade | the intent goes `accepted`/`settled`, then the next tick holds the session for the driver (R1′, H9′) |
 | …and the pass finds nothing (demo, absence proven twice) | `rejected` (`reconciliation_not_found`) about 2.5-3.5 min after the submit, the reserve released, no halt; the session goes on and the intent counts towards `rejected_twice` (R2′, #274) |
 | …and the pass finds nothing (real, or no proof) | `manual_review` and the account halted; the next tick stops the session `manual_review`, the reserve kept (R2r′) |
 | `accepted` | waits for `close_trade` on the socket or the settlement catch-up (R4′) |
 
-A hold-back is lost with the worker's memory; the new worker's attempt is idempotent (it holds or
+A hold-back is lost with the worker's memory; the new worker's decision is idempotent (it holds or
 stops).
 
 **(b) No new limit.** A restart adds none: the 1 h deadline (`SESSION_MAX_DURATION_MS`) and every
 normal stop condition apply, so a session that waited 40 minutes is held for its next step
 (R7′). A
 session whose deadline passed while the worker was down reads `active` in the bot until a tick
-stops it as `timeout`, at most `TRADING_SESSION_BATCH_SIZE` (200) a tick; the rest are already out
+stops it as `timeout`, at most `TRADING_SESSION_BATCH_SIZE` (3 000) a tick; the rest are already out
 of the scan (E7, E7b).
 
 **(c) Two workers at once.** When and how long two run, and each component's guard:
@@ -684,7 +723,7 @@ manual path does ([bot-demo.md](bot-demo.md) → The check). Where it applies is
 list alone (`signalsShown`): the pairs at or above it come first, the pairs below it only fill a
 list shorter than five ([bot-demo.md](bot-demo.md#the-signals-screen-320)). The pair screens and
 the analysis show the payout and the break-even share. A running session was never held by it
-(owner, #509; the attempt does not read the payout, H1-O7). From #379 to #631 it refused a cycle below 80 % at the start (409
+(owner, #509; the orchestrator does not read the payout, H1-O7). From #379 to #631 it refused a cycle below 80 % at the start (409
 `payout_too_low`), in the scanner and in the bot's cycle entries; the signal stand
 (`packages/signal-stand`) and the spike CLI (`candle-spike-run.ts`) still measure the cycle's
 economy at it.
@@ -695,11 +734,12 @@ A session that cannot open a trade for want of a signal stops with `no_signal_ti
 `SESSION_NO_SIGNAL_CANDLES` (20, `packages/shared/src/trading-session.ts`) candles of its duration:
 `sessionNoSignalTimeoutMs(durationSec)` — 100 s for every session since #828 (5 s; the longer
 durations exist only on v1–v3 rows, which #835 stops). #637 (owner 2026-10-18) counted the limit in
-candles instead of a fixed 120 s. The worker passes the milliseconds to `readSessionHistory`; the
+candles instead of a fixed 120 s. The worker passes the milliseconds to `readSessionBatch`; the
 bot's stop line prints the candles and the candle («20 свечей по 5 с»). Owner, #509: the session
 should not stand waiting with no word to the user.
 
-- **The count** — `readSessionHistory`'s `waitExpired`, in the attempt's first statement:
+- **The count** — `waitExpired` of the batch's first statement (`readSessionBatch`, the same
+  fragment as `readSessionHistory`'s, with each session's own limit):
   `greatest(started_at, max(updated_at) of the session's own intents) < now() - limit`, on the
   database clock. A session without an intent counts from its start; a bot trade on the account
   (`trading_session_id` NULL) and another session's intents do not count (NS1–NS5). A worker
@@ -711,17 +751,17 @@ should not stand waiting with no word to the user.
   #509 carry the worker's clock; worker and database share one host, so the drift is seconds
   against a 100 s limit (accepted).
 - **What stops.** The pair closed by its schedule once `waitExpired` (`waited: pair_closed`,
-  `limitMs` in the line, H1-O6′) — the attempt's; `no_signal` — the H1 driver's, after 100 seconds
+  `limitMs` in the line, H1-O6′) — the orchestrator's; `no_signal` — the H1 driver's, after 100 seconds
   the detector decided `no_signal` since the session last changed and with `waitExpired` as a
   conjunct; the seconds it cannot decide (a backend restart's warm-up, the source down, a stale
   catalog) do not count ([h1.md → The no-signal limit](h1.md#the-driver-707), H1-DR32–DR36,
-  H1-DB6). The attempt never asks H1, so it has no evidence a signal was looked for (#775, review
+  H1-DB6). The orchestrator never asks H1, so it has no evidence a signal was looked for (#775, review
   round 1; H1-O5″). Until #835 the attempt's own `no_signal` stopped the candle sessions (W1); the
   pause after two losses (`waited: paused`) was a third wait until #698.
 - **What does not.** The pairs unavailable is not a wait for a signal: it neither stops the session
   nor moves the count (E9f).
-- **Lateness.** The count is read at the start of the attempt, so the stop comes at most one
-  attempt late, and on a closed pair at most one hold-back (`TRADING_SESSION_RETRY_MS`) late.
+- **Lateness.** The count is read in the batch's first statement, before the catalog, so the stop
+  comes at most one tick late, and on a closed pair at most one hold-back (`TRADING_SESSION_RETRY_MS`) late.
 - **Tokens.** The start reserves nothing; a reserve is an intent's (Rule 2). A stop with no intent
   writes nothing to `token_ledger` or `users` (H1-O6′).
 - **Long candles.** Durations other than 5 s exist only on v1–v3 rows, which #835 stops; the
@@ -749,7 +789,9 @@ any other; the stand's pause overlay for comparison and its `v2` era
 
 `backend.ts`, under the internal bearer, shaped like `broker/access-token.ts`: an expected failure
 is an answer, never a throw. The client does not log; the orchestrator logs the outcome codes. The
-signal source (`POST /trading/signal` with `record: true`) was removed in #835.
+signal source (`POST /trading/signal` with `record: true`) was removed in #835. The orchestrator
+reads the pairs once a tick, when a session of its batch reached the pair step, never once a
+session (#871, P1, N1); the backend refreshes its catalog every 30 s.
 
 | Client | Request | Answers |
 |---|---|---|
@@ -765,16 +807,16 @@ over it, a 200 or the route's 503 answers `contract_violation`, any other status
 
 | Constant | Value | Bounds |
 |---|---|---|
-| `TRADING_SESSION_H1_CHECK_MS` | 5 000 | the hold of an H1 session (#670, #775) after an attempt that found nothing to stop: its cycles, the sizer's limits, its pair and the no-signal limit are checked again no later than this plus a tick |
+| `TRADING_SESSION_H1_CHECK_MS` | 5 000 | the hold of an H1 session (#670, #775) after a decision that found nothing to stop: its cycles, the sizer's limits, its pair and the no-signal limit are checked again on the next tick of the interval (the hold is anchored on the tick's clock, #871) |
 | `TRADING_SESSION_TICK_MS` | 5 000 | the scan interval; since #696 the safety net — a write in the worker that ends an intent or halts its account runs a tick at once ([The wake](#the-orchestrator)) |
-| `TRADING_SESSION_BATCH_SIZE` | 200 | runnable sessions attempted per tick |
-| `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one attempt: the pairs GET and the statements |
+| `TRADING_SESSION_BATCH_SIZE` | 3 000 | runnable sessions decided per tick in one batch, and the rows each sweep takes (#871: the pilot's 1–3k sessions; `config.test.ts` pins ≥ 3 000). With N ≤ 3 000 every runnable session is checked by every tick of the interval: between two checks at most `TRADING_SESSION_TICK_MS` plus the batch's time, the batch bounded by `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
+| `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` | 10 000 | one tick's batch: the two reads, the pairs GET and the writes (#871) |
 | `TRADING_SESSION_PAIRS_TIMEOUT_MS` | 4 000 | the pairs GET |
 | `TRADING_SESSION_RETRY_MS` | 60 000 | a hold-back after a transient failure or a throw |
 | `SESSION_MAX_DURATION_MS` (shared) | 3 600 000 | the deadline from `started_at`; the start route and the CLI refuse a session whose strategy's worst case cannot fit it (`sessionFitsDeadline(cycles, durationSec, strategy)`, #552) |
 | `MIN_SESSION_DURATION_SEC` (shared) | 5 | a session trade's shortest duration (#552): `SIGNAL_SHORTEST_INTERVAL_MS / 1000`, in the settings and the start request |
 | `MAX_SESSION_SUMMARY_TRADES` (shared) | 720 | `SESSION_MAX_DURATION_MS / (MIN_SESSION_DURATION_SEC × 1000)`, an integer checked at import: a session's intents run one at a time and each settles no earlier than its duration, so an hour holds no more; the bound of the summary's trades and the card's columns. Without ties the fit and `maxSteps` keep a session at 28 settled trades (7 cycles × 4 at 5 s) |
-| `SESSION_NO_SIGNAL_CANDLES` (shared) | 20 | the wait before `no_signal_timeout`: on a closed pair (the attempt) and without an H1 signal (the driver), 100 s on 5 s (#509, in candles since #637), from the later of `started_at` and the session's last intent change |
+| `SESSION_NO_SIGNAL_CANDLES` (shared) | 20 | the wait before `no_signal_timeout`: on a closed pair (the orchestrator) and without an H1 signal (the driver), 100 s on 5 s (#509, in candles since #637), from the later of `started_at` and the session's last intent change |
 
 `TRADING_SESSION_CHAIN_HOLDS` is checked at import (`config.test.ts` restates it):
 `PAIRS < ATTEMPT` (4 000 < 10 000; #835: the worker asks no signal), `TICK < RETRY`,
@@ -788,7 +830,7 @@ SESSION_NO_SIGNAL_CANDLES × SIGNAL_SHORTEST_INTERVAL_MS` (65 000 < 100 000, #69
 after a settlement ends at the no-signal limit counted from that settlement, and the backend's REST
 refresh (its interval at most the SLA) and one GET fit before it (K-BW). The worker chain
 (`intents/config.ts`) adds `TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`: phase 1
-runs its steps at once, so the orchestrator's stop has to fit it on its own.
+runs its steps at once, so the orchestrator's stop — one batch at most — has to fit it on its own.
 
 ## Logs
 
@@ -997,14 +1039,14 @@ docker compose logs --since 1h trading-worker | grep -E 'no_signal_timeout|waits
 3. **Two clocks.** The deadline is the database's; the hold-backs and the sizer's `nowMs` are the
    worker's. Both run on one host under compose; the sizer reads elapsed
    time only for Martingale, which is off.
-4. **One container, two during a deploy.** The hold-backs live in memory and two workers would attempt the same session;
-   an attempt holds or stops it, the trades are the driver's (#835), so the second is a hold or a
+4. **One container, two during a deploy.** The hold-backs live in memory and two workers would decide the same session;
+   a decision holds or stops it, the trades are the driver's (#835), so the second is a hold or a
    stop the CAS finds done, never a second trade. Two workers run for the deploy's overlap, the readiness wait (up to
    `READY_TIMEOUT_S`, 120 s) plus the drain (≤ 40 s), or until an operator resolves an interrupted
    run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95, `worker.handoff.db.test.ts`
    an old worker dying dirty mid-step: H9′); several workers are #815 (#93's lease and #94's
    registry partition the broker sockets only, [worker-capacity.md](worker-capacity.md)).
-5. **The driver's intent past the deadline.** The attempt stops a session whose deadline passed
+5. **The driver's intent past the deadline.** The batch's read stops a session whose deadline passed
    after the scan, but an intent the driver created in the window lives on — [h1.md](h1.md) →
    Accepted risks; the orchestrator creates none since #835.
 6. **The CLI sees the user's 10 newest accounts.** An own `ACCOUNT_ID` older than those is refused
@@ -1018,20 +1060,21 @@ docker compose logs --since 1h trading-worker | grep -E 'no_signal_timeout|waits
    process; the session waits for the timer's tick (≤ `TRADING_SESSION_TICK_MS`), as before.
    Falsifiable: in `trade-log export`, for an intent the publisher rejected, the session's next
    `createdAtMs` 0–5 s after its `updated_at`, not under 1 s.
-9. **A `failed` hold-back keeps a woken session waiting (#696).** An attempt that passed its
-   deadline (a slow statement) holds the session `TRADING_SESSION_RETRY_MS`; the settle wakes the
-   orchestrator, but the scan excludes the session until the hold ends. Falsifiable: a line
-   `trading session attempt timed out` of a session followed by no check of it for about 60 s.
-10. **The order inside a woken tick is the SQL's (#696).** A woken tick attempts every runnable
-    session in `last_decision_at asc nulls first` order, so the woken session waits for those ahead
-    (each attempt is usually ~0.2 s, at most `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`). Falsifiable: in
-    `trade-log export`, the close-to-next-intent time grows with the number of sessions active in
-    the same minute.
+9. **A hold-back keeps a woken session waiting (#696).** A session held back
+   `TRADING_SESSION_RETRY_MS` (the catalog unavailable, a throw in its decision) stays out of the
+   scan until the hold ends, though a settle wakes the orchestrator. A batch past its deadline
+   holds nothing since #871 (risk 14). Falsifiable: a `trading session pairs unavailable` line of a
+   session followed by no check of it for about 60 s while a settle on its account woke the tick.
+10. **A woken tick waits for a running one (#696, #871).** A woken tick runs after the tick in
+    flight; it decides only its accounts' sessions, so its own batch is short, but the tick ahead
+    may be a full one of up to `TRADING_SESSION_BATCH_SIZE` sessions (at most
+    `TRADING_SESSION_ATTEMPT_TIMEOUT_MS`). Falsifiable: in `trade-log export`, the
+    close-to-next-intent time grows with the number of sessions active in the same minute.
 11. **Wakes from one-off trades (#696).** A bot's one-off settle or rejection wakes the
-    orchestrator too. With no active session on the account it is an idle tick: three UPDATEs that
-    match nothing and one scan. With one, it is that session's next attempt, which the one-off trade
-    had held out of the scan. Falsifiable: `trading session tick` lines with `woken ≥ 1` and
-    `runnable: 0` around one-off trades on accounts without a session.
+    orchestrator too, with its account (#871). With no active session on the account it is an idle
+    woken tick: one scan that finds nothing. With one, it is that session's next check, which the
+    one-off trade had held out of the scan. Falsifiable: `trading session tick` lines with `woken ≥
+    1`, `accounts ≥ 1` and `runnable: 0` around one-off trades on accounts without a session.
 12. **The balance wait (#696).** (a) A snapshot written after the settlement with the amounts from
     before it: a REST GET sent before the payout and written after the `settle` (the window is one
     GET, ≤ `BROKER_REST_TIMEOUT_MS`), or a reconnect's `user.data` at that moment — `awaitsBalance` is
@@ -1053,11 +1096,42 @@ docker compose logs --since 1h trading-worker | grep -E 'no_signal_timeout|waits
     balance` lines in a row for longer than 100 s.
 13. **The balance wait reads the account's history (#696).** The equalities go by
     `trade_intents_account_status_idx (broker_account_id, status)`, `updated_at` is filtered over
-    the account's `settled` rows: one index pass over them per attempt. Assumed: fewer than 10 000
-    settled intents per account (the pilot: 495 session trades of all users over 07–15.10).
-    Falsifiable: `trading session attempt timed out`, or an attempt's p95 above 1 s on accounts with
-    a long history; then an index `(broker_account_id, mode, updated_at) where status = 'settled'`
-    in a task of its own, with a migration.
+    the account's `settled` rows: one index pass over them per session of the batch's read.
+    Assumed: fewer than 10 000 settled intents per account (the pilot: 495 session trades of all
+    users over 07–15.10). Falsifiable: `trading session batch timed out`, or a `trading session
+    tick` `ms` above 1 000 on accounts with a long history; then an index `(broker_account_id,
+    mode, updated_at) where status = 'settled'` in a task of its own, with a migration.
+14. **One slow batch holds the whole batch (#871).** The deadline bounds the batch, not a session:
+    past `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` nothing is written or held, and the next tick of the
+    interval takes the same batch (before #871 one session was held 60 s). A chronic timeout is a
+    batch of ≥ 10 s with no progress, visible by its line. Falsifiable: `trading session batch timed
+    out` lines.
+15. **A woken tick runs no sweep (#871).** A closed kill switch, or a halt of the account without a
+    `manual_review` intent, stops the session on the next full tick, up to
+    `TRADING_SESSION_TICK_MS` later than a woken tick would have; the woken tick still decides the
+    session (it creates no intent since #835, and the driver's intent is refused `trading_paused`
+    under a closed switch), and a session that completes under a closed switch is stopped
+    `completed`, not `kill_switch`. Falsifiable: a `kill_switch` stop more than 5 s after the switch
+    closed with the worker running.
+16. **Two workers in a deploy's overlap (#871).** The batch's UPDATEs over overlapping sets of rows
+    can deadlock (40P01) → `trading session tick failed`, retried by the next tick; the same class as
+    the three sweeps before. Falsifiable: `tick failed` with code 40P01 outside a deploy's window.
+17. **Back-to-back woken ticks (#871).** Under continuous settles there is no debounce: each woken
+    tick is about five statements and one GET, the wakes during a tick merge. Assumed: ≤ 3 000
+    sessions, ≤ 50 woken ticks a second. Falsifiable: `trading session tick` lines with `accounts ≥
+    1` more often than 20 a second over a minute; then a debounce constant in a task of its own.
+18. **The scan's `exclude` list (#871)** is the sessions held longer than a tick; with the backend
+    down, every runnable session for 60 s — one `uuid[]` parameter. Assumed: ≤ 3 000 ids.
+19. **The settings are parsed every tick (#871).** Zod over every session's `settings` is O(N) CPU
+    on the worker's event loop (3 000 × tens of µs ≈ 0.1–0.3 s a tick) and about 1–3 MB of jsonb a
+    scan. Falsifiable: a `trading session tick` `ms` above 1 000 with `runnable` 3 000 on the pilot
+    and no `batch timed out`; then a cache of the parsed settings (nothing UPDATEs `settings`) in a
+    task of its own.
+20. **The pool under the tick is measured, not tested (#871).** The orchestrator holds at most one
+    pool connection (its statements run one after another on one `Db`) and runs no parallel
+    attempts (#867), so the path to an order keeps the rest of the pool; the owner's check after
+    the deploy is the absence of growth of `entry_window_missed` (`trade-log export`), and
+    `pool.waitingCount` after #867.
 
 ## Boundaries
 
@@ -1072,10 +1146,13 @@ docker compose logs --since 1h trading-worker | grep -E 'no_signal_timeout|waits
   in the tests is #105; #274 (shipped) releases a demo intent on a proven absence instead of the
   halt. #135:
   `grant_revoked` as a stop reason; #815: the orchestrator under more than one worker container
-  (#93's lease and #94's registry cover the broker sockets only).
+  (#93's lease and #94's registry cover the broker sockets only), rebased on #871's tick.
+- #871 (shipped): the tick in one batch (Rule 63); the bounded parallelism of the decisions waits
+  for #867's own pool or semaphore, so the orchestrator never takes connections from the path to an
+  order.
 - Real sessions (#327): a session runs only in its user's mode — the start route's pre-check and
   `createTradingSession` under the users lock refuse another (`mode_not_allowed`), and a switch of
   the mode stops the user's active sessions in its transaction ([trading-mode.md](trading-mode.md)).
   The `demo_only` refusal (#396) comes before both. The CLI `h1 session start` follows the user's
   mode (Rule 36). A loss limit or a daily cap for real sessions is a later issue.
-- The invariant is Rule 28 «Торговая сессия» in `.claude/skills/architect/rules/trading.md` (index: `.claude/skills/architect/SKILL.md` → Architecture Rules).
+- The invariant is Rule 28 «Торговая сессия», the tick's shape Rule 63, in `.claude/skills/architect/rules/trading.md` (index: `.claude/skills/architect/SKILL.md` → Architecture Rules).

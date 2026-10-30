@@ -271,6 +271,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 60. **Токен брокера на пути сделки** — валидный токен одним SELECT без блокировки, flight на аккаунт в процессе, кэш worker'а с TTL → `rules/auth.md`
 61. **Ширина ленты сессии** — пузырь текста — ширины медиа-пузыря клиента (`BOT_MESSAGE_SPACER_LENGTH` = 21), строки `<pre>` блока шага с отступами не шире распорки по `preLineBlanks` → `rules/bot-ui.md`
 62. **Пробуждение отправителя уведомлений** — тик по NOTIFY читает списки по id из payload, полный скан — только тик интервала; ожидание сигнала — один lateral на строку; refresh запасного итога без ожидания → `rules/bot-ui.md`
+63. **Тик оркестратора сессий — один батч** — константное число statement'ов и один GET каталога на тик, пробуждение с аккаунтом — скан по аккаунту без sweep'ов → `rules/trading.md`
 
 ### Map: path → rules
 
@@ -309,7 +310,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/trading-worker/src/cli` | trading 27 |
 | `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53, 54; signal-h1 43 |
 | `apps/trading-worker/src/intents` | core 10, 14; trading 15, 21, 22, 24, 25, 27, 28, 33, 53, 54; signal-h1 43, 48, 56; auth 12, 60 |
-| `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28; signal-h1 43, 48 |
+| `apps/trading-worker/src/trading-session` | core 10, 26; trading 22, 23, 24, 25, 28, 63; signal-h1 43, 48 |
 | `apps/web` | core 26, 52; signal-h1 20, 43; bot-ui 30 |
 | `apps/web/src` | core 9, 10, 14, 17, 26, 51; trading 22, 23, 27, 28, 33, 36; signal-h1 41, 44, 45, 48, 55; bot-ui 18, 19, 31, 46, 47, 58, 59, 62; payments 38 |
 | `apps/web/src/admin` | core 52; bot-ui 30; payments 38 |
@@ -346,7 +347,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/trade-log.md` | signal-h1 42, 45 |
 | `docs/trading-access.md` | bot-ui 29 |
 | `docs/trading-mode.md` | trading 36 |
-| `docs/trading-session.md` | trading 28; signal-h1 48; auth 13 |
+| `docs/trading-session.md` | trading 28, 63; signal-h1 48; auth 13 |
 | `docs/worker-capacity.md` | trading 53 |
 | `docs/worker-deploy.md` | core 10, 16; trading 32 |
 | `eslint.config.js` | core 8; bot-ui 18 |
@@ -354,7 +355,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/broker-socket/src` | core 10, 14, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/db` | core 52 |
 | `packages/db/drizzle` | core 3, 51 |
-| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50, 53; signal-h1 41, 42, 44, 45, 48, 56; bot-ui 18, 19, 29, 30, 47, 59, 62; payments 34, 35, 39, 40, 57; auth 11, 12, 13, 60 |
+| `packages/db/src` | core 2, 3, 4, 5, 7, 9, 10, 16, 51, 52; trading 6, 15, 21, 22, 24, 27, 28, 32, 33, 36, 50, 53, 63; signal-h1 41, 42, 44, 45, 48, 56; bot-ui 18, 19, 29, 30, 47, 59, 62; payments 34, 35, 39, 40, 57; auth 11, 12, 13, 60 |
 | `packages/db/src/cli` | core 16 |
 | `packages/db/src/schema` | core 1, 2, 10, 51; trading 22, 27, 28, 33, 50; signal-h1 42, 44, 45; auth 11, 12 |
 | `packages/e2e/src` | core 51; trading 28; bot-ui 18 |
