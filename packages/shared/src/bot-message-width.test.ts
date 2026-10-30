@@ -83,7 +83,7 @@ describe('preLineBlanks (#887, #896)', () => {
     ['🟢 $1 000.00 → +$1 960.00', 16.95, 'CoreText Menlo 13 pt'],
     ['⏳ $1 000.00 · ⬆️ Вверх', 15.72, 'CoreText Menlo 13 pt'],
   ])(
-    'F1 the model of «%s» is no narrower than the measured %f blanks (%s) and at most 10 %% wider',
+    'F1 the model of «%s» is no narrower than the measured %f blanks (%s) and at most a tenth wider',
     (line, measured) => {
       expect(preLineBlanks(line)).toBeGreaterThanOrEqual(measured);
       expect(preLineBlanks(line)).toBeLessThanOrEqual(measured * 1.1);
