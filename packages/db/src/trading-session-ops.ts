@@ -378,6 +378,8 @@ const historyIntentColumns = {
 
 // The session's own intents in creation order: a bot trade on the same account (NULL session) is
 // neither a step nor a rejection of the session.
+// No production caller since #874 (the orchestrator and the H1 driver read readSessionBatch):
+// kept as the single-session oracle of readSessionBatch's tests, and cited by Rules 21 and 28.
 export async function readSessionHistory(
   db: Db,
   sessionId: string,
@@ -720,6 +722,8 @@ export interface SessionBalanceRead {
 // The orchestrator's balance (#696): the amounts and awaitsBalance come from one statement,
 // because an update_balance committed between two reads would pair the new amounts with the old
 // verdict.
+// No production caller since #874 (the orchestrator and the H1 driver read readSessionBatch):
+// kept as the single-session oracle of readSessionBatch's tests, and cited by Rules 21 and 28.
 export async function readSessionBalance(
   db: Db,
   sessionId: string,

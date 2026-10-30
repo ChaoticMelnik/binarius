@@ -1261,7 +1261,7 @@ describe('readSessionBatch (#871)', () => {
       },
       balance: { available: '10002.50000000', minTradeAmount: '1.00000000', awaitsBalance: false },
     });
-    // the same facts as the single reads the driver uses
+    // the same facts as the single reads (the oracle)
     expect(reads.get(seed.session.id)!.history).toEqual(
       await readSessionHistory(tmp.db, seed.session.id, LIMITS),
     );

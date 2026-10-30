@@ -179,6 +179,10 @@ describe('backend shutdown timing', () => {
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThanOrEqual(OAUTH_CALLBACK_BUDGET_MS);
     expect(OAUTH_CALLBACK_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
+    // app.close() waits for the callback's exchange, then onClose waits for its push
+    expect(BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS).toBeLessThan(
+      SHUTDOWN_PHASE1_BUDGET_MS,
+    );
     expect(BROKER_HTTP_TIMEOUT_MS).toBeLessThan(ACCESS_TOKEN_ROUTE_BUDGET_MS);
     expect(ACCESS_TOKEN_ROUTE_BUDGET_MS).toBeLessThan(SHUTDOWN_PHASE1_BUDGET_MS);
     expect(SHUTDOWN_PHASE1_BUDGET_MS + SHUTDOWN_PHASE2_BUDGET_MS).toBeLessThan(
