@@ -594,7 +594,7 @@ those five, whether bold and its kind may hold `pre` or `code` — the validator
 Telegram decides when the message is sent. The helper also refuses a text that is empty after
 entities parsing, one over its limit, and a line that starts or ends with a space. Lengths are
 measured on `plainTextOf(...)` — the text "after entities parsing" the Bot API counts, in UTF-16
-code units: at most `BOT_TEXT_LIMIT` (4072, the helper's default: the Bot API's 4096 less the width
+code units: at most `BOT_TEXT_LIMIT` (4074, the helper's default: the Bot API's 4096 less the width
 spacer, [bot-navigation.md](bot-navigation.md#the-width-506-887)) for a message and 1024
 for the welcome, which travels as a video caption whenever `WELCOME_VIDEO_FILE_ID` is set
 (`TELEGRAM_CAPTION_LIMIT`, passed by its own test), so configuring a video cannot break sending. A text that takes a value

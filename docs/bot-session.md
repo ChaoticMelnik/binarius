@@ -926,7 +926,7 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
 🔴 $5.00 → -$5.00           (each block's lines under the head in a code block: Telegram shows it with «copy»)
 📊 0.49810 → 0.49790
 
-🔄 Адаптивная ставка включена
+🔄 Адаптивная ставка
 
 ⚡ Цикл 2 Шаг 2
 ⚪ $11.50 → $0.00
@@ -961,7 +961,7 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   above `maxSteps`. Under the fixed strategy every trade is step 1 of the next cycle. The sender
   passes the session's own strategy, `sessionStakeParams(settings).strategy` (#450): settings v1
   and settings that cannot be read count as `fixed`.
-- **«🔄 Адаптивная ставка включена»** stands once per cycle, alone, between the blocks of step 1
+- **«🔄 Адаптивная ставка»** stands once per cycle, alone, between the blocks of step 1
   and step 2, printed as soon as it is known (#718, the owner's decision 2026-10-22): a lost step 1
   carries it under its block in the same send or edit, and step 2's block, open or settled, is
   added under the line later; after a tie at step 1 nothing stands under the tie, and the line
@@ -974,7 +974,7 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   `packages/shared/src/session-steps.ts`); `sessionCycleText` only prints it, so a continuation
   after a split from step 2 has the line only after a tie. No text says «Мартингейл».
 - **The length.** Before an edit the sender measures the text as Telegram counts it after parsing
-  the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4072: the
+  the entities (`plainTextOf`, as `telegramTextProblems`); a text past `BOT_TEXT_LIMIT` (4074: the
   Bot API's 4096 less the width spacer the seam appends,
   [bot-navigation.md](bot-navigation.md#the-width-506-887)) opens a new message of the same cycle from
   the trade that did not fit,
@@ -1126,7 +1126,7 @@ message.
 | 5xx, a timeout, the transport — a send | stays claimed; nothing recorded (the id is unknown) | `warn` … `outcome unknown`; the next step of the cycle sends a new message with the whole cycle — a repeat of its blocks if the first one arrived |
 | 5xx, a timeout, the transport — an edit | stays claimed; unchanged | `warn` … `edit outcome unknown`; the next step's edit shows the block; a cycle's last step is lost |
 | a new message answered with a `message_id` that is not a positive integer | stays claimed; nothing recorded | `warn` … `not recorded`; the next step sends a new message |
-| the block does not fit (`BOT_TEXT_LIMIT`, 4072) | a new message from this trade; recorded from it | `info` … `split` |
+| the block does not fit (`BOT_TEXT_LIMIT`, 4074) | a new message from this trade; recorded from it | `info` … `split` |
 | the process dies between the claim and the call | stays claimed | lost until the next step's edit; the cycle's last step is lost |
 | **the open block** (#700): a new message sent | `open_notice_intent_id` = its intent; the cycle message = its id, `from` = the settled count, one CAS with the intent | the waiting message under it (as today); the result edits it |
 | the open block: an edit sent, or «message is not modified» | the mark set; the cycle message unchanged | the result edits it |
@@ -2305,21 +2305,24 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     the caption under the animation of a session that still waits; the sender's memory keeps the
     caption it drew, so the next pass whose figures differ puts the scan back, with the same «⏹».
     The press failed and the wait goes on: a press of «⏹» stops it or answers again.
-115. **The user's text size moves the text, not the media** (#887): the spacer's width grows with
-    the font size set on the phone, the media bubble's does not; N = 23 keeps the two within about
-    4 % between 17 and 18 pt, at 20 pt the text is about 10 % wider. No one constant fits every
-    size; the owner tunes N for the common one (bot-navigation.md → The width).
+115. **The user's text size moves the text, not the media** (#887, #896): the spacer's width grows
+    with the font size set on the phone, the media bubble's does not; at N = 21 the text is about
+    1 % narrower than the media at 17 pt, 4 % wider at 18 pt and 14 % wider at 20 pt (the bubble's
+    55 pt of padding does not scale). No one constant fits every size; the owner tunes N for the
+    common one (bot-navigation.md → The width).
 116. **Telegram Desktop and Android are not aligned** (#887): on Desktop the text with the spacer is
-    about 230 px and a photo about 430 px, the animation not measured; whether a longer caption
+    about 211 px and a photo about 430 px, the animation not measured; whether a longer caption
     widens the waiting message's bubble there, so that its width changes with the caption, is not
-    checked. Android and Windows were not measured. Aligning Desktop would take N ≈ 45, two or
+    checked. Android and Windows were not measured. Aligning Desktop would take N ≈ 46, two or
     three empty lines on an iPhone.
 117. **A line wider than the spacer** (#887): the step blocks are held within the spacer on the
     default texts at a $1 000.00 stake and an 8-character price; a larger stake or return, a price
     printed without the pair's digits, an override that lengthens a block or `{action}`, and texts
     outside the step blocks (the completion line «🏁 Сессия завершена: …» of 26.8 blanks in the
     reply to «⏹» and in the text summary, help, the pair lists) make their message wider, up to
-    the client's maximum; the admin's preview does not warn.
+    the client's maximum; the admin's preview does not warn. «🔄 Адаптивная ставка включена»
+    (22.4 blanks) was shortened in #896 to «🔄 Адаптивная ставка» (15.4); the proportional lines
+    are measured, not tested (bot-navigation.md → The width).
 118. **The woken tick serves the payload's sessions only** (#870): a stop, a `no_signal` row, a
     relaunch's status message, a change of `telegram_blocked_at` or another session's finish that
     no notification names were served by any wake before #870, and now by the interval's tick:

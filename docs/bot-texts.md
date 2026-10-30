@@ -154,7 +154,7 @@ block, and a dynamic `import()` is not caught; the check on every call holds eit
 
 ## Limits
 
-- html: `BOT_TEXT_LIMIT` (4072 = 4096 − 24: the Bot API's 4096 less the width spacer the seams
+- html: `BOT_TEXT_LIMIT` (4074 = 4096 − 22: the Bot API's 4096 less the width spacer the seams
   append, [bot-navigation.md](bot-navigation.md#the-width-506-887)); 1024 (`TELEGRAM_CAPTION_LIMIT`) for the parts of a
   caption — `welcome` (the video's), the account card's `card*` and `featureLines`, the status
   card's `status*`. The analysis card (#482) is a caption too: its keys keep the message limit
