@@ -1,9 +1,15 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { AccessTokenRefusal, assertExhausted, errorLogFields } from '@binarius/shared';
-import { listServiceAccountStates, listServiceRenewalCandidates, type Db } from '@binarius/db';
+import {
+  latestServiceRotationAgeMs,
+  listServiceAccountStates,
+  listServiceRenewalCandidates,
+  type Db,
+} from '@binarius/db';
 import { ADMIN_TEXTS } from '../admin/texts';
 import type { AccessTokenOptions, AccessTokenResult } from '../auth/token-service';
-import { SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS, firstTickDelayMs } from '../timing';
+import { SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS } from '../timing';
+import { scheduleTicks } from './first-tick';
 
 // The service-account keeper (#391, docs/service-accounts.md → The keeper). Each tick renews the
 // service tokens that are due, then counts the working service accounts against the minimum and
@@ -60,7 +66,7 @@ export function createServiceAccountKeeper(deps: ServiceAccountKeeperDeps): Serv
   let last: Reported | undefined;
   let stopped = false;
   let running: Promise<void> | undefined;
-  let timer: NodeJS.Timeout | undefined;
+  let cancelTicks: (() => Promise<void>) | undefined;
 
   const holdBack = (accountId: string) => held.set(accountId, Date.now() + config.stalledRetryMs);
 
@@ -214,29 +220,24 @@ export function createServiceAccountKeeper(deps: ServiceAccountKeeperDeps): Serv
 
   return {
     tick,
-    // the first tick at a jittered delay inside the first interval, the interval from it (#874,
-    // Rule 65)
+    // the first tick no sooner than an interval after the newest rotation of a marked account and
+    // no sooner than the jitter, the interval from it (#874, Rule 65)
     start() {
-      if (stopped || timer !== undefined) return;
-      timer = setTimeout(
-        () => {
-          timer = setInterval(() => void tick(), config.tickMs);
-          void tick();
-        },
-        firstTickDelayMs(
-          config.firstTickMinMs ?? SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
-          config.tickMs,
-          deps.random ?? Math.random,
-        ),
-      );
+      if (stopped || cancelTicks !== undefined) return;
+      cancelTicks = scheduleTicks({
+        intervalMs: config.tickMs,
+        firstTickMinMs: config.firstTickMinMs ?? SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS,
+        random: deps.random ?? Math.random,
+        lastAttemptAgeMs: () => latestServiceRotationAgeMs(db),
+        tick: () => void tick(),
+        logger,
+      });
     },
     async stop() {
       stopped = true;
-      // the pending first tick or the interval: one handle at a time
-      clearTimeout(timer);
-      timer = undefined;
+      const scheduled = cancelTicks?.();
       stopping.abort();
-      await running;
+      await Promise.allSettled([scheduled, running]);
     },
   };
 }

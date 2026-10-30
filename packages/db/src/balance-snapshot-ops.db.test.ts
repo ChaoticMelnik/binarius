@@ -13,6 +13,7 @@ import { INTEGRATION_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import {
   applyBalanceEvent,
   balanceSnapshotOutOfDomain,
+  latestBalanceAttemptAgeMs,
   listBalanceRefreshCandidates,
   listSessionCandidates,
   readBalanceSnapshot,
@@ -572,6 +573,52 @@ describe('readBalanceSnapshot', () => {
     expect((await readBalanceSnapshot(tmp.db, accountId))!.lastRefreshError).toBe(
       'account_mismatch',
     );
+  });
+});
+
+// #874: a database of its own each, the read takes every snapshot in the database
+describe('latestBalanceAttemptAgeMs, no rows yet', () => {
+  let own: TempDatabase;
+  beforeAll(async () => {
+    own = await createTempDatabase(baseUrl);
+  });
+  afterAll(() => own.drop());
+
+  it('LA1 answers null with no snapshot, then the age of one outside the accounts in work', async () => {
+    expect(await latestBalanceAttemptAgeMs(own.db)).toBeNull();
+    const { accountId } = await seedAccount(own.db);
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: false,
+    });
+    const age = await latestBalanceAttemptAgeMs(own.db);
+    expect(typeof age).toBe('number');
+    expect(age).toBeGreaterThanOrEqual(0);
+    expect(age).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
+  });
+});
+
+describe('latestBalanceAttemptAgeMs, a recorded failure', () => {
+  let own: TempDatabase;
+  beforeAll(async () => {
+    own = await createTempDatabase(baseUrl);
+  });
+  afterAll(() => own.drop());
+
+  it('LA2 counts a recorded failure as an attempt', async () => {
+    const { accountId } = await seedAccount(own.db);
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: accountId,
+      user: brokerUser(),
+      requested: false,
+    });
+    await shift(accountId, 'rest_observed_at', '-1 hour', own.db);
+    expect(await latestBalanceAttemptAgeMs(own.db)).toBeGreaterThanOrEqual(3_599_000);
+    expect(
+      await recordBalanceRefreshFailure(own.db, accountId, BalanceRefreshError.Unavailable),
+    ).toBe(true);
+    expect(await latestBalanceAttemptAgeMs(own.db)).toBeLessThan(INTEGRATION_WAIT_CEILING_MS);
   });
 });
 

@@ -197,7 +197,13 @@ const ALLOWED: readonly { file: string; form: Form; match: string; reason: strin
     file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
     form: 'F4',
     match: 'await sleep(500);',
-    reason: `${NEGATIVE} (#874 BF2: past the cancelled first tick and two intervals)`,
+    reason: `${NEGATIVE} (#874 BF2: past the cancelled first tick and two intervals; BF4: no GET before the floor)`,
+  },
+  {
+    file: 'apps/backend/src/broker/balance-reconciler.db.test.ts',
+    form: 'F4',
+    match: 'await sleep(50);',
+    reason: `${NEGATIVE} (#874: no second first-delay timer from a second start())`,
   },
   {
     file: 'apps/backend/src/mailing/engine.db.test.ts',

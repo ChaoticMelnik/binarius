@@ -7,8 +7,10 @@ import {
   BrokerAccountStatus,
   UserStatus,
 } from '@binarius/shared';
+import { INTEGRATION_WAIT_CEILING_MS } from '@binarius/shared/testing';
 import { brokerAccounts } from './schema/index';
 import {
+  latestServiceRotationAgeMs,
   listServiceAccountStates,
   listServiceBrokerAccounts,
   listServiceRenewalCandidates,
@@ -135,6 +137,39 @@ describe('listServiceBrokerAccounts (the #404 contract)', () => {
   it("O3: a blocked user's marked account is not in service", async () => {
     await account({ userStatus: UserStatus.Blocked });
     expect(await listServiceBrokerAccounts(tmp.db)).toEqual([]);
+  });
+});
+
+// #874: a database of its own, the read takes every marked account in the database
+describe('latestServiceRotationAgeMs', () => {
+  let own: TempDatabase;
+  beforeAll(async () => {
+    own = await createTempDatabase(baseUrl);
+  });
+  afterAll(() => own.drop());
+
+  async function rotated(serviceSince: SQL | null, rotatedAt: SQL): Promise<void> {
+    const { userId } = await seedUser(own.db);
+    const id = await seedBrokerAccount(own.db, userId);
+    await own.db
+      .update(brokerAccounts)
+      .set({ serviceSince, tokenRotatedAt: rotatedAt })
+      .where(eq(brokerAccounts.id, id));
+  }
+
+  it('SR1 answers null with no marked account, then the age of the marked rotation', async () => {
+    expect(await latestServiceRotationAgeMs(own.db)).toBeNull();
+    await rotated(sql`now()`, at(`now() - interval '10 minutes'`));
+    const age = await latestServiceRotationAgeMs(own.db);
+    expect(age).toBeGreaterThanOrEqual(600_000);
+    expect(age).toBeLessThan(600_000 + INTEGRATION_WAIT_CEILING_MS);
+  });
+
+  it('SR2 leaves out an unmarked account rotated just now', async () => {
+    await rotated(null, sql`now()`);
+    const age = await latestServiceRotationAgeMs(own.db);
+    expect(age).toBeGreaterThanOrEqual(600_000);
+    expect(age).toBeLessThan(600_000 + INTEGRATION_WAIT_CEILING_MS);
   });
 });
 

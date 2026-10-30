@@ -390,6 +390,22 @@ export async function listBalanceRefreshCandidates(
   return rows.map((row) => row.id);
 }
 
+// The reconciler's first tick at start() (#874): ms since the newest attempt any process recorded
+// (a REST observation or a recorded failure), by the database clock; null when there is none.
+// Over every row, not only the accounts in work: an account the previous process's last tick
+// refreshed may have left the work set since. Any writer counts (the route's refresh, the worker's
+// REST check and its user.data), which can only lengthen the wait. One seq scan per start.
+export async function latestBalanceAttemptAgeMs(db: Db): Promise<number | null> {
+  const [row] = await db
+    .select({
+      ageMs: sql<
+        number | null
+      >`(extract(epoch from now() - max(greatest(${brokerBalanceSnapshots.restObservedAt}, ${brokerBalanceSnapshots.lastRefreshFailedAt}))) * 1000)::float8`,
+    })
+    .from(brokerBalanceSnapshots);
+  return row?.ageMs ?? null;
+}
+
 export interface SessionCandidate {
   id: string;
   brokerUserId: string;

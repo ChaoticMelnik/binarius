@@ -668,14 +668,26 @@ describe('tick', () => {
     expect(await rowOf(next.accountId, own.db)).toBeDefined();
   });
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
   // a behavioural test would not see a second timer: running ??= hides the doubled ticks
+  // the first delay is 40 + 0.5 × (200 − 40) = 120 ms; the read and until() arm timers of their
+  // own, so the calls are counted by that delay
   it('arms one timer for a second start()', async () => {
-    const balance = reconciler(own.db, { intervalMs: 60_000 });
+    const balance = reconciler(
+      own.db,
+      { intervalMs: 200, firstTickMinMs: 40 },
+      undefined,
+      () => 0.5,
+    );
     const spy = vi.spyOn(globalThis, 'setTimeout');
+    const firstDelays = () => spy.mock.calls.filter(([, ms]) => ms === 120).length;
     try {
       balance.start();
       balance.start();
-      expect(spy).toHaveBeenCalledTimes(1);
+      await until('the first delay armed', () => firstDelays() > 0);
+      await sleep(50);
+      expect(firstDelays()).toBe(1);
     } finally {
       spy.mockRestore();
       await balance.stop();
@@ -701,7 +713,6 @@ describe('tick', () => {
 
   // #874, Rule 65: the first tick at firstTickDelayMs inside the first interval, the interval
   // from that tick; here 100 + 0.5 × (1 000 − 100) = 550 ms
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
   it('BF1 ticks first at the jittered delay, then a whole interval later', async () => {
     await withIntent();
@@ -723,7 +734,10 @@ describe('tick', () => {
       await sleep(600);
       expect(userGets()).toHaveLength(1);
       await until('the second tick', () => userGets().length === 2);
-      expect(Date.now() - first).toBeGreaterThanOrEqual(900);
+      // the second tick starts no sooner than d + I = 1 550 ms after start() (the read only adds
+      // to it), and is observed later still: a lower bound from start() holds no latency
+      // difference between the two ticks
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1_540);
     } finally {
       await balance.stop();
     }
@@ -758,12 +772,48 @@ describe('tick', () => {
     try {
       balance.start();
       expect(intervals).not.toHaveBeenCalled();
-      expect(timeouts.mock.calls.some(([, ms]) => ms === 120)).toBe(true);
       await until('the first tick', () => userGets().length === 1);
+      // armed after the read of the last attempt
+      expect(timeouts.mock.calls.some(([, ms]) => ms === 120)).toBe(true);
       expect(intervals.mock.calls.filter(([, ms]) => ms === 200)).toHaveLength(1);
     } finally {
       timeouts.mockRestore();
       intervals.mockRestore();
+      await balance.stop();
+    }
+  });
+
+  // the snapshot observed 200 ms ago stands for the previous process's last tick: the jitter is
+  // 20 ms, the floor 1 000 − 200 = 800 ms after the observation
+  it('BF4 ticks first no sooner than an interval after the last recorded attempt', async () => {
+    const account = await withIntent();
+    await upsertBalanceSnapshot(own.db, {
+      brokerAccountId: account.accountId,
+      user: {
+        id: String(account.mockId),
+        level: { code: 'standard', rank: 1 },
+        minTradeAmount: '1' as never,
+        real: { available: '0' as never, held: '0' as never, total: '0' as never },
+        demo: { available: '1' as never, held: '0' as never, total: '1' as never },
+      },
+      requested: false,
+    });
+    await shift(account.accountId, 'rest_observed_at', '-200 milliseconds', own.db);
+    const balance = reconciler(
+      own.db,
+      { intervalMs: 1_000, firstTickMinMs: 20 },
+      undefined,
+      () => 0,
+    );
+    const started = Date.now();
+    balance.start();
+    try {
+      await sleep(500);
+      expect(userGets()).toHaveLength(0);
+      await until('the first tick', () => userGets().length === 1);
+      // 1 000 − 200, less the time between the shift and start()
+      expect(Date.now() - started).toBeGreaterThanOrEqual(700);
+    } finally {
       await balance.stop();
     }
   });
