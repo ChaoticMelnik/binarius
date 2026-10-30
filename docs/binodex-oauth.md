@@ -215,7 +215,7 @@ same on both.
 **Timeouts.** The backend may hold the callback for `OAUTH_CALLBACK_BUDGET_MS` (8 s,
 `packages/shared/src/oauth.ts`): the code exchange (5 s); the push (3 s) follows the response
 (#874). Its timing chain checks that the exchange fits, that the budget fits in shutdown phase 1,
-and that the push does too, since `app.close()` waits for it. `apps/web` waits 10 s for
+and that the exchange and the push together do too, since `app.close()` waits for both in turn. `apps/web` waits 10 s for
 the forward (`OAUTH_CALLBACK_REQUEST_TIMEOUT_MS`), above the budget so it never gives up on a link
 that is still going to happen; its shutdown budget is 11 s and the compose `stop_grace_period`
 14 s. Both chains throw at import when out of order.
@@ -340,7 +340,10 @@ answers first and the push runs after the response, in an in-flight set
 (`apps/backend/src/in-flight.ts`) the auth plugin's `onClose` hook waits for: `app.close()`, shutdown
 phase 1, ends only after the pushes in flight, while the pool is still open for their two
 statements (the language read, the 403's write); the timing chain checks
-`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` at import. The page no longer
+`CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` and, because `app.close()` waits
+for the callback's exchange and then for its push,
+`BROKER_HTTP_TIMEOUT_MS + CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` at
+import. The page no longer
 waits for Telegram, and the message arrives a moment after it. The response does not depend on the
 push: the status and body are the ones in the table whatever
 Telegram answers, and nothing is written about the push, with one exception: a 403 marks the

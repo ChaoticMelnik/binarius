@@ -69,9 +69,12 @@ working has one reason, in the token service's order of checks:
 
 `createServiceAccountKeeper` (`apps/backend/src/broker/service-accounts.ts`), one per backend
 process, built in `index.ts` with the token service's `accessToken` and the staff bot's
-`notifyStaff`. `start()` runs after `listen()` with the other loops; the first tick at a random
-point in `[SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS, SERVICE_ACCOUNTS_TICK_MS)` after it (#874, Rule 65),
-then a tick every `SERVICE_ACCOUNTS_TICK_MS` from that one, single-flight (a tick longer than the
+`notifyStaff`. `start()` runs after `listen()` with the other loops and reads
+`latestServiceRotationAgeMs` (the newest `token_rotated_at` of a marked account, by the database
+clock); the first tick at `firstTickAtMs(jitter, SERVICE_ACCOUNTS_TICK_MS, age)` after the read,
+the jitter a random point in `[SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS, SERVICE_ACCOUNTS_TICK_MS)`
+(#874, Rule 65), so a restart puts the new first tick at least an interval after the previous
+process's last rotation; then a tick every `SERVICE_ACCOUNTS_TICK_MS` from that one, single-flight (a tick longer than the
 interval makes the next one a no-op). Each tick:
 
 1. **Renewals.** `listServiceRenewalCandidates`: marked, active, the user active, the token expiring
@@ -135,14 +138,17 @@ The chain: `SERVICE_RENEWALS_PER_TICK × BROKER_HTTP_TIMEOUT_MS < SERVICE_ACCOUN
 SERVICE_STALLED_RETRY_MS < SERVICE_TOKEN_ROTATION_GAP_MS < SERVICE_TOKEN_RENEW_AHEAD_MS`, and
 `ADMIN_TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` (`stop()` waits for one send in flight;
 `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS` already holds for one exchange). Exchanges are
-outside the per-minute GET shares (`BROKER_BUDGET_HOLDS` is unchanged): at most five a minute in the
-worst case, about one per service account every six days in practice.
+outside the per-minute GET shares (`BROKER_BUDGET_HOLDS` is unchanged): at most five a minute,
+across a restart too for the exchanges that rotated a token; a tick whose exchanges all failed is
+not seen by the next process's first tick (#874). About one per service account every six days in
+practice.
 
 ## Start and shutdown
 
 The keeper starts after `listen()` with the other loops and stops in phase 1 of the shutdown: the
 current tick finishes its exchange in flight, sends nothing more, and `stop()` resolves. A `stop()`
-before the first tick cancels it (#874; the shape is the balance reconciler's,
+during the read of the last rotation or before the first tick cancels it, and waits for the read;
+a failed read waits a whole interval (#874; the shape is the balance reconciler's,
 [broker-balance.md → Start and shutdown](broker-balance.md#start-and-shutdown)).
 
 ## The Rule 12 exception

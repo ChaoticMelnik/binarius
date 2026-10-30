@@ -207,6 +207,9 @@ per tick, at most the tick limit.
 - `BALANCE_FIRST_TICK_MIN_MS` (5 000) `< MIN_BALANCE_RECONCILE_INTERVAL_MS` and
   `SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS` (5 000) `< SERVICE_ACCOUNTS_TICK_MS` (60 000), in
   `firstTickBoundsHold()` (#874): the first tick's range is never empty.
+- `firstTickAtMs(jitter, interval, age)` = `max(jitter, interval − max(0, age))`, always in
+  `[jitter, interval]` (#874, `timing.test.ts` FT4): a mark in the future (a clock step) counts as
+  age 0, a whole interval.
 
 Both env variables are forwarded by `compose.yaml` without a value, so the code's defaults apply
 unless the host sets them.
@@ -217,12 +220,20 @@ The reconciler is created after the app, because it logs through `app.log`. `sta
 `listen()`, inside the second `if (!shuttingDown)` in `index.ts`, and a `start()` after `stop()`
 does nothing.
 
-The first tick (#874, Rule 65) runs `firstTickDelayMs(BALANCE_FIRST_TICK_MIN_MS, interval,
-Math.random)` after `start()`, a random point in `[5 s, interval)`, and the interval is armed from
-that tick, whatever its outcome. The ticks keep the interval's spacing from the first one on, so
-the first minute after a start holds no more ticks than a steady minute: for the defaults, one
-tick, at most 100 GETs, the balance share. Before #874 the first tick came a whole interval after
-the start. A `stop()` inside the first delay cancels it. The service-account keeper starts the
+The first tick (#874, Rule 65, `apps/backend/src/broker/first-tick.ts`). `start()` reads the age
+of the newest recorded attempt, `latestBalanceAttemptAgeMs`: the newest
+`greatest(rest_observed_at, last_refresh_failed_at)` over every snapshot row, by the database
+clock, whichever process or writer left it (the route's refresh, the worker's REST check and its
+`user.data`). The first tick comes at `firstTickAtMs(jitter, interval, age)` after the read
+answered, with the jitter `firstTickDelayMs(BALANCE_FIRST_TICK_MIN_MS, interval, Math.random)`, a
+random point in `[5 s, interval)`; the interval is armed from that tick, whatever its outcome.
+Between the previous process's last recorded attempt and the new process's first tick there is at
+least one interval, so a restart puts no two ticks into one 60 s window; inside one process the
+spacing is the interval's (FT3). With recent writes (any traffic) the first tick lands near a
+whole interval after the start, as before #874; the jitter shortens the wait only when nothing was
+written for a while. A failed read is logged (`warn`, the error's identity) and waits a whole
+interval. A `stop()` during the read or the first delay cancels the tick, and waits for the read.
+An attempt that left no row is not seen (accepted risks). The service-account keeper starts the
 same way ([service-accounts.md](service-accounts.md)). Phase 1 calls `stop()`, which aborts the GETs in flight and waits for the tick and
 the flights to finish. A token exchange in progress (a route refresh) is not abortable, and is
 covered by `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`. A `refresh()` after `stop()`
@@ -302,6 +313,12 @@ on top of #99's socket client, which writes nothing itself:
   ours, so it alerts. `held` was observed on demo only (2026-10-03: up by the stake on open, back
   on close); real is assumed to behave the same. Falsifiable: a `broker balance mismatch` on a
   real account right after a clean `accepted` with no other trade.
+- The first tick's floor (#874) sees only attempts that left a trace in a row: a failed GET on an
+  account without a snapshot (`recordBalanceRefreshFailure` answers false) and a GET cut by
+  `stop()` (at most `BALANCE_POLL_CONCURRENCY`) leave none. Falsifiable bound: a 60 s window holds
+  two balance ticks across a restart only when every attempt of the previous process's last tick
+  left no row and no process wrote a snapshot within the interval. Any writer moves the floor
+  later, never earlier; the read is one aggregate over the table per start.
 
 ## Boundaries
 
