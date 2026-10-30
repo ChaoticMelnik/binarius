@@ -213,6 +213,29 @@ function orchestratorOf({
   });
 }
 
+// the statements a Db sends (#871: the tick's shape is a constant number of them)
+function countingDb() {
+  const statements: string[] = [];
+  const db = createDb(tmp.pool, { logger: { logQuery: (query) => void statements.push(query) } });
+  return { db, statements };
+}
+
+// a pool whose batch read (the one statement with unnest) first waits for `before`: a moment
+// between the scan and the read
+function hookedDb(before: () => Promise<void>) {
+  const pool = new Pool({ connectionString: tmp.url });
+  const query = pool.query.bind(pool) as (...args: unknown[]) => Promise<unknown>;
+  (pool as unknown as { query: (...args: unknown[]) => Promise<unknown> }).query = async (
+    ...args
+  ) => {
+    const config = args[0];
+    const text = typeof config === 'string' ? config : (config as { text?: string }).text;
+    if (text?.includes('unnest(') === true) await before();
+    return query(...args);
+  };
+  return { db: createDb(pool), end: () => pool.end() };
+}
+
 // the access token per account for the REST open; the executor is the production composition
 const accessTokens = new Map<string, string>();
 const rest = () => createBrokerRestClient({ baseUrl: broker.url });
@@ -518,27 +541,28 @@ describe('the attempt and the sequence (#287)', () => {
   it('E7c′ a deadline that passes after the scan stops the session before its catalog read', async () => {
     const earlier = await seedSession();
     const later = await seedSession();
-    // on the database clock: the deadline 1.5 s ahead, passing while the first session's attempt
-    // waits on the catalog, well inside its attempt timeout
+    // on the database clock: the deadline 1.5 s ahead, passing between the scan and the batch's
+    // read (#871: the read is held until then), well inside the batch timeout
     await tmp.db
       .update(tradingSessions)
       .set({
         startedAt: sql`now() - make_interval(secs => ${(SESSION_MAX_DURATION_MS - 1_500) / 1000})`,
       })
       .where(eq(tradingSessions.id, later.session.id));
-    const pairs = pairsOf(async () => {
-      await until(
+    const hooked = hookedDb(() =>
+      until(
         'the later deadline on the database clock',
         async () =>
           (await readSessionHistory(tmp.db, later.session.id, {
             noSignalTimeoutMs: sessionNoSignalTimeoutMs(5),
             maxDurationMs: SESSION_MAX_DURATION_MS,
           }))!.expired,
-      );
-      return fresh();
-    });
-    const orchestrator = orchestratorOf({ pairs });
+      ),
+    );
+    const pairs = pairsOf();
+    const orchestrator = orchestratorOf({ pairs, db: hooked.db });
     await orchestrator.tick();
+    await hooked.end();
     // both were listed by the scan, so the stop below is the attempt's, not the sweep's
     expect(lines.filter((line) => line.msg === 'trading session tick').at(-1)).toMatchObject({
       runnable: 2,
@@ -745,38 +769,37 @@ describe('the kill switch (#144, #287)', () => {
 });
 
 describe('failures that write no ending (#287)', () => {
-  it('a throw in an attempt holds the session back for retryMs without moving last_decision_at', async () => {
+  const failed = (msg: string) => lines.filter((line) => line.msg === msg).length;
+
+  it('F1′ a throw in the pairs source fails the tick: last_decision_at stays, nothing is held back (#871)', async () => {
     const seed = await seedSession();
     const pairs = pairsOf(() => {
       throw new Error('stub failure');
     });
+    const before = failed('trading session tick failed');
     const orchestrator = orchestratorOf({ pairs });
     await orchestrator.tick();
-    advance(59_000);
-    await orchestrator.tick();
-    expect(pairs.calls).toBe(1);
+    expect(failed('trading session tick failed')).toBe(before + 1);
     expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
-    expect(linesOf(seed.session.id)).toContainEqual(
-      expect.objectContaining({
-        level: 50,
-        msg: 'trading session attempt failed',
-        brokerAccountId: seed.brokerAccountId,
-      }),
-    );
-    advance(2_000);
     await orchestrator.tick();
     expect(pairs.calls).toBe(2);
     await orchestrator.stop();
   });
 
-  it('an attempt past its deadline is cut and held back', async () => {
+  it('T1 a batch past its deadline is cut: nothing written, nothing held back (#871)', async () => {
     const seed = await seedSession();
     // ignores its signal: only the race ends the wait
     const pairs = pairsOf(() => new Promise<PairsOutcome>(() => {}));
+    const before = failed('trading session batch timed out');
     const orchestrator = orchestratorOf({ pairs, config: { attemptTimeoutMs: 100 } });
     await orchestrator.tick();
+    expect(failed('trading session batch timed out')).toBe(before + 1);
+    expect(lines.filter((line) => line.msg === 'trading session batch timed out').at(-1)).toEqual(
+      expect.objectContaining({ level: 40, runnable: 1, ms: expect.any(Number) }),
+    );
     expect((await sessionRow(seed.session.id)).lastDecisionAt).toBeNull();
-    expect(msgsOf(seed.session.id)).toContain('trading session attempt timed out');
+    await orchestrator.tick();
+    expect(pairs.calls).toBe(2);
     await orchestrator.stop();
   });
 
@@ -788,6 +811,110 @@ describe('failures that write no ending (#287)', () => {
     expect(lines).toContainEqual(
       expect.objectContaining({ level: 50, msg: 'trading session tick failed' }),
     );
+    await orchestrator.stop();
+  });
+});
+
+// #871: one batch per tick - one batched read, one pairs GET, one write per kind
+describe("the tick's batch (#871)", () => {
+  const ticks = () => lines.filter((line) => line.msg === 'trading session tick');
+
+  it('P1 one catalog read per tick, none on a tick without a session at the pair step', async () => {
+    const seeds = [await seedSession(), await seedSession(), await seedSession()];
+    const pairs = pairsOf();
+    const orchestrator = orchestratorOf({ pairs });
+    await orchestrator.tick();
+    expect(pairs.calls).toBe(1);
+    for (const seed of seeds) {
+      expect(msgsOf(seed.session.id).filter((msg) => msg === DRIVER)).toHaveLength(1);
+    }
+    // all three held for h1CheckMs: nothing runnable, no GET
+    await orchestrator.tick();
+    expect(ticks().at(-1)).toMatchObject({ runnable: 0 });
+    expect(pairs.calls).toBe(1);
+    await orchestrator.stop();
+  });
+
+  it('P2 an unavailable catalog holds the sessions at the pair step; a stop by the history lands in the same tick', async () => {
+    const done = await seedSession({ settings: h1Settings(1, SessionStakeStrategy.Fixed) });
+    await driverTrade(done, 1);
+    const waiting = await seedSession();
+    const pairs = pairsOf({ ok: false, reason: 'catalog_unavailable' });
+    const orchestrator = orchestratorOf({ pairs });
+    await orchestrator.tick();
+    expect(pairs.calls).toBe(1);
+    expect(await stopOf(done.session.id)).toEqual(stoppedWith(TradingSessionStopReason.Completed));
+    expect(msgsOf(done.session.id)).not.toContain('trading session pairs unavailable');
+    expect(await stopOf(waiting.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(waiting.session.id)).toContain('trading session pairs unavailable');
+    // held retryMs: the next tick does not try it again
+    advance(CONFIG.tickMs);
+    await orchestrator.tick();
+    expect(pairs.calls).toBe(1);
+    await orchestrator.stop();
+  });
+
+  it('S1 two sessions that complete in one tick are stopped by one statement', async () => {
+    const seeds = [
+      await seedSession({ settings: h1Settings(1, SessionStakeStrategy.Fixed) }),
+      await seedSession({ settings: h1Settings(1, SessionStakeStrategy.Fixed) }),
+    ];
+    for (const seed of seeds) await driverTrade(seed, 1);
+    const { db, statements } = countingDb();
+    const orchestrator = orchestratorOf({ db });
+    await orchestrator.tick();
+    for (const seed of seeds) {
+      expect(await stopOf(seed.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.Completed),
+      );
+      expect(msgsOf(seed.session.id)).toContain('trading session completed');
+    }
+    // three sweeps, the scan, the batch's two reads, one stop; no mark and no touch
+    expect(statements).toHaveLength(7);
+    await orchestrator.stop();
+  });
+
+  it('N1 3 000 sessions are decided in one tick of eight statements and one catalog read', async () => {
+    const N = 3_000;
+    // one statement per table, the columns of seedUser/seedBrokerAccount and a REST snapshot
+    await tmp.db.execute(
+      sql`insert into users (telegram_user_id, token_balance, status)
+          select 7000000000 + g, 20, 'active' from generate_series(1, ${N}) g`,
+    );
+    await tmp.db.execute(
+      sql`insert into broker_accounts (user_id, broker_user_id, access_token_enc, refresh_token_enc,
+            token_key_id, access_token_expires_at, status)
+          select id, 'n1-' || telegram_user_id, decode('00', 'hex'), decode('00', 'hex'), 'k1',
+            now() + interval '1 hour', 'active'
+            from users where telegram_user_id between 7000000001 and ${7_000_000_000 + N}`,
+    );
+    await tmp.db.execute(
+      sql`insert into broker_balance_snapshots (broker_account_id, real_available, real_held,
+            real_total, demo_available, demo_held, demo_total, min_trade_amount, level_code,
+            level_rank, rest_observed_at)
+          select id, 0, 0, 0, 10000, 0, 10000, 1, 'standard', 1, now()
+            from broker_accounts where broker_user_id like 'n1-%'`,
+    );
+    await tmp.db.execute(
+      sql`insert into trading_sessions (broker_account_id, mode, settings)
+          select id, 'demo', ${JSON.stringify(h1Settings())}::jsonb
+            from broker_accounts where broker_user_id like 'n1-%'`,
+    );
+    const { db, statements } = countingDb();
+    const pairs = pairsOf();
+    const orchestrator = orchestratorOf({ db, pairs, config: { batchSize: N } });
+    await orchestrator.tick();
+    // three sweeps, the scan, the batch's two reads, one decision mark, one balance touch
+    expect(statements).toHaveLength(8);
+    expect(pairs.calls).toBe(1);
+    expect(ticks().at(-1)).toMatchObject({ runnable: N, attempted: N, held: N, stopped: 0 });
+    const [undecided] = await tmp.db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(tradingSessions)
+      .where(
+        sql`${tradingSessions.status} = 'active' and ${tradingSessions.lastDecisionAt} is null`,
+      );
+    expect(undecided!.n).toBe(0);
     await orchestrator.stop();
   });
 });
@@ -1542,6 +1669,47 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     });
   });
 
+  it("WK6 a wake with an account attempts that account's sessions only (#871)", async () => {
+    const orchestrator = wakeful({ log: tagged('WK6') });
+    // the first tick is always full; the wake below comes inside a tick of it
+    await orchestrator.tick();
+    const a = await seedSession();
+    const b = await seedSession();
+    orchestrator.wake(a.brokerAccountId);
+    await until('the woken tick', () => ticksOf('WK6').length === 2);
+    expect(ticksOf('WK6')[1]).toEqual(
+      expect.objectContaining({ runnable: 1, attempted: 1, woken: 1, accounts: 1 }),
+    );
+    expect(msgsOf(a.session.id)).toContain(DRIVER);
+    expect(msgsOf(b.session.id)).not.toContain(DRIVER);
+    expect((await sessionRow(b.session.id)).lastDecisionAt).toBeNull();
+  });
+
+  it('WK7 a woken tick runs no sweep; a tick a tick after the last full one is full (#871)', async () => {
+    const b = await seedSession();
+    const { db, statements } = countingDb();
+    const orchestrator = wakeful({ db, log: tagged('WK7') });
+    await orchestrator.tick();
+    expect(await stopOf(b.session.id)).toEqual(ACTIVE);
+    const a = await seedSession();
+    await closeTradingSwitch(tmp.db);
+    const before = statements.length;
+    orchestrator.wake(a.brokerAccountId);
+    await until('the woken tick', () => ticksOf('WK7').length === 2);
+    // the scan, the batch's two reads, one decision mark, one balance touch
+    expect(statements.length - before).toBe(5);
+    expect(await stopOf(a.session.id)).toEqual(ACTIVE);
+    expect(msgsOf(a.session.id)).toContain(DRIVER);
+    advance(CONFIG.tickMs);
+    orchestrator.wake(a.brokerAccountId);
+    await until('the full tick', () => ticksOf('WK7').length === 3);
+    for (const seed of [a, b]) {
+      expect(await stopOf(seed.session.id)).toEqual(
+        stoppedWith(TradingSessionStopReason.KillSwitch),
+      );
+    }
+  });
+
   it('WK5 a wake with no runnable session, before start(), is one idle tick', async () => {
     const orchestrator = wakeful({ log: tagged('WK5') });
     orchestrator.wake();
@@ -1719,7 +1887,11 @@ describe('L1 the log lines (#287)', () => {
     expect(rows.filter((row) => !row.race && !seen.has(row.msg)).map((row) => row.msg)).toEqual([]);
     const levels: Record<string, number> = { debug: 20, info: 30, warn: 40, error: 50 };
     const ours = lines.filter((line) => String(line.msg).startsWith('trading session'));
-    const tickLines = new Set(['trading session tick', 'trading session tick failed']);
+    const tickLines = new Set([
+      'trading session tick',
+      'trading session tick failed',
+      'trading session batch timed out',
+    ]);
     for (const line of ours.filter((l) => !tickLines.has(String(l.msg)))) {
       expect(line, String(line.msg)).toEqual(
         expect.objectContaining({

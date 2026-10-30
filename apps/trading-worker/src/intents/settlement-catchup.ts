@@ -45,8 +45,8 @@ export interface SettlementCatchupDeps {
   tokens: AccessTokenSource;
   logger: Logger;
   config: SettlementCatchupConfig;
-  // called after the commit of a write that ended an intent; never throws (#696)
-  onIntentEnded?: () => void;
+  // called after the commit of a write that ended an intent, with its account; never throws (#696)
+  onIntentEnded?: (brokerAccountId: string) => void;
 }
 
 export interface SettlementCatchup {
@@ -164,7 +164,9 @@ export function createSettlementCatchup({
       trades: read.trades,
     });
     // the page settles the account's other trades too, not only the target
-    if (outcomes.some((outcome) => outcome.result === 'settled')) onIntentEnded?.();
+    if (outcomes.some((outcome) => outcome.result === 'settled')) {
+      onIntentEnded?.(overdue.brokerAccountId);
+    }
     const target = outcomes.find((outcome) => outcome.brokerTradeId === overdue.brokerTradeId);
     if (target?.result === 'settled') return 'settled';
     if (target?.result === 'already_settled' || target?.result === 'intent_not_accepted') {

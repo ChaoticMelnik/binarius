@@ -33,6 +33,8 @@ describe('the trading session constants', () => {
     expect(TRADING_SESSION_CONFIG.maxDurationMs).toBe(SESSION_MAX_DURATION_MS);
     // #509, #637: the shared count the bot's stop line prints
     expect(TRADING_SESSION_CONFIG.noSignalCandles).toBe(SESSION_NO_SIGNAL_CANDLES);
+    // #871: the pilot's load (1-3k sessions) is decided in one tick's batch
+    expect(TRADING_SESSION_CONFIG.batchSize).toBeGreaterThanOrEqual(3_000);
     expect(TRADING_SESSION_RETRY_MS).toBeLessThan(
       SESSION_NO_SIGNAL_CANDLES * SIGNAL_CHART_INTERVAL_MS['5s'],
     );

@@ -793,26 +793,26 @@ runs its steps at once, so the orchestrator's stop has to fit it on its own.
 ## Logs
 
 Every line of the orchestrator carries `sessionId` and `brokerAccountId`, except the tick's own
-two. No line carries an access token, a URL or an amount; `stake_stop`'s `detail` is the sizer's
+three. No line carries an access token, a URL or an amount; `stake_stop`'s `detail` is the sizer's
 echo of its limits (`minTradeAmount`, `available`, the candidate). `orchestrator.db.test.ts` L1
 reads this table: every row not marked "race" is produced by a case, and every `trading session …`
 line is in it with its level.
 
 | msg | level | When |
 |---|---|---|
-| `trading session stopped` | warn | a sweep or an attempt stopped the session; `reason`, plus `version` (`invalid_settings` of a row that is not H1's, #835), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed`, #509 — `no_signal` until #835, `paused` until #698; the session's limit in ms, #637) |
+| `trading session stopped` | warn | a sweep or a session's decision stopped the session; `reason`, plus `version` (`invalid_settings` of a row that is not H1's, #835), `stopReason`/`detail` (`stake_stop`), `issues` or `error` (`invalid_settings`), `lastErrors` (`rejected_twice`), `assetId`/`listed` (`pair_unavailable`), `waited` and `limitMs` (`no_signal_timeout`: `pair_closed`, #509 — `no_signal` until #835, `paused` until #698; the session's limit in ms, #637) |
 | `trading session stopped for manual review` | error | the halt sweep |
 | `trading session completed` | info | the session's last cycle closed (`sessionProgress`, #552): `settled` and `cycles`, the `done` of `sessionProgress` — the closed cycles of a v3/v5 row, the settled trades of a v1/v2/v4 row |
-| `trading session vanished` | warn | a race: the row was gone between the scan and the history |
-| `trading session has a live intent` | info | a race: the history shows a live intent the scan did not |
-| `trading session pairs unavailable` | warn | `catalog_unavailable`, a backend failure (`reason`, `status`), or `reason: 'stale'` |
+| `trading session vanished` | warn | a race: the row was gone between the scan and the batch's read |
+| `trading session has a live intent` | info | a race: the batch's read shows a live intent the scan did not |
+| `trading session pairs unavailable` | warn | `catalog_unavailable`, a backend failure (`reason`, `status`), or `reason: 'stale'`; one line per session that reached the pair step, from the tick's one GET |
 | `trading session waits for the pair to open` | info | `scheduledUntil` is ahead (`assetId`) |
-| `trading session waits for the H1 driver` | debug | every session (settings v5; a read-only v4 row) that passed the attempt's checks is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
+| `trading session waits for the H1 driver` | debug | every session (settings v5; a read-only v4 row) that passed the decision's checks is held `TRADING_SESSION_H1_CHECK_MS`; its trades come from the driver (#707) |
 | `trading session waits for the balance` | info | the sizer's `insufficient_balance` while a settlement on the account in the session's mode is newer than the balance, inside the no-signal limit from that settlement; the session is held for one tick (`step`, #696) |
-| `trading session attempt timed out` | warn | the attempt passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` |
-| `trading session attempt failed` | error | a throw in the attempt (`errorLogFields`); not on the stop signal |
-| `trading session tick failed` | error | a throw in a sweep, the scan or an ending's write (`errorLogFields`); the rest of the batch is skipped |
-| `trading session tick` | debug | `{ runnable, attempted, held, stopped, woken }`; `woken` — the `wake()` calls this tick served, 0 on a tick of the interval (#696) |
+| `trading session attempt failed` | error | a race: a throw in one session's decision in memory (`errorLogFields`) — a bug, the predicates and the sizer do not throw on what was read; that session is held `TRADING_SESSION_RETRY_MS`, the batch goes on |
+| `trading session batch timed out` | warn | the batch passed `TRADING_SESSION_ATTEMPT_TIMEOUT_MS` (`runnable`, `ms`): nothing more is written, nothing is held back, the next tick takes the batch again (#871) |
+| `trading session tick failed` | error | a throw in a sweep, the scan, the batch's read, the pairs source or a write (`errorLogFields`); the rest of the tick is skipped, nothing is held back |
+| `trading session tick` | debug | `{ runnable, attempted, held, stopped, woken, accounts, ms }`; `woken` — the `wake()` calls this tick served, 0 on a tick of the interval (#696); `accounts` — the accounts of a woken tick over its accounts only, 0 on a full tick (#871); `ms` — the tick's wall time |
 
 ## The CLI
 

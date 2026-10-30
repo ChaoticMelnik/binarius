@@ -21,10 +21,11 @@ import {
   summarizeWatchedBalances,
   toBrokerBalanceView,
   touchBalanceRequested,
+  touchBalancesRequested,
   upsertBalanceSnapshot,
   type BalanceSnapshotRead,
 } from './balance-snapshot-ops';
-import type { Db } from './client';
+import { createDb, type Db } from './client';
 import {
   BalanceRefreshError,
   brokerAccounts,
@@ -451,6 +452,31 @@ describe('recordBalanceRefreshFailure and touchBalanceRequested', () => {
     const after = (await snapshotRow(accountId))!.row;
     expect(after.lastRequestedAt).toBeInstanceOf(Date);
     expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime());
+  });
+
+  it("TB1 the batch touch (#871) moves the listed accounts' snapshots only, in one statement", async () => {
+    const accounts = [await seedAccount(), await seedAccount(), await seedAccount()];
+    for (const { accountId } of accounts) {
+      await upsertBalanceSnapshot(tmp.db, {
+        brokerAccountId: accountId,
+        user: brokerUser(),
+        requested: false,
+      });
+    }
+    const [a, b, c] = accounts.map((account) => account.accountId) as [string, string, string];
+    const { accountId: none } = await seedAccount();
+    const statements: string[] = [];
+    const counted = createDb(tmp.pool, {
+      logger: { logQuery: (query) => void statements.push(query) },
+    });
+    expect(await touchBalancesRequested(counted, [a, b, none])).toBe(2);
+    expect(statements).toHaveLength(1);
+    expect((await snapshotRow(a))!.row.lastRequestedAt).toBeInstanceOf(Date);
+    expect((await snapshotRow(b))!.row.lastRequestedAt).toBeInstanceOf(Date);
+    expect((await snapshotRow(c))!.row.lastRequestedAt).toBeNull();
+    expect(await snapshotRow(none)).toBeUndefined();
+    expect(await touchBalancesRequested(counted, [])).toBe(0);
+    expect(statements).toHaveLength(1);
   });
 });
 

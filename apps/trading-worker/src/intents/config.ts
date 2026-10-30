@@ -82,7 +82,7 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //   SESSION_TICK_MS < SHUTDOWN_PHASE1_BUDGET_MS — the scan in flight ends inside phase 1
 // The trading session orchestrator (#287, trading-session/config.ts) adds one:
 //   TRADING_SESSION_ATTEMPT_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS — phase 1 waits for its stop()
-//     alongside the other steps: one attempt at most
+//     alongside the other steps: one batch at most (#871)
 // The intent router (#347, intents/router.ts) adds these:
 //   INTENT_HOLD_MAX_MS + MAX_SUBMIT_ACK_TIMEOUT_MS + 2 × INTENT_ROUTER_STOP_BUDGET_MS
 //     < SHUTDOWN_PHASE1_BUDGET_MS — the own queue's consumer waits out a hold and a submit, and the drain starts before its cut (notAfter =

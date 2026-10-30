@@ -9,6 +9,7 @@ import {
   TradingSessionStopReason,
   sessionNoSignalTimeoutMs,
   decimalStringSchema,
+  type BrokerUser,
   type DecimalString,
   type TradeIntentErrorCode,
   BotLanguage,
@@ -23,6 +24,8 @@ import {
   users,
 } from './schema/index';
 import { setUserLanguage } from './user-ops';
+import { upsertBalanceSnapshot } from './balance-snapshot-ops';
+import { createDb } from './client';
 import {
   closeTradingSwitch,
   createTempDatabase,
@@ -59,13 +62,16 @@ import {
   listRunnableSessions,
   listTrackedSessions,
   markSessionDecision,
+  markSessionDecisions,
   readActiveTradingSessionView,
+  readSessionBatch,
   readSessionHistory,
   recordSessionStatusMessage,
   stopExpiredSessions,
   stopHaltedSessions,
   stopPausedSessions,
   stopTradingSession,
+  stopTradingSessions,
   stopUserSessions,
   type CreateSessionIntentInput,
   type CreateTradingSessionInput,
@@ -719,6 +725,23 @@ describe('listRunnableSessions', () => {
     expect(ids).toContain(within.id);
     expect(ids).not.toContain(expired.id);
   });
+
+  it("R5 accounts narrows the scan to those accounts' sessions (#871); an empty list scans nothing", async () => {
+    const a = await seedSessionAccount();
+    const b = await seedSessionAccount();
+    const scan = (accounts?: string[]) =>
+      listRunnableSessions(tmp.db, {
+        limit: 1000,
+        maxDurationMs: HOUR_MS,
+        ...(accounts === undefined ? {} : { accounts }),
+      });
+    const ids = (await scan([a.brokerAccountId])).map((s) => s.id);
+    expect(ids).toEqual([a.session.id]);
+    expect((await scan()).map((s) => s.id)).toEqual(
+      expect.arrayContaining([a.session.id, b.session.id]),
+    );
+    expect(await scan([])).toEqual([]);
+  });
 });
 
 describe('the stop sweeps', () => {
@@ -1129,6 +1152,195 @@ describe('stopTradingSession and markSessionDecision', () => {
     await tmp.db.execute(sql`select pg_sleep(0.01)`);
     await markSessionDecision(tmp.db, { id: stopped.session.id });
     expect((await sessionOf(stopped.session.id))!.lastDecisionAt).toEqual(row.lastDecisionAt);
+  });
+
+  it('D2 markSessionDecisions (#871) moves the active sessions of the list only, in one statement', async () => {
+    const active = await seedSessionAccount();
+    const stopped = await seedSessionAccount();
+    const row = (await stopTradingSession(tmp.db, { id: stopped.session.id, reason: 'timeout' }))!;
+    await tmp.db.execute(sql`select pg_sleep(0.01)`);
+    const statements: string[] = [];
+    const counted = createDb(tmp.pool, {
+      logger: { logQuery: (query) => void statements.push(query) },
+    });
+    await markSessionDecisions(counted, [active.session.id, stopped.session.id]);
+    expect(statements).toHaveLength(1);
+    expect((await sessionOf(active.session.id))!.lastDecisionAt).toBeInstanceOf(Date);
+    expect((await sessionOf(stopped.session.id))!.lastDecisionAt).toEqual(row.lastDecisionAt);
+    await markSessionDecisions(counted, []);
+    expect(statements).toHaveLength(1);
+  });
+
+  it('T2 stopTradingSessions (#871) stops the active ones once; one stopped earlier keeps its reason', async () => {
+    const [a, b, c] = [
+      await seedSessionAccount(),
+      await seedSessionAccount(),
+      await seedSessionAccount(),
+    ];
+    await stopTradingSession(tmp.db, { id: c.session.id, reason: 'user_stopped' });
+    const rows = await stopTradingSessions(tmp.db, {
+      ids: [a.session.id, b.session.id, c.session.id],
+      reason: 'completed',
+    });
+    expect(rows.map((r) => r.id).sort()).toEqual([a.session.id, b.session.id].sort());
+    expect(rows).toContainEqual({ id: a.session.id, brokerAccountId: a.brokerAccountId });
+    for (const seed of [a, b]) {
+      expect(await sessionOf(seed.session.id)).toMatchObject({
+        status: 'stopped',
+        stopReason: 'completed',
+        endedAt: expect.any(Date),
+      });
+    }
+    expect((await sessionOf(c.session.id))!.stopReason).toBe('user_stopped');
+    expect(await stopTradingSessions(tmp.db, { ids: [], reason: 'completed' })).toEqual([]);
+  });
+});
+
+// #871: the orchestrator's tick reads its whole batch in two statements
+describe('readSessionBatch (#871)', () => {
+  const ago = (ms: number) => sql`now() - (${ms}::int * interval '1 millisecond')`;
+  const startedAgo = (id: string, ms: number) =>
+    tmp.db
+      .update(tradingSessions)
+      .set({ startedAt: ago(ms) })
+      .where(eq(tradingSessions.id, id));
+  const money = (value: string) => value as DecimalString;
+  const snapshot = (brokerAccountId: string, demo = '10002.5', real = '250') => {
+    const user: BrokerUser = {
+      id: 'broker-1',
+      level: { code: 'standard', rank: 1 },
+      minTradeAmount: money('1'),
+      real: { available: money(real), held: money('0'), total: money(real) },
+      demo: { available: money(demo), held: money('0'), total: money(demo) },
+    };
+    return upsertBalanceSnapshot(tmp.db, { brokerAccountId, user, requested: false });
+  };
+  const LIMIT = LIMITS.noSignalTimeoutMs;
+  const batch = (items: { id: string; noSignalTimeoutMs: number }[], db = tmp.db) =>
+    readSessionBatch(db, items, { maxDurationMs: HOUR_MS });
+  const item = (id: string, noSignalTimeoutMs = LIMIT) => ({ id, noSignalTimeoutMs });
+  const UNKNOWN = '00000000-0000-4000-8000-000000000000';
+
+  it('B1 reads the history and the balance of each session; no snapshot is no balance, an unknown id is absent', async () => {
+    const seed = await seedSessionAccount();
+    const { intent: first } = await createSessionIntent(tmp.db, intentInput(seed));
+    await settle(first, '0.82');
+    const { intent: second } = await createSessionIntent(
+      tmp.db,
+      intentInput(seed, { step: 2, action: TradeAction.Down }),
+    );
+    await reject(second);
+    // after the settlement: the balance is current
+    await snapshot(seed.brokerAccountId, '10002.5', '250.75');
+    const bare = await seedSessionAccount();
+    const reads = await batch([item(seed.session.id), item(bare.session.id), item(UNKNOWN)]);
+    expect([...reads.keys()].sort()).toEqual([seed.session.id, bare.session.id].sort());
+    expect(reads.get(seed.session.id)).toEqual({
+      history: {
+        telegramUserId: seed.telegramUserId,
+        expired: false,
+        waitExpired: false,
+        intents: [
+          {
+            id: first.id,
+            action: 'up',
+            status: 'settled',
+            amount: '1.00000000',
+            profit: '0.82000000',
+            lastError: null,
+          },
+          {
+            id: second.id,
+            action: 'down',
+            status: 'rejected',
+            amount: '1.00000000',
+            profit: null,
+            lastError: 'broker_rejected',
+          },
+        ],
+      },
+      balance: { available: '10002.50000000', minTradeAmount: '1.00000000', awaitsBalance: false },
+    });
+    // the same facts as the single reads the driver uses
+    expect(reads.get(seed.session.id)!.history).toEqual(
+      await readSessionHistory(tmp.db, seed.session.id, LIMITS),
+    );
+    expect(reads.get(bare.session.id)).toEqual({
+      history: {
+        telegramUserId: bare.telegramUserId,
+        expired: false,
+        waitExpired: false,
+        intents: [],
+      },
+      balance: undefined,
+    });
+  });
+
+  it("B2 waitExpired counts each session's own limit", async () => {
+    const short = await seedSessionAccount();
+    const long = await seedSessionAccount();
+    await startedAgo(short.session.id, 50_000);
+    await startedAgo(long.session.id, 50_000);
+    const reads = await batch([item(short.session.id, 40_000), item(long.session.id, 60_000)]);
+    expect(reads.get(short.session.id)!.history.waitExpired).toBe(true);
+    expect(reads.get(long.session.id)!.history.waitExpired).toBe(false);
+  });
+
+  it('B3 flags a session past the deadline', async () => {
+    const old = await seedUserWithAccount(tmp.db);
+    const expired = await seedTradingSession(tmp.db, old.brokerAccountId, {
+      startedAt: new Date(Date.now() - 2 * HOUR_MS),
+    });
+    const fresh = await seedSessionAccount();
+    const reads = await batch([item(expired.id), item(fresh.session.id)]);
+    expect(reads.get(expired.id)!.history.expired).toBe(true);
+    expect(reads.get(fresh.session.id)!.history.expired).toBe(false);
+  });
+
+  it("B4 awaitsBalance counts a settlement in the session's mode only", async () => {
+    // A: a demo session whose own demo trade settled after the snapshot
+    const a = await seedSessionAccount();
+    const { intent: won } = await createSessionIntent(tmp.db, intentInput(a));
+    await snapshot(a.brokerAccountId, '0.5');
+    await settle(won, '0.9');
+    // B: a demo trade settled after the snapshot, then a real session on the account
+    const b = await seedSessionAccount();
+    const { intent: demoWon } = await createSessionIntent(tmp.db, intentInput(b));
+    await snapshot(b.brokerAccountId, '0.5');
+    await settle(demoWon, '0.9');
+    await stopTradingSession(tmp.db, { id: b.session.id, reason: 'completed' });
+    const real = await seedTradingSession(tmp.db, b.brokerAccountId, { mode: TradeMode.Real });
+    const reads = await batch([item(a.session.id, 60_000), item(real.id, 60_000)]);
+    expect(reads.get(a.session.id)!.balance).toMatchObject({
+      available: '0.50000000',
+      awaitsBalance: true,
+    });
+    expect(reads.get(real.id)!.balance).toMatchObject({
+      available: '250.00000000',
+      awaitsBalance: false,
+    });
+  });
+
+  it('B5 each session gets its own intents', async () => {
+    const one = await seedSessionAccount();
+    const two = await seedSessionAccount();
+    const { intent: ofOne } = await createSessionIntent(tmp.db, intentInput(one));
+    const { intent: ofTwo } = await createSessionIntent(tmp.db, intentInput(two));
+    const reads = await batch([item(one.session.id), item(two.session.id)]);
+    expect(reads.get(one.session.id)!.history.intents.map((i) => i.id)).toEqual([ofOne.id]);
+    expect(reads.get(two.session.id)!.history.intents.map((i) => i.id)).toEqual([ofTwo.id]);
+  });
+
+  it('B6 two statements for a batch, none for an empty one', async () => {
+    const seed = await seedSessionAccount();
+    const statements: string[] = [];
+    const counted = createDb(tmp.pool, {
+      logger: { logQuery: (query) => void statements.push(query) },
+    });
+    expect((await batch([], counted)).size).toBe(0);
+    expect(statements).toHaveLength(0);
+    expect((await batch([item(seed.session.id)], counted)).size).toBe(1);
+    expect(statements).toHaveLength(2);
   });
 });
 
