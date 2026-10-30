@@ -60,7 +60,8 @@ export interface SessionOrchestratorDeps {
 
 export interface SessionOrchestrator {
   start(): void;
-  // never rejects
+  // a tick now, or the running one; during a tick over accounts only, the running one and a full
+  // tick right after it (#871); never rejects
   tick(): Promise<void>;
   // a tick now, or one more right after the running one (its scan may predate the caller's write);
   // with an account, a tick over that account's sessions only, without the sweeps (#871); calls
@@ -138,6 +139,7 @@ export function createSessionOrchestrator({
   let stopped = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let running: Promise<void> | undefined;
+  let runningFull = false;
   // wake() calls no tick has served yet: the accounts they named, and whether one named none
   let pending = 0;
   const pendingAccounts = new Set<string>();
@@ -481,6 +483,7 @@ export function createSessionOrchestrator({
     // one is full
     const full = pendingFull || accounts.length === 0 || tickAt - lastFullAt >= config.tickMs;
     pendingFull = false;
+    runningFull = full;
     let swept = 0;
     if (full) {
       const paused = await stopPausedSessions(db, { limit: config.batchSize });
@@ -497,7 +500,8 @@ export function createSessionOrchestrator({
     }
 
     for (const [id, until] of heldUntil) {
-      if (until > tickAt) continue;
+      // the interval's jitter: a hold of a tick ends at the next tick (H1-O5″)
+      if (until > tickAt + config.holdSlackMs) continue;
       heldUntil.delete(id);
     }
     const runnable = await listRunnableSessions(db, {
@@ -530,13 +534,19 @@ export function createSessionOrchestrator({
 
   function tick(): Promise<void> {
     if (stopped) return Promise.resolve();
+    // the interval's tick during a tick over accounts only: one full tick right after it (#871,
+    // review round 1); during a full tick the running one serves it, as before #871
+    if (running !== undefined && !runningFull) {
+      pendingFull = true;
+      return running.then(() => running);
+    }
     running ??= runTick()
       .catch((error: unknown) => {
         logger.error(errorLogFields(error), 'trading session tick failed');
       })
       .finally(() => {
         running = undefined;
-        if (pending > 0) void tick();
+        if (pending > 0 || pendingFull) void tick();
       });
     return running;
   }

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, isNotNull, isNull, lt, or, sql } from 'drizzle-orm';
-import type { SQL, SQLWrapper } from 'drizzle-orm';
+import type { SQL } from 'drizzle-orm';
 import {
   BrokerAccountStatus,
   TokenLedgerKind,
@@ -41,6 +41,7 @@ import {
   type CreateTradeIntentResult,
   type DbExecutor,
 } from './trade-intent-ops';
+import { uuidIn } from './sql-array';
 import { millisecondsAgo } from './sql-time';
 import { isTradingOpen, readTradingSwitch, tradingOpenSql } from './trading-switch-ops';
 
@@ -194,10 +195,6 @@ export interface RunnableSessionsOptions {
   // only these accounts' sessions: the orchestrator's woken tick (#871); undefined is every account
   accounts?: readonly string[];
 }
-
-// one array parameter, not a list of N parameters (renewSessionLeases' form)
-const uuidIn = (column: SQLWrapper, ids: readonly string[]) =>
-  sql`${column} = any(${sql.param([...ids])}::uuid[])`;
 
 // started_at + maxDurationMs passed, on the database clock: stopExpiredSessions stops these, the
 // scan skips them and the history flags them, all with the same boundary
@@ -466,14 +463,10 @@ export async function stopUserSessions(
     .returning(stoppedColumns);
 }
 
-// Moves the scan's order key of a session that stays active.
+// Moves the scan's order key of a session that stays active: the single-session form of
+// markSessionDecisions (one statement); no production caller since #871 (Rule 5 cites it).
 export async function markSessionDecision(db: Db, { id }: { id: string }): Promise<void> {
-  await db
-    .update(tradingSessions)
-    .set({ lastDecisionAt: sql`now()`, updatedAt: sql`now()` })
-    .where(
-      and(eq(tradingSessions.id, id), eq(tradingSessions.status, TradingSessionStatus.Active)),
-    );
+  await markSessionDecisions(db, [id]);
 }
 
 // markSessionDecision for a tick's batch in one statement (#871); none for an empty list.
@@ -776,7 +769,6 @@ export async function readSessionBatch(
       telegramUserId: users.telegramUserId,
       expired: sql<boolean>`${pastDeadline(maxDurationMs)}`,
       waitExpired: waitExpiredSql(limit),
-      snapshotOf: brokerBalanceSnapshots.brokerAccountId,
       available: sql<DecimalString | null>`${sessionAvailable}`,
       minTradeAmount: brokerBalanceSnapshots.minTradeAmount,
       awaitsBalance: awaitsBalanceSql(limit),
@@ -815,7 +807,7 @@ export async function readSessionBatch(
         intents: [],
       },
       balance:
-        row.snapshotOf === null || row.available === null || row.minTradeAmount === null
+        row.available === null || row.minTradeAmount === null
           ? undefined
           : {
               available: row.available,

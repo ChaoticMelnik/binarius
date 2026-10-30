@@ -22,6 +22,7 @@ import {
 import { brokerSessionLeases } from './schema/broker-session-leases';
 import { TERMINAL_TRADE_INTENT_STATUSES, tradeIntents } from './schema/trade-intents';
 import { users } from './schema/users';
+import { uuidIn } from './sql-array';
 import { millisecondsAgo, millisecondsFromNow } from './sql-time';
 
 // The only writers of broker_balance_snapshots (#235, part 1 of #137).
@@ -227,9 +228,7 @@ export async function touchBalancesRequested(
   const rows = await db
     .update(brokerBalanceSnapshots)
     .set({ lastRequestedAt: sql`now()`, updatedAt: sql`now()` })
-    .where(
-      sql`${brokerBalanceSnapshots.brokerAccountId} = any(${sql.param([...brokerAccountIds])}::uuid[])`,
-    )
+    .where(uuidIn(brokerBalanceSnapshots.brokerAccountId, brokerAccountIds))
     .returning({ id: brokerBalanceSnapshots.brokerAccountId });
   return rows.length;
 }

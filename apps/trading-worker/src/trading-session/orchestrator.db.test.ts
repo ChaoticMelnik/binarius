@@ -72,7 +72,7 @@ import { createSettlementCatchup } from '../intents/settlement-catchup';
 import { sweepStaleSubmitting } from '../intents/sweeper';
 import { createTradeCommandExecutor } from '../intents/trade-command-executor';
 import type { PairsOutcome, PairsSource } from './backend';
-import type { SessionOrchestratorConfig } from './config';
+import { TRADING_SESSION_HOLD_SLACK_MS, type SessionOrchestratorConfig } from './config';
 import { createSessionOrchestrator } from './orchestrator';
 import { eurUsd } from './testing';
 
@@ -128,6 +128,7 @@ const CONFIG: SessionOrchestratorConfig = {
   attemptTimeoutMs: 10_000,
   retryMs: 60_000,
   h1CheckMs: 5_000,
+  holdSlackMs: TRADING_SESSION_HOLD_SLACK_MS,
   maxDurationMs: SESSION_MAX_DURATION_MS,
   noSignalCandles: SESSION_NO_SIGNAL_CANDLES,
 };
@@ -1451,9 +1452,14 @@ describe('an H1 session (#670, #775)', () => {
     );
     expect(msgsOf(seed.session.id)).toContain(DRIVER);
     // the hold of h1CheckMs: a tick inside it does not attempt the session again
-    advance(CONFIG.h1CheckMs - 1);
+    advance(CONFIG.h1CheckMs - CONFIG.holdSlackMs - 1);
     await orchestrator.tick();
     expect(msgsOf(seed.session.id).filter((msg) => msg === DRIVER)).toHaveLength(1);
+    // the release's slack: a tick of the interval that reads the clock up to holdSlackMs early
+    // still checks the session (#871, review round 1)
+    advance(1);
+    await orchestrator.tick();
+    expect(msgsOf(seed.session.id).filter((msg) => msg === DRIVER)).toHaveLength(2);
     await orchestrator.stop();
   });
 
@@ -1710,6 +1716,79 @@ describe('the wake after a write that ends an intent or halts its account (#696)
     }
   });
 
+  // a batch read held while `gate` is set: a moment inside a tick, after its scan
+  const gatedDb = () => {
+    const hold = {
+      gate: undefined as Promise<void> | undefined,
+      entered: false,
+      release: () => {},
+    };
+    const hooked = hookedDb(async () => {
+      if (hold.gate === undefined) return;
+      hold.entered = true;
+      await hold.gate;
+    });
+    const arm = () => {
+      hold.gate = new Promise<void>((resolve) => (hold.release = resolve));
+    };
+    return { hooked, hold, arm };
+  };
+
+  it('WK8 a tick() during a woken tick over an account is a full tick right after it (#871, review round 1)', async () => {
+    const { hooked, hold, arm } = gatedDb();
+    try {
+      const b = await seedSession();
+      const orchestrator = wakeful({ db: hooked.db, log: tagged('WK8') });
+      await orchestrator.tick();
+      expect(msgsOf(b.session.id)).toContain(DRIVER);
+      const a = await seedSession();
+      await closeTradingSwitch(tmp.db);
+      arm();
+      // tickAt - lastFullAt = 0: a tick over A's account only
+      orchestrator.wake(a.brokerAccountId);
+      await until('the woken read', () => hold.entered);
+      // what the interval's timer does
+      const merged = orchestrator.tick();
+      hold.release();
+      await merged;
+      const ticks = ticksOf('WK8');
+      expect(ticks).toHaveLength(3);
+      expect(ticks[1]).toEqual(expect.objectContaining({ runnable: 1, accounts: 1 }));
+      expect(ticks[2]).toEqual(expect.objectContaining({ accounts: 0, woken: 0 }));
+      // A was decided by the tick over its account, then both stopped by the full tick's sweep
+      expect(msgsOf(a.session.id)).toContain(DRIVER);
+      for (const seed of [a, b]) {
+        expect(await stopOf(seed.session.id)).toEqual(
+          stoppedWith(TradingSessionStopReason.KillSwitch),
+        );
+      }
+      await orchestrator.stop();
+    } finally {
+      await hooked.end();
+    }
+  });
+
+  it('WK9 a tick() during a full tick is served by it, as before #871', async () => {
+    const { hooked, hold, arm } = gatedDb();
+    try {
+      await seedSession();
+      const pairs = pairsOf();
+      const orchestrator = wakeful({ db: hooked.db, pairs, log: tagged('WK9') });
+      arm();
+      const first = orchestrator.tick();
+      await until('the read', () => hold.entered);
+      const merged = orchestrator.tick();
+      hold.release();
+      await first;
+      await merged;
+      expect(ticksOf('WK9')).toHaveLength(1);
+      expect(pairs.calls).toBe(1);
+      await orchestrator.stop();
+    } finally {
+      await hooked.end();
+    }
+  });
+
   it('WK5 a wake with no runnable session, before start(), is one idle tick', async () => {
     const orchestrator = wakeful({ log: tagged('WK5') });
     orchestrator.wake();
@@ -1851,6 +1930,9 @@ describe('the balance wait after a settlement (#696)', () => {
       await settle(seed, intentId, MockTradeOutcome.Win);
       orchestrator.wake();
       await until('the wait', () => msgsOf(session.id).includes(WAITS));
+      // the line is written before the hold is applied: the tick that wrote it may still run
+      // (#716, #871)
+      await orchestrator.tick();
       expect(await stopOf(session.id)).toEqual(ACTIVE);
       advance(CONFIG.tickMs);
       await demoBalance(seed.brokerAccountId, '2.40');
