@@ -117,7 +117,9 @@ The bot polls, and grammY confirms an update's offset even when its handler fail
 `successful_payment` whose report never reached the backend is never delivered again. The
 reconciler is the only protection against that paid-but-not-credited case.
 
-- Every `STARS_RECONCILE_TICK_MS` (5 min), started after `listen()`, stopped in phase 1.
+- Every `STARS_RECONCILE_TICK_MS` (5 min), started after `listen()` and the bot text overrides'
+  first load (`botTexts.loaded()`: a credit's push is in the client texts), the first tick at
+  `start()` (#874, Rule 65), stopped in phase 1.
 - `getStarTransactions` on the public bot's token (`STARS_TELEGRAM_API_TIMEOUT_MS`, 3 s a call),
   from offset 0 in pages of 100 until a short page, at most `STARS_RECONCILE_MAX_PAGES` (50) a
   tick. The scan does not depend on the order Telegram lists them in (`@grammyjs/types` says

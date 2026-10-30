@@ -123,7 +123,9 @@ for another caller's exchange, on the row lock or on that caller's flight
 ### Callers
 
 - `POST /trading/access` and `POST /trading/sessions` (a missing snapshot): `requested: true`, the
-  route's `TRADING_ACCESS_REFRESH_BUDGET_MS` signal, an exchange allowed.
+  route's `TRADING_ACCESS_REFRESH_BUDGET_MS` signal, an exchange allowed. Both move
+  `last_requested_at` and read the snapshot in one `UPDATE … RETURNING`
+  (`touchAndReadBalanceSnapshot`, #874) before they decide on a refresh.
 - The background tick (below): `mayRefresh: false`.
 - **The session view** (#337): `GET /trading/sessions/:id` and the final read of
   `POST /trading/sessions/:id/stop` and of `POST /trading/sessions/stop` (#122, one per stopped
@@ -140,7 +142,8 @@ for another caller's exchange, on the row lock or on that caller's flight
 
 ## The background tick
 
-Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000):
+Every `BALANCE_RECONCILE_INTERVAL_MS` (env, 10 000 to 60 000, default 60 000), the first one
+inside the first interval after the start (Start and shutdown below):
 
 1. **Accounts in work** (`listBalanceRefreshCandidates`): an active account of an active user,
    with a non-terminal intent or one the bot asked about within `BALANCE_WATCH_WINDOW_MS`
@@ -201,6 +204,9 @@ per tick, at most the tick limit.
 - `TRADING_ACCESS_REFRESH_BUDGET_MS` (3 000) `< TRADING_ACCESS_BUDGET_MS` (4 000, shared)
   `< SHUTDOWN_PHASE1_BUDGET_MS` (10 000). The bot's link
   `TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS` is held by `apps/bot/src/timing.ts`.
+- `BALANCE_FIRST_TICK_MIN_MS` (5 000) `< MIN_BALANCE_RECONCILE_INTERVAL_MS` and
+  `SERVICE_ACCOUNTS_FIRST_TICK_MIN_MS` (5 000) `< SERVICE_ACCOUNTS_TICK_MS` (60 000), in
+  `firstTickBoundsHold()` (#874): the first tick's range is never empty.
 
 Both env variables are forwarded by `compose.yaml` without a value, so the code's defaults apply
 unless the host sets them.
@@ -209,7 +215,15 @@ unless the host sets them.
 
 The reconciler is created after the app, because it logs through `app.log`. `start()` runs after
 `listen()`, inside the second `if (!shuttingDown)` in `index.ts`, and a `start()` after `stop()`
-does nothing. Phase 1 calls `stop()`, which aborts the GETs in flight and waits for the tick and
+does nothing.
+
+The first tick (#874, Rule 65) runs `firstTickDelayMs(BALANCE_FIRST_TICK_MIN_MS, interval,
+Math.random)` after `start()`, a random point in `[5 s, interval)`, and the interval is armed from
+that tick, whatever its outcome. The ticks keep the interval's spacing from the first one on, so
+the first minute after a start holds no more ticks than a steady minute: for the defaults, one
+tick, at most 100 GETs, the balance share. Before #874 the first tick came a whole interval after
+the start. A `stop()` inside the first delay cancels it. The service-account keeper starts the
+same way ([service-accounts.md](service-accounts.md)). Phase 1 calls `stop()`, which aborts the GETs in flight and waits for the tick and
 the flights to finish. A token exchange in progress (a route refresh) is not abortable, and is
 covered by `BROKER_HTTP_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS`. A `refresh()` after `stop()`
 answers `aborted` without a call.

@@ -149,7 +149,8 @@ on, as every mailing, and the text promises no result.
   its own key and a new analysis is a new key. The payload is the pair and the duration, which
   the message parses with `analysisUnusedPayloadSchema`; one that does not parse is `mailing not
 built` (retried, then `failed`, or cancelled by the window first).
-- **Timing.** The planner ticks every 60 s and the sender every 5 s, so a reminder comes 10:00 to
+- **Timing.** The planner ticks once at `start()` (#874) and then every 60 s, and the sender every
+  5 s, so a reminder comes 10:00 to
   about 11:05 after the analysis; `ANALYSIS_UNUSED_AFTER_MS + MAILING_PLAN_TICK_MS +
 MAILING_SEND_TICK_MS < ANALYSIS_UNUSED_UNTIL_MS` is a link of `TIMING_CHAIN_HOLDS`. After a
   backend outage longer than the hour, the analyses of that time are never reminded.
@@ -438,7 +439,7 @@ kind's CUT is RT8, RS6, RW7, RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` 
 
 ## The planner
 
-Every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
+Once at `start()` (#874, Rule 65: it reads only the database) and then every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
 `INSERT … SELECT … ON CONFLICT (user_id, dedupe_key) DO NOTHING` per kind (`DO UPDATE … WHERE
 status = 'canceled'` for a kind with `replansCanceled`, The low-token nudge): a job for every user
 whose fact plus the offset has come, whose fact is at or after the kind's `plans_from`, whom the
