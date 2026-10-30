@@ -925,6 +925,8 @@ describe("the tick's batch (#871)", () => {
 // same database. The crash state is written step by step, not produced by killing a running job.
 // The check after an outcome (#92) never changes it; its own suite is balance-check.db.test.ts.
 const balanceCheck: BalanceCheck = { check: () => Promise.resolve('not_compared') };
+// the GET budget (#872) is not what this suite tests
+const roomyBudget = () => ({ begin: () => true, end: () => undefined });
 const restReconcilerOf = () =>
   createRestReconciler({
     rest: rest(),
@@ -940,6 +942,7 @@ const passOf = (reconciler = restReconcilerOf()) =>
     db: tmp.db,
     reconciler,
     balanceCheck,
+    budget: roomyBudget(),
     logger,
     config: {
       tickMs: 60_000,
@@ -947,12 +950,15 @@ const passOf = (reconciler = restReconcilerOf()) =>
       attemptTimeoutMs: 10_000,
       batchSize: 20,
       balanceCheckTimeoutMs: 1_000,
+      attemptGets: 4,
+      checkGets: 1,
     },
   });
 const catchupOf = () =>
   createSettlementCatchup({
     db: tmp.db,
     rest: rest(),
+    budget: roomyBudget(),
     tokens,
     logger,
     config: {
@@ -963,6 +969,7 @@ const catchupOf = () =>
       maxPages: 2,
       attemptTimeoutMs: 10_000,
       stalledRetryMs: 60_000,
+      attemptGets: 2,
     },
   });
 

@@ -60,8 +60,9 @@ import { TRADING_SESSION_ATTEMPT_TIMEOUT_MS } from '../trading-session/config';
 //     fit one attempt. A 401 on a later page (the token refused mid-attempt) can outlast it
 //     (34 s and 24 s): the report is cut by the attempt's signal, and the next attempt meets the
 //     401 on its first page and reports in time (stated)
-//   the worst case of broker GETs a minute ≤ WORKER_BROKER_GETS_PER_MINUTE (below), with
-//     60_000 / CATCHUP_TICK_MS and 60_000 / RECONCILE_TICK_MS whole ticks a minute
+//   RECONCILE_GETS_PER_ATTEMPT + BALANCE_CHECK_GETS + CATCHUP_GETS_PER_ATTEMPT
+//     ≤ WORKER_BROKER_GETS_PER_MINUTE - one attempt of each loop and one balance check fit the
+//     runtime GET budget's window (#872, below), or a loop would never start
 // The balance check after a reconciliation outcome (#92) adds these:
 //   2 × ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS - the
 //     token, the one GET and, on a 401, the report of the refused token (#281) fit a check
@@ -135,9 +136,8 @@ export const RECONCILE_ATTEMPT_TIMEOUT_MS = 30_000;
 export const RECONCILE_RETRY_MS = 60_000;
 // the pass interval
 export const RECONCILE_TICK_MS = 15_000;
-// candidates per tick, attempted one after another. 16: each attempt may make four list GETs and
-// one balance GET (#92), and the worker's share of the IP's rate limit is
-// WORKER_BROKER_GETS_PER_MINUTE
+// candidates per tick, attempted one after another: the cap on a tick's length; the broker GETs
+// are bounded by the runtime budget (broker/get-budget.ts), not by the batch
 export const RECONCILE_BATCH_SIZE = 16;
 // one balance check after a reconciliation outcome (#92): the token, one GET /v1/broker/user, the
 // report of a refused token on a 401, and three autocommit statements
@@ -152,10 +152,11 @@ export const RECONCILE_MAX_TRADE_PAGES = 2;
 
 // The settlement catch-up (#90): accepted intents past their expected close + the grace. Sized
 // for the demo's 5 and 15 s trades (#313): with no close event a trade settles 10-15 s after its
-// close, and the batch is cut to 3 so that the shorter tick keeps the GET budget below.
+// close. 16 accounts a tick (one accepted intent per account, Rule 7); the broker GETs are bounded
+// by the runtime budget (broker/get-budget.ts).
 export const CATCHUP_TICK_MS = 5_000;
 export const CATCHUP_GRACE_MS = 10_000;
-export const CATCHUP_BATCH_SIZE = 3;
+export const CATCHUP_BATCH_SIZE = 16;
 export const CATCHUP_TRADES_PAGE_SIZE = 50;
 export const CATCHUP_MAX_TRADE_PAGES = 2;
 export const CATCHUP_ATTEMPT_TIMEOUT_MS = 20_000;
@@ -165,16 +166,18 @@ export const CATCHUP_STALLED_RETRY_MS = 30_000;
 
 // The broker allows 600 requests a minute per IP; the worker's share, WORKER_BROKER_GETS_PER_MINUTE,
 // sits with the backend's two in packages/shared/src/broker-budget.ts. The worker keeps to its
-// share in the worst case: its passes tick only on their intervals (nothing starts an extra
-// tick), and a tick never overlaps the next. A 429 ends a tick, and the attempt is retried on the
-// lease or the next tick. A 429 on /user-auth/refresh during an exchange on the backend is the
-// refusal refresh_rate_limited: nothing is revoked, the caller asks again later (#275). The
-// worker's share keeps its own traffic from driving the IP to 429; the
-// sum with the backend's configured ceilings above their defaults is a warning at the backend's
-// start, not enforced.
-export const WORKER_BROKER_GETS_WORST_CASE =
-  RECONCILE_BATCH_SIZE * (2 * RECONCILE_MAX_TRADE_PAGES + 1) * (60_000 / RECONCILE_TICK_MS) +
-  CATCHUP_BATCH_SIZE * CATCHUP_MAX_TRADE_PAGES * (60_000 / CATCHUP_TICK_MS);
+// share at runtime (#872, broker/get-budget.ts): the catch-up and the reconciliation pass reserve
+// an attempt's worst case before its first GET, and a reservation that does not fit the last 60 s
+// ends the tick. The reservations follow the page caps: an attempt reads at most maxPages pages of
+// each list (readTradePages), and a balance check makes one GET /v1/broker/user. A 429 ends a tick,
+// and the attempt is retried on the lease or the next tick. A 429 on /user-auth/refresh during an
+// exchange on the backend is the refusal refresh_rate_limited: nothing is revoked, the caller asks
+// again later (#275). The worker's share keeps its own traffic from driving the IP to 429; the sum
+// with the backend's configured ceilings above their defaults is a warning at the backend's start,
+// not enforced.
+export const RECONCILE_GETS_PER_ATTEMPT = 2 * RECONCILE_MAX_TRADE_PAGES;
+export const BALANCE_CHECK_GETS = 1;
+export const CATCHUP_GETS_PER_ATTEMPT = CATCHUP_MAX_TRADE_PAGES;
 
 // the chain above is the invariant; a constant edited out of order fails at import, not in prod
 const TIMING_CHAIN_HOLDS =
@@ -202,9 +205,8 @@ const TIMING_CHAIN_HOLDS =
   CATCHUP_TICK_MS < CATCHUP_STALLED_RETRY_MS &&
   2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < RECONCILE_ATTEMPT_TIMEOUT_MS &&
   2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < CATCHUP_ATTEMPT_TIMEOUT_MS &&
-  Number.isInteger(60_000 / CATCHUP_TICK_MS) &&
-  Number.isInteger(60_000 / RECONCILE_TICK_MS) &&
-  WORKER_BROKER_GETS_WORST_CASE <= WORKER_BROKER_GETS_PER_MINUTE &&
+  RECONCILE_GETS_PER_ATTEMPT + BALANCE_CHECK_GETS + CATCHUP_GETS_PER_ATTEMPT <=
+    WORKER_BROKER_GETS_PER_MINUTE &&
   2 * ACCESS_TOKEN_ROUTE_BUDGET_MS + BROKER_REST_TIMEOUT_MS < BALANCE_CHECK_TIMEOUT_MS &&
   BALANCE_CHECK_TIMEOUT_MS < SHUTDOWN_PHASE1_BUDGET_MS &&
   INTENT_HOLD_MAX_MS +

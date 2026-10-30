@@ -17,6 +17,7 @@ import {
   reportRefusedToken,
   type AccessTokenSource,
 } from '../broker/access-token';
+import type { BrokerGetMeter } from '../broker/get-budget';
 import type { Logger } from './processor';
 import { readTradePages, TradePagesError } from './trade-pages';
 
@@ -26,7 +27,8 @@ import { readTradePages, TradePagesError } from './trade-pages';
 // (mayRefresh: false). Every attempt that does not take its intent out of `accepted` holds the
 // account back for stalledRetryMs, so the head of the queue cannot starve the rest
 // (docs/trade-intent-transport.md -> Reconciliation matching -> Settlement catch-up). A settle here
-// wakes the trading session orchestrator (#696).
+// wakes the trading session orchestrator (#696). Every attempt reserves its worst case of broker
+// GETs first (#872, broker/get-budget.ts); a reservation that does not fit ends the tick.
 
 export interface SettlementCatchupConfig {
   tickMs: number;
@@ -37,11 +39,15 @@ export interface SettlementCatchupConfig {
   maxPages: number;
   attemptTimeoutMs: number;
   stalledRetryMs: number;
+  // the broker GETs reserved for one attempt: at most maxPages pages of the closed list
+  attemptGets: number;
 }
 
 export interface SettlementCatchupDeps {
   db: Db;
+  // metered by `budget` (the same meter's rest)
   rest: Pick<BrokerRestClient, 'listTrades'>;
+  budget: Pick<BrokerGetMeter, 'begin' | 'end'>;
   tokens: AccessTokenSource;
   logger: Logger;
   config: SettlementCatchupConfig;
@@ -66,6 +72,9 @@ export interface CatchupTickSummary {
   // held back for stalledRetryMs
   stalled: number;
   rateLimited: number;
+  // the GET budget refused the attempt's reservation: the tick ended there
+  budget: number;
+  ms: number;
 }
 
 type Ending = 'settled' | 'left' | 'stalled' | 'rate_limited' | 'stopped';
@@ -73,6 +82,7 @@ type Ending = 'settled' | 'left' | 'stalled' | 'rate_limited' | 'stopped';
 export function createSettlementCatchup({
   db,
   rest,
+  budget,
   tokens,
   logger,
   config,
@@ -211,6 +221,7 @@ export function createSettlementCatchup({
 
   async function runTick(): Promise<void> {
     const now = Date.now();
+    const started = performance.now();
     for (const [accountId, retryAt] of stalled) if (retryAt <= now) stalled.delete(accountId);
     const overdue = await listOverdueAcceptedIntents(db, {
       graceMs: config.graceMs,
@@ -223,10 +234,22 @@ export function createSettlementCatchup({
       left: 0,
       stalled: 0,
       rateLimited: 0,
+      budget: 0,
+      ms: 0,
     };
     for (const intent of overdue) {
       if (stopped) break;
-      const ending = await attemptWithDeadline(intent);
+      // the token is not asked and nobody is held back: the window frees with time
+      if (!budget.begin(config.attemptGets)) {
+        summary.budget += 1;
+        break;
+      }
+      let ending: Ending;
+      try {
+        ending = await attemptWithDeadline(intent);
+      } finally {
+        budget.end();
+      }
       if (ending === 'stopped') break;
       if (ending === 'rate_limited') {
         summary.rateLimited += 1;
@@ -235,6 +258,7 @@ export function createSettlementCatchup({
       if (ending === 'stalled') hold(intent.brokerAccountId);
       summary[ending] += 1;
     }
+    summary.ms = Math.round(performance.now() - started);
     if (overdue.length > 0) logger.info(summary, 'settlement catch-up tick');
   }
 
