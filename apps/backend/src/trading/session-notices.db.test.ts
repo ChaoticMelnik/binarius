@@ -877,7 +877,7 @@ describe('every way a send ends (#464)', () => {
   });
 });
 
-const ADAPTIVE = '🔄 Адаптивная ставка включена';
+const ADAPTIVE = '🔄 Адаптивная ставка';
 // the heads of a message: its blocks' «⚡ Цикл N Шаг M» and the adaptive line
 const heads = (text: string) =>
   text.split('\n').filter((line) => line.startsWith('⚡') || line.startsWith('🔄'));
@@ -1096,7 +1096,7 @@ describe('a martingale cycle is one message (#551)', () => {
     // a loss's block of about 450 characters: eight of them fit in BOT_TEXT_LIMIT, nine do not —
     // 4079, inside the Bot API's 4096; a session holds up to MAX_SESSION_SUMMARY_TRADES trades, so
     // a split takes such an override
-    const PAD = 'ж'.repeat(394);
+    const PAD = 'ж'.repeat(395);
     const source = {
       sourceOf: (key: BotTextKey) =>
         key === 'sessionTradeLost'

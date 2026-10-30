@@ -89,7 +89,7 @@ const martingale: TradingSessionSettings = {
     },
   },
 };
-const ADAPTIVE = '🔄 Адаптивная ставка включена';
+const ADAPTIVE = '🔄 Адаптивная ставка';
 const textOf = (notice: SessionCycleNotice) => notice.text.value;
 const heads = (notice: SessionCycleNotice) =>
   textOf(notice)
@@ -132,13 +132,13 @@ describe('sessionCycleMessage (#551)', () => {
   it('a martingale cycle without a cycle message: a new message with the whole cycle so far', () => {
     const first = sessionCycleMessage(claimed([W, L]), martingale, 5, BotLanguage.Ru);
     expect(first).toMatchObject({ kind: 'send', from: 1, split: false });
-    expect(heads(first)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка включена']);
+    expect(heads(first)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка']);
     // a session met mid-cycle (a deploy, an unknown send): the cycle's steps so far
     const later = sessionCycleMessage(claimed([W, L, T, L]), martingale, 5, BotLanguage.Ru);
     expect(later).toMatchObject({ kind: 'send', from: 1 });
     expect(heads(later)).toEqual([
       '⚡ Цикл 2 Шаг 1',
-      '🔄 Адаптивная ставка включена',
+      '🔄 Адаптивная ставка',
       '⚡ Цикл 2 Шаг 2',
       '⚡ Цикл 2 Шаг 3',
     ]);
@@ -155,7 +155,7 @@ describe('sessionCycleMessage (#551)', () => {
     expect(textOf(notice)).toBe(
       [
         '⚡ Цикл 2 Шаг 1\n<pre>🔴 $5.00 → -$5.00\n📊 2.00000 → 2.50000</pre>',
-        '🔄 Адаптивная ставка включена',
+        '🔄 Адаптивная ставка',
         '⚡ Цикл 2 Шаг 2\n<pre>⚪ $5.00 → $0.00\n↩️ ставка вернулась\n📊 3.00000 → 3.50000</pre>',
         '⚡ Цикл 2 Шаг 3\n<pre>🟢 $5.00 → +$9.60\n📊 4.00000 → 4.50000</pre>',
       ].join('\n\n'),
@@ -169,11 +169,7 @@ describe('sessionCycleMessage (#551)', () => {
       5,
       BotLanguage.Ru,
     );
-    expect(heads(fromTwo)).toEqual([
-      '🔄 Адаптивная ставка включена',
-      '⚡ Цикл 1 Шаг 2',
-      '⚡ Цикл 1 Шаг 3',
-    ]);
+    expect(heads(fromTwo)).toEqual(['🔄 Адаптивная ставка', '⚡ Цикл 1 Шаг 2', '⚡ Цикл 1 Шаг 3']);
     const fromThree = sessionCycleMessage(
       claimed([L, L, L, L], { messageId: 9, from: 2 }),
       martingale,
@@ -204,7 +200,7 @@ describe('sessionCycleMessage (#551)', () => {
     // a loss's block of about 450 characters: eight losses of a cycle with the adaptive line fit in
     // BOT_TEXT_LIMIT, nine do not — 4079, inside the Bot API's 4096; the line under step 1 (#718)
     // is as long as it was above step 2
-    const PAD = 'ж'.repeat(394);
+    const PAD = 'ж'.repeat(395);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
         key === 'sessionTradeLost'
@@ -319,7 +315,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
     expect(notice).toMatchObject({ kind: 'edit', messageId: 42, from: 1 });
     expect(heads(notice)).toEqual([
       '⚡ Цикл 2 Шаг 1',
-      '🔄 Адаптивная ставка включена',
+      '🔄 Адаптивная ставка',
       '⚡ Цикл 2 Шаг 2',
       '⚡ Цикл 2 Шаг 3',
     ]);
@@ -334,7 +330,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
           BotLanguage.Ru,
         ),
       ),
-    ).toEqual(['⚡ Цикл 1 Шаг 1', '🔄 Адаптивная ставка включена', '⚡ Цикл 1 Шаг 2']);
+    ).toEqual(['⚡ Цикл 1 Шаг 1', '🔄 Адаптивная ставка', '⚡ Цикл 1 Шаг 2']);
   });
 
   it('then its result edits the same message from the same from', () => {
@@ -346,7 +342,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       BotLanguage.Ru,
     );
     expect(result).toMatchObject({ kind: 'edit', messageId: 50, from: 2 });
-    expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка включена']);
+    expect(heads(result)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка']);
     expect(textOf(result)).not.toContain('<pre>⏳');
   });
 
@@ -358,11 +354,7 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
       BotLanguage.Ru,
     );
     expect(other).toMatchObject({ kind: 'send', from: 2, split: false });
-    expect(heads(other)).toEqual([
-      '⚡ Цикл 2 Шаг 1',
-      '🔄 Адаптивная ставка включена',
-      '⚡ Цикл 2 Шаг 2',
-    ]);
+    expect(heads(other)).toEqual(['⚡ Цикл 2 Шаг 1', '🔄 Адаптивная ставка', '⚡ Цикл 2 Шаг 2']);
     expect(sessionCycleMessage(withOpen([L, W, L]), martingale, 5, BotLanguage.Ru)).toMatchObject({
       kind: 'send',
       from: 2,
@@ -384,8 +376,8 @@ describe('sessionCycleMessage with the open trade (#700)', () => {
   });
 
   describe('the length limit', () => {
-    // eight padded losses and the padded open block: 4074, past BOT_TEXT_LIMIT
-    const PAD = 'ж'.repeat(394);
+    // eight padded losses and the padded open block: 4083, past BOT_TEXT_LIMIT (4074)
+    const PAD = 'ж'.repeat(396);
     const source = {
       sourceOf: (key: Parameters<typeof defaultBotTextSource.sourceOf>[0]) =>
         key === 'sessionTradeLost' || key === 'sessionTradeOpen'
