@@ -133,7 +133,7 @@ docker compose config --format json | jq '.services["trading-worker"].deploy.rep
 
 | Processes | Accounts in work | Sessions per process | RSS per process | Event-loop p99 | Broker GETs/min | Measured |
 |---|---|---|---|---|---|---|
-| 1 | — | ≤ 500 (cap) | — | — | ≤ 392 per process | not yet (#87) |
+| 1 | — | ≤ 500 (cap) | — | — | ≤ 400 per process (the budget's cap, #872) | not yet (#87) |
 | 2–6 | — | — | — | — | — | not yet (#87, #815) |
 
 The 500 cap, the 10 000 ceiling and the 2–6 range are not measured. #88 adds the degradation

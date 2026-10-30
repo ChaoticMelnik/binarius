@@ -4,8 +4,8 @@
 // them together at run time, so their defaults are held to the limit here, at import.
 export const BROKER_RATE_LIMIT_PER_MINUTE = 600;
 
-// the trading worker's passes in their worst case (apps/trading-worker/src/intents/config.ts holds
-// its own worst case under this)
+// the trading worker's two loops: the cap of their runtime GET budget, held in any 60 s window
+// (apps/trading-worker/src/broker/get-budget.ts, #872)
 export const WORKER_BROKER_GETS_PER_MINUTE = 400;
 // the backend's balance refresh (BALANCE_POLL_MAX_PER_MINUTE overrides it)
 export const DEFAULT_BALANCE_POLL_PER_MINUTE = 100;
