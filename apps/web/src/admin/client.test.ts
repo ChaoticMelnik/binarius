@@ -73,8 +73,10 @@ function run({
   storage = {},
   button = true,
   clipboard = 'none',
-}: { storage?: Storage; button?: boolean; clipboard?: Clipboard } = {}) {
+  confirmAnswer = true,
+}: { storage?: Storage; button?: boolean; clipboard?: Clipboard; confirmAnswer?: boolean } = {}) {
   const root = { ...element(), className: 'no-js' };
+  const forms = [element({ method: 'post' }), element({ method: 'post' })];
   const toggle = button ? themeButton() : undefined;
   const docListeners: Record<string, () => void> = {};
   const store = storage === 'throws' ? undefined : { ...storage };
@@ -102,7 +104,9 @@ function run({
         ? [toggle]
         : selector === '[data-copy]'
           ? [copy]
-          : [],
+          : selector === 'form[aria-busy]'
+            ? forms.filter((form) => form.attributes.has('aria-busy'))
+            : [],
   };
   const copy = copyButton('00000000-0000-4000-8000-0000000000c1');
   const written: string[] = [];
@@ -124,7 +128,18 @@ function run({
     timers.push(callback);
     return timers.length;
   };
-  runInNewContext(ADMIN_CLIENT_JS, { window: { document, localStorage, navigator, setTimeout } });
+  const asked: string[] = [];
+  const confirm = (text: string) => {
+    asked.push(text);
+    return confirmAnswer;
+  };
+  const windowListeners: Record<string, () => void> = {};
+  const addEventListener = (type: string, listener: () => void) => {
+    windowListeners[type] = listener;
+  };
+  runInNewContext(ADMIN_CLIENT_JS, {
+    window: { document, localStorage, navigator, setTimeout, confirm, addEventListener },
+  });
   const visibleIcon = () =>
     toggle?.children
       .find((child) => !child.attributes.has('hidden'))
@@ -143,6 +158,21 @@ function run({
       copy.children
         .find((child) => !child.attributes.has('hidden'))
         ?.getAttribute('data-copy-icon'),
+    forms,
+    asked,
+    // what the browser hands the listener; `prevented` records a cancelled submit
+    submit: (form: FakeElement, submitter: FakeElement | null | undefined) => {
+      let prevented = false;
+      (docListeners.submit as unknown as (event: unknown) => void)({
+        target: form,
+        submitter,
+        preventDefault: () => {
+          prevented = true;
+        },
+      });
+      return { prevented };
+    },
+    pageshow: () => windowListeners.pageshow?.(),
     // the listener's promise settles on the microtask queue; one macrotask turn drains it
     clickCopy: async () => {
       (docListeners.click as unknown as (event: unknown) => void)({ target: insideOf(copy) });
@@ -250,5 +280,48 @@ describe('the copy button (#656)', () => {
     expect(page.copy.getAttribute('aria-label')).toBe('Копировать');
     expect(page.visibleCopyIcon()).toBe('copy');
     expect(page.timers).toEqual([]);
+  });
+});
+
+describe('the forms confirm and busy state (#657)', () => {
+  const dangerButton = () => element({ type: 'submit', 'data-confirm': 'Завершить эту сессию?' });
+
+  it('J10 a declined confirm cancels the submit and leaves the form not busy', () => {
+    const page = run({ confirmAnswer: false });
+    const [form] = page.forms;
+    if (form === undefined) throw new Error('no form');
+    expect(page.submit(form, dangerButton())).toEqual({ prevented: true });
+    expect(page.asked).toEqual(['Завершить эту сессию?']);
+    expect(form.attributes.has('aria-busy')).toBe(false);
+  });
+
+  it('J11 an accepted confirm lets the submit through and marks the form busy', () => {
+    const page = run({ confirmAnswer: true });
+    const [form] = page.forms;
+    if (form === undefined) throw new Error('no form');
+    expect(page.submit(form, dangerButton())).toEqual({ prevented: false });
+    expect(page.asked).toEqual(['Завершить эту сессию?']);
+    expect(form.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it.each([
+    ['a button without data-confirm', element({ type: 'submit' })],
+    ['no submitter (form.submit())', null],
+    ['an old browser without event.submitter', undefined],
+  ])('J12 %s: asks nothing and marks the form busy', (_name, submitter) => {
+    const page = run({ confirmAnswer: false });
+    const [form] = page.forms;
+    if (form === undefined) throw new Error('no form');
+    expect(page.submit(form, submitter)).toEqual({ prevented: false });
+    expect(page.asked).toEqual([]);
+    expect(form.getAttribute('aria-busy')).toBe('true');
+  });
+
+  it('J13 pageshow clears aria-busy from every form', () => {
+    const page = run();
+    for (const form of page.forms) page.submit(form, element({ type: 'submit' }));
+    expect(page.forms.every((form) => form.getAttribute('aria-busy') === 'true')).toBe(true);
+    page.pageshow();
+    expect(page.forms.some((form) => form.attributes.has('aria-busy'))).toBe(false);
   });
 });

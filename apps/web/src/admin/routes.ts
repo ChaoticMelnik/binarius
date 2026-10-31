@@ -770,7 +770,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       if (!form.success) return sendHtml(reply, 400, passwordPage({ message: TEXTS.badRequest }));
       const { currentPassword, newPassword, newPasswordRepeat } = form.data;
       if (newPassword !== newPasswordRepeat) {
-        return sendHtml(reply, 400, passwordPage({ message: TEXTS.passwordMismatch }));
+        return sendHtml(
+          reply,
+          400,
+          passwordPage({ message: TEXTS.passwordMismatch, invalid: 'newPasswordRepeat' }),
+        );
       }
       const body = safeParseAdminChangePasswordRequest({
         currentPassword,
@@ -778,10 +782,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
         ...clientFacts(request),
       });
       if (!body.success) {
-        const message = sameAsCurrentOnly(body.error.issues)
-          ? TEXTS.passwordSameAsCurrent
-          : TEXTS.badRequest;
-        return sendHtml(reply, 400, passwordPage({ message }));
+        // the schema's same-as-current refusal is about the new password; any other names no field
+        const refused = sameAsCurrentOnly(body.error.issues)
+          ? { message: TEXTS.passwordSameAsCurrent, invalid: 'newPassword' as const }
+          : { message: TEXTS.badRequest };
+        return sendHtml(reply, 400, passwordPage(refused));
       }
       try {
         const { revokedSessions } = await backend.changePassword(token, body.data);
@@ -799,7 +804,11 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
           );
         }
         if (answered.status === 401 && answered.code === AdminErrorCode.InvalidCredentials) {
-          return sendHtml(reply, 401, passwordPage({ message: TEXTS.invalidCurrentPassword }));
+          return sendHtml(
+            reply,
+            401,
+            passwordPage({ message: TEXTS.invalidCurrentPassword, invalid: 'currentPassword' }),
+          );
         }
         // on the pair, unlike the login form: this route has no ceiling, so a 429 without the
         // code is a contract drift, not a lockout
@@ -1149,7 +1158,14 @@ export const adminRoutes: FastifyPluginAsync<AdminWebDeps> = async (app, { backe
       return sendHtml(
         reply,
         409,
-        userPage(card, me.login, { adjustment: { message, form: form.data } }),
+        userPage(card, me.login, {
+          adjustment: {
+            message,
+            form: form.data,
+            // a moved balance is about no field; the amount is what exceeds the available tokens
+            ...(refusal === 'insufficient_available' ? { field: 'amount' as const } : {}),
+          },
+        }),
       );
     }),
   );

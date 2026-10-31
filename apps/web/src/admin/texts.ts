@@ -483,6 +483,12 @@ export const TEXTS = {
   expiredChallenge: 'Подтверждение истекло, войдите снова',
   badRequest: 'Проверьте введённые данные',
 
+  // asked by the admin script before a danger button's form is sent (#657); one per button
+  confirmRevokeSession: 'Завершить эту сессию сотрудника?',
+  confirmResetBotText: 'Вернуть исходный текст? Переопределение будет снято.',
+  confirmDeleteBotText: 'Удалить строку без ключа?',
+  confirmStarRefund: 'Вернуть Stars плательщику? Действие необратимо.',
+
   forbiddenTitle: 'Запрос отклонён',
   forbiddenBody: 'Запрос пришёл не с этой страницы.',
   notFoundTitle: 'Страница не найдена',

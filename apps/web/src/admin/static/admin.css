@@ -429,7 +429,7 @@ button.btn-danger {
   color: var(--color-fg);
 }
 
-/* ---- forms ---- */
+/* ---- forms (docs/admin-design-system.md → Формы) ---- */
 
 form {
   margin: 0 0 var(--space-4);
@@ -482,10 +482,10 @@ input[type='radio'] {
   accent-color: var(--color-accent-bg);
 }
 
+/* no font-size of its own: the 16 px floor above keeps iOS from zooming the page on focus (#662) */
 textarea {
   min-height: 8rem;
   font-family: var(--font-mono);
-  font-size: var(--text-base);
   line-height: 1.5;
 }
 
@@ -493,6 +493,11 @@ input:hover,
 select:hover,
 textarea:hover {
   border-color: var(--color-fg-muted);
+}
+
+/* set by the server on the field a refusal names, with aria-describedby to the message (#657) */
+[aria-invalid='true'] {
+  border-color: var(--color-danger);
 }
 
 input:focus-visible,
@@ -557,10 +562,24 @@ form.editor {
   gap: var(--space-3);
 }
 
-form.editor .buttons {
+/* a row of buttons: the editor's own, and the forms of one button each that follow it */
+.actions {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.actions form {
+  margin: 0;
+}
+
+/* set by the admin script on a form being sent; nothing is disabled, so a navigation that never
+   comes leaves the page usable */
+form[aria-busy='true'] button,
+form[aria-busy='true'] .btn {
+  opacity: 0.6;
+  cursor: progress;
 }
 
 p.error,
@@ -596,6 +615,10 @@ p.counter {
   color: var(--color-fg-muted);
   font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+}
+
+ul.publish {
+  padding-left: var(--space-6);
 }
 
 ul.publish li.error {
@@ -687,16 +710,6 @@ tr.current > td {
   margin: 0;
 }
 
-/* A table not yet on the component (the bot texts until #657) is as wide as its content and
-   scrolls inside itself when that is wider than the page, so the page itself never scrolls
-   sideways. #657 removes this with the last one. */
-main table:not(.table) {
-  display: block;
-  width: max-content;
-  max-width: 100%;
-  overflow-x: auto;
-}
-
 /* Table and row card (#656, docs/admin-design-system.md). The header is not sticky: .table-wrap is
    the scroll container a wide table needs, and a sticky <thead> inside it has nothing to stick to. */
 .table th,
@@ -725,6 +738,11 @@ main table:not(.table) {
     max-width: 22rem;
     white-space: normal;
     overflow-wrap: anywhere;
+  }
+
+  /* a bot text's rejection reason is a sentence: its badge wraps in the «Состояние» column */
+  .table td.wrap .badge {
+    white-space: normal;
   }
 }
 
@@ -1004,7 +1022,7 @@ dd {
   text-decoration: none;
 }
 
-/* ---- details, quotes, the bot text preview ---- */
+/* ---- details, quotes, the bot text preview (docs/admin-design-system.md → Предпросмотр Telegram) ---- */
 
 details {
   margin: 0 0 var(--space-3);
@@ -1051,11 +1069,14 @@ blockquote.expandable {
   background: none;
 }
 
+/* a button label's text, drawn as Telegram draws an inline button */
 .tg-label {
   display: inline-block;
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--color-border);
+  padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-sm);
+  background: var(--color-accent-bg);
+  color: var(--color-on-accent);
+  font-weight: 500;
 }
 
 /* ---- sign-in and notice pages ---- */

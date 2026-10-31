@@ -41,17 +41,29 @@ describe('the admin stylesheet (#459)', () => {
     }
   });
 
-  // #656: the row card reads each cell's label from its data-label, and the stop-gap rule of #459
-  // holds only the tables not yet on the component
-  it('S7 labels the row card from data-label and keeps the old-table rule off the component', () => {
+  // #656: the row card reads each cell's label from its data-label; #657: every table of the
+  // admin is the component, so the stop-gap rule of #459 is gone
+  it('S7 keeps the row-card label and has no rule for a table outside the component', () => {
     expect(ADMIN_CSS).toMatch(/\.table td::before\s*\{[^}]*content:\s*attr\(data-label\)/);
-    expect(ADMIN_CSS).toContain('main table:not(.table) {');
-    expect(ADMIN_CSS).not.toMatch(/main table\s*\{/);
+    expect(ADMIN_CSS).not.toMatch(/main table/);
   });
 
   // #817: in a 375 px card a long service-account badge wraps and the audit payload has no cap
   it('S8 wraps a badge and uncaps the payload cell in the row card', () => {
     expect(ADMIN_CSS).toMatch(/\.table \.badge\s*\{[^}]*white-space:\s*normal/);
     expect(ADMIN_CSS).toMatch(/\.table td\.payload\s*\{[^}]*max-width:\s*none/);
+  });
+
+  // #657: the field a refusal names is outlined, a form being sent dims its buttons, and the
+  // textarea keeps the shared 16 px floor (#662) instead of a font-size of its own
+  it('S9 styles the form states and leaves the textarea on the 16 px floor', () => {
+    expect(ADMIN_CSS).toMatch(
+      /\[aria-invalid='true'\]\s*\{[^}]*border-color:\s*var\(--color-danger\)/,
+    );
+    expect(ADMIN_CSS).toMatch(/form\[aria-busy='true'\] button[^{]*\{[^}]*opacity/);
+    expect(ADMIN_CSS).toMatch(/,\s*textarea\s*\{[^}]*font-size:\s*max\(16px/);
+    // a rule for textarea alone follows a closing brace or a comment, not a comma
+    expect(ADMIN_CSS).toMatch(/[}/]\s*textarea\s*\{/);
+    expect(ADMIN_CSS).not.toMatch(/[}/]\s*textarea\s*\{[^}]*font-size/);
   });
 });

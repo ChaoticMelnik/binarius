@@ -3,11 +3,13 @@ import { request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { telegramHtmlProblems } from '@binarius/shared';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ADMIN_CLIENT_JS } from './client';
 import { EXPORTED_PAGES, exportAdminPages, serveDirectory } from './export-pages';
 import type { AdminNavKey } from './pages';
 import { ADMIN_CSS, ADMIN_FONTS, ADMIN_FONT_FILES } from './static';
+import { SAMPLE_RENDERED } from './testing';
 
 // every nav key and the page that must mark it current
 const NAV_PAGES: Readonly<Record<AdminNavKey, string>> = {
@@ -37,7 +39,7 @@ afterEach(async () => {
 
 describe('the admin pages export (#459)', () => {
   it('E1 writes the stylesheet, the script, the fonts and one file per page', async () => {
-    expect(Object.keys(EXPORTED_PAGES).length).toBeGreaterThanOrEqual(19);
+    expect(Object.keys(EXPORTED_PAGES).length).toBeGreaterThanOrEqual(23);
     await exportAdminPages(dir);
 
     expect(await readFile(path.join(dir, 'admin/static/admin.css'), 'utf8')).toBe(ADMIN_CSS);
@@ -84,6 +86,30 @@ describe('the admin pages export (#459)', () => {
       const current = /<a href="([^"]*)"\s+aria-current="page"/.exec(page)?.[1];
       expect(current, name).toBe(`/admin/${name}`);
     }
+  });
+
+  // #657: the refused states of the forms, for their screenshots; each marks one field and points
+  // it at the message
+  it.each([
+    ['bot-text-refused', 'source-problems'],
+    ['password-refused', 'password-error'],
+    ['user-adjust-refused', 'adjust-error'],
+  ])('E6 %s marks one field, described by the message %s', (name, id) => {
+    const page = EXPORTED_PAGES[name]?.().value ?? '';
+    expect(page.match(/aria-invalid="true"/g)).toHaveLength(1);
+    expect(page).toContain(`aria-invalid="true" aria-describedby="${id}"`);
+    expect(page.match(new RegExp(`\\sid="${id}"`, 'g'))).toHaveLength(1);
+  });
+
+  it('E6 shows the preview on bot-text, from Telegram HTML the backend would accept', () => {
+    expect(SAMPLE_RENDERED.kind).toBe('html');
+    if (SAMPLE_RENDERED.kind !== 'html') return;
+    expect(telegramHtmlProblems(SAMPLE_RENDERED.telegramHtml)).toEqual([]);
+    expect(EXPORTED_PAGES['bot-text']?.().value).toContain('<div class="tg-bubble">');
+  });
+
+  it.each(['bot-text', 'password', 'user'])('E6 %s, not refused, marks no field', (name) => {
+    expect(EXPORTED_PAGES[name]?.().value).not.toContain('aria-invalid');
   });
 
   describe('E5 the static server', () => {

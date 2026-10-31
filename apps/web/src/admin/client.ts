@@ -8,6 +8,11 @@
 // value to the clipboard and shows «copied» for a moment. Without navigator.clipboard (plain http,
 // an old browser) the buttons are hidden; a refused write changes nothing.
 //
+// The third is the forms' confirm and busy state (#657): a submit whose button carries
+// data-confirm asks window.confirm first and a «no» cancels it; a submit that goes ahead marks its
+// form aria-busy, cleared again on pageshow (a page restored from the back/forward cache). Without
+// event.submitter (form.submit(), an old browser) the form submits unasked, as without the script.
+//
 // The switch cycles system → dark → light → system; "system" is no attribute and no stored key.
 // Storage may be missing or throw (a private window, blocked site data): every access is guarded
 // and a failure leaves the system theme.
@@ -87,6 +92,22 @@ export const ADMIN_CLIENT_JS = `(function () {
         // nothing was copied; the id is still there to select
       }
     );
+  });
+
+  doc.addEventListener('submit', function (event) {
+    var form = event.target;
+    var submitter = event.submitter;
+    var text = submitter && submitter.getAttribute ? submitter.getAttribute('data-confirm') : null;
+    if (text && !window.confirm(text)) {
+      event.preventDefault();
+      return;
+    }
+    if (form && form.setAttribute) form.setAttribute('aria-busy', 'true');
+  });
+
+  window.addEventListener('pageshow', function () {
+    var busy = doc.querySelectorAll('form[aria-busy]');
+    for (var b = 0; b < busy.length; b += 1) busy[b].removeAttribute('aria-busy');
   });
 
   doc.addEventListener('DOMContentLoaded', function () {

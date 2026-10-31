@@ -47,6 +47,7 @@ import {
   SAMPLE_LIST_ITEM,
   SAMPLE_ME,
   SAMPLE_OVERVIEW,
+  SAMPLE_RENDERED,
   SAMPLE_SERVICE_ACCOUNTS,
   SAMPLE_STAR_REFUNDS,
   SAMPLE_TOKENS,
@@ -79,9 +80,19 @@ export const EXPORTED_PAGES: Readonly<Record<string, () => SafeHtml>> = {
   confirm: () => confirmPage(),
   link: () => linkPage(),
   password: () => passwordPage({ login: LOGIN, others: 1 }),
+  'password-refused': () =>
+    passwordPage({ message: TEXTS.invalidCurrentPassword, invalid: 'currentPassword' }),
   overview: () => overviewPage(SAMPLE_OVERVIEW.overview, LOGIN),
   users: () => usersPage([SAMPLE_LIST_ITEM], { nextCursor: null, login: LOGIN }),
   user: () => userPage(SAMPLE_USER, LOGIN),
+  'user-adjust-refused': () =>
+    userPage(SAMPLE_USER, LOGIN, {
+      adjustment: {
+        message: TEXTS.tokenAdjustInsufficient(SAMPLE_USER.user.tokens.available),
+        form: { direction: 'debit', amount: '50', note: 'тест' },
+        field: 'amount',
+      },
+    }),
   sessions: () => sessionsPage([SAMPLE_STAFF_SESSION], LOGIN),
   intents: () =>
     intentsPage(SAMPLE_INTENTS.intents, { filters: {}, nextCursor: null, login: LOGIN }),
@@ -103,7 +114,14 @@ export const EXPORTED_PAGES: Readonly<Record<string, () => SafeHtml>> = {
     starRefundsPage(SAMPLE_STAR_REFUNDS.requests, { nextCursor: null, login: LOGIN }),
   'bot-texts': () =>
     botTextsPage(SAMPLE_BOT_TEXTS.overrides, { language: BotLanguage.Ru, login: LOGIN }),
-  'bot-text': () => botTextPage(SAMPLE_BOT_TEXT, { login: LOGIN }),
+  'bot-text': () => botTextPage(SAMPLE_BOT_TEXT, { login: LOGIN, rendered: SAMPLE_RENDERED }),
+  'bot-text-refused': () =>
+    botTextPage(SAMPLE_BOT_TEXT, {
+      login: LOGIN,
+      draft: '<b>Привет',
+      version: 7,
+      problems: [{ key: 'welcome', reason: 'Незакрытый тег <b>' }],
+    }),
   'not-found': () => adminNoticePage(TEXTS.notFoundTitle, TEXTS.notFoundBody),
 };
 
