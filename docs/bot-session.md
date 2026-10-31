@@ -2039,7 +2039,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     stopped session's is an edit (#536), up to 12 calls when each entry's card is due — for up to about 8.5 minutes after the
     start and up to about 500 s of each periodic pass with a full list. It comes on top of the
     backend's pacers, 20 + 9 a second (about 30 a second for Telegram: stated, not measured), and
-    of the bot's unpaced replies to users, which came on top of those shares before. A restart
+    of the bot's unpaced replies to users, which came on top of those shares before — since #869
+    from up to 8 handlers at once (`POLLING_CONCURRENCY`) instead of one. A restart
     during a mailing at its full pace can exceed about 30 a second. The cover: on a 429 the
     mailings and the session's messages wait for `retry_after`, and a tracker edit is retried on
     its entry's next poll. Below 4 a second a full list does not fit the task's 10 minutes;

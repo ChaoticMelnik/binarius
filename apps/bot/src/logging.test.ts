@@ -38,7 +38,8 @@ import {
 } from './demo';
 import { intentCallbackData } from './demo-trade';
 import { createIntentTracker } from './intent-tracker';
-import { runBot, type PollingLoop } from './lifecycle';
+import { runBot } from './lifecycle';
+import type { PollingLoop } from './polling';
 import { createLoginDialog, type LoginDialogState } from './login-dialog';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker, type SessionTrackRequest } from './session-tracker';
@@ -1461,7 +1462,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
       const { lines, logger } = sink();
       const bot: PollingLoop = {
         start: async (options) => {
-          await options.onStart?.(BOT_INFO);
+          await options.onStart?.();
         },
         stop: () => Promise.resolve(),
         api: {

@@ -32,9 +32,9 @@ export interface LoginDialogOptions {
   now?: () => number;
 }
 
-// No lock: grammY runs updates one at a time and the bot polls one update per batch
-// (POLLING_BATCH_LIMIT), so a get, an awaited backend call and a set never interleave with
-// another update's.
+// No lock: the polling loop runs one user's updates one after another (polling.ts, updateKey) and
+// the entries are keyed by that user, so a get, an awaited backend call and a set never interleave
+// with another update of the entry.
 export function createLoginDialog({
   ttlMs = LOGIN_DIALOG_TTL_MS,
   maxEntries = LOGIN_DIALOG_MAX_ENTRIES,
