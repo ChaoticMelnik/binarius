@@ -25,6 +25,7 @@ import {
   type DemoTradeCheck,
 } from './demo-catalog';
 import { shownRecordsOf, type CycleBack, type DemoScreen, type ShownSignal } from './demo';
+import { createEditPacer, type EditPriority } from './edit-pacer';
 import { runWithLanguage } from './language';
 import type { Logger } from './logging';
 import type { ScanMedia, ScanMediaKind } from './scan-media';
@@ -44,8 +45,13 @@ import type { ShownSignalRecord, ShownSignals } from './shown-signals';
 // every entry, once a second (timing.ts → SIGNAL_WAIT_POLL_MS: an H1 signal lives a second, #828),
 // and a pair has a signal now when it is in the H1 scanner's list and the catalog takes the trade
 // — the one definition of the list, the door `n` and the waits. The buttons of pairs stand listTtlMs (30 s),
-// an entry at most maxMs; the edits go at the pace of editGapMs, and a 429 pauses them for its
-// retry_after. stop() turns the waiting messages into the start of trading inside its window.
+// an entry at most maxMs. A tick decides for every entry on its reads first (decide), then runs the
+// signal edits — the chosen pair's resolution, resolveConcurrency at once, and a list's first
+// pairs — and after their reads the edits a TTL or a caption asks for; it does not wait for the
+// edits, and an entry with one in flight is left to the next tick (#869). The edits go through one
+// token bucket (edit-pacer.ts: editsPerSecond with a burst of editBurst, a chat once in chatGapMs,
+// the signal edits first), and a 429 pauses them for its retry_after. stop() turns the waiting
+// messages into the start of trading inside its window, one every editGapMs.
 // A list, the other pairs' buttons or a card the wait drew records its directions for the start
 // once the edit is on screen (#829), from the answers it read.
 // The wait is a media message (#859, Rule 58): the scanner's animation under a caption that prints
@@ -176,7 +182,14 @@ export interface SignalWaiterOptions {
   pollOffsetMs: number;
   listTtlMs: number;
   maxMs: number;
+  // the stop's edits, one every editGapMs
   editGapMs: number;
+  // the tick's and the freezes' edits (#869, edit-pacer.ts)
+  editsPerSecond: number;
+  editBurst: number;
+  chatGapMs: number;
+  // the signal edits' reads in flight at once
+  resolveConcurrency: number;
   // the scanner's caption (#859): at most once in captionMs an entry, captionEditsPerTick a tick
   captionMs: number;
   captionEditsPerTick: number;
@@ -201,6 +214,8 @@ type Entry =
     } & Common);
 
 interface Common {
+  // an edit of the entry is launched and not finished: the next ticks leave the entry alone
+  busy: boolean;
   rendered: string;
   // when the screen was last drawn or its caption last tried
   captionAt: number;
@@ -224,6 +239,25 @@ interface Snapshot {
 
 type EditOutcome = 'drawn' | 'ended' | 'paused' | 'kept';
 
+type PairEntry = Extract<Entry, { kind: 'pair' }>;
+
+// What a tick does with an entry, decided on its reads before any await: an edit that ends it, a
+// list's first pairs, the chosen pair's signal, the other pairs' buttons drawn or taken down, or
+// nothing.
+type Decision =
+  | { kind: 'finish'; screen: DemoScreen }
+  | { kind: 'list'; screen: DemoScreen; shown: ShownSignal[] }
+  | { kind: 'signal'; pair: PairView }
+  | { kind: 'alternatives'; screen: DemoScreen; shown: ShownSignal[] }
+  | { kind: 'alternatives-expired'; screen: DemoScreen }
+  | { kind: 'kept' };
+
+const KEPT: Decision = { kind: 'kept' };
+
+// the signal edits go first, and only the chosen pair's resolution reads the backend
+const priorityOf = (decision: Decision): EditPriority =>
+  decision.kind === 'list' || decision.kind === 'signal' ? 'signal' : 'housekeeping';
+
 export function createSignalWaiter({
   backend,
   logger,
@@ -233,6 +267,10 @@ export function createSignalWaiter({
   listTtlMs,
   maxMs,
   editGapMs,
+  editsPerSecond,
+  editBurst,
+  chatGapMs,
+  resolveConcurrency,
   captionMs,
   captionEditsPerTick,
   editFailuresMax,
@@ -244,15 +282,17 @@ export function createSignalWaiter({
   // the waits the users left on the animation whose still has not gone yet, frozen one at a time
   const leaving = new Set<Entry>();
   let freezing: Promise<void> = Promise.resolve();
-  // wakes the freeze's sleep until a 429's retry_after, for stop()
-  let wakePause = (): void => undefined;
   let attachedScreens: SignalWaitScreens | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let inflight: Promise<void> | undefined;
+  // the entries' edits launched by the ticks and not finished
+  const launched = new Set<Promise<void>>();
   let stopped = false;
-  let pausedUntil = 0;
-  let lastEditAt = Number.NEGATIVE_INFINITY;
   let readsFailing = false;
+  const pacer = createEditPacer({ editsPerSecond, burst: editBurst, chatGapMs, now });
+  // the signal edits' reads in flight, at most resolveConcurrency
+  let reading = 0;
+  const readers: (() => void)[] = [];
   const interval = intervalForDuration(DEMO_DURATION_SEC);
 
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -267,8 +307,8 @@ export function createSignalWaiter({
 
   function onTimer(): void {
     timer = undefined;
-    // a tick that finds the previous one in flight is skipped: its entries are counted again on
-    // the next snapshot
+    // a tick that finds the previous one's reads in flight is skipped: its entries are counted
+    // again on the next snapshot
     if (inflight === undefined) {
       inflight = tick()
         .catch((error: unknown) => {
@@ -311,6 +351,7 @@ export function createSignalWaiter({
 
   function common({ drawn, media, scanned }: WaitTarget): Common {
     return {
+      busy: false,
       rendered: renderKey(drawn, media),
       captionAt: scanned ? now() : Number.NEGATIVE_INFINITY,
       editFailures: 0,
@@ -363,50 +404,115 @@ export function createSignalWaiter({
   }
 
   async function tick(): Promise<void> {
-    if (now() < pausedUntil) return;
+    if (now() < pacer.pausedUntil()) return;
     const snapshot = await readSnapshot();
     const nowMs = now();
+    const decided: { entry: Entry; decision: Decision }[] = [];
     for (const entry of [...entries.values()]) {
-      if (!live(entry)) continue;
-      let outcome: EditOutcome;
+      if (!live(entry) || entry.busy) continue;
       // a screen that throws (an override, Rule 30) ends its own entry as drawn: a fallback screen
       // from the same catalog could throw the same way, and a retry would throw on every tick
       try {
-        outcome = await runWithLanguage(entry.language, () => advance(entry, snapshot, nowMs));
+        const decision = runWithLanguage(entry.language, () => decide(entry, snapshot, nowMs));
+        if (decision.kind !== 'kept') decided.push({ entry, decision });
       } catch (error) {
-        logger.error(
-          { ...errorLogFields(error), ...entryFields(entry) },
-          'signal wait entry failed',
-        );
-        end(entry);
-        continue;
+        failed(entry, error);
       }
-      if (outcome === 'paused' || stopped) return;
     }
-    await refreshCaptions(snapshot, nowMs);
+    const signalReads = decided
+      .filter(({ decision }) => priorityOf(decision) === 'signal')
+      .map(({ entry, decision }) =>
+        launch(entry, 'signal', decision.kind === 'signal', () =>
+          apply(entry, decision, snapshot, nowMs),
+        ),
+      );
+    // the housekeeping edits ask for their slots once the signal edits have asked for theirs
+    await Promise.all(signalReads);
+    for (const { entry, decision } of decided) {
+      if (priorityOf(decision) === 'signal' || !live(entry)) continue;
+      void launch(entry, 'housekeeping', false, () => apply(entry, decision, snapshot, nowMs));
+    }
+    refreshCaptions(snapshot, nowMs);
   }
 
-  // The scanner's caption, the last of a tick (#859): the waits not redrawn for captionMs, the
-  // longest waiting first, at most captionEditsPerTick; a 429 stops them with the tick.
-  async function refreshCaptions(snapshot: Snapshot, nowMs: number): Promise<void> {
+  function failed(entry: Entry, error: unknown): void {
+    logger.error({ ...errorLogFields(error), ...entryFields(entry) }, 'signal wait entry failed');
+    end(entry);
+  }
+
+  // One edit of an entry outside the tick: the entry busy until it ends; for the signal edits a
+  // read slot taken (`reads`) until the edit asks for its slot in the pace or ends. Resolves once
+  // the reads are done; the edit itself is awaited by stop().
+  function launch(
+    entry: Entry,
+    priority: EditPriority,
+    reads: boolean,
+    work: () => Promise<EditOutcome>,
+  ): Promise<void> {
+    entry.busy = true;
+    let readsEnded = (): void => undefined;
+    const readsDone = new Promise<void>((resolve) => {
+      readsEnded = resolve;
+    });
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      if (reads) {
+        reading -= 1;
+        readers.shift()?.();
+      }
+      readsEnded();
+    };
+    gates.set(entry, { priority, reached: release });
+    const task: Promise<void> = (async () => {
+      if (reads) {
+        await readSlot();
+        if (!live(entry)) return;
+      }
+      try {
+        await runWithLanguage(entry.language, work);
+      } catch (error) {
+        failed(entry, error);
+      }
+    })().finally(() => {
+      release();
+      entry.busy = false;
+      gates.delete(entry);
+      launched.delete(task);
+    });
+    launched.add(task);
+    return readsDone;
+  }
+
+  // the gate of each launched edit: its priority in the pace, and the end of its reads
+  const gates = new Map<Entry, { priority: EditPriority; reached: () => void }>();
+
+  function readSlot(): Promise<void> {
+    if (reading < resolveConcurrency) {
+      reading += 1;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      readers.push(() => {
+        reading += 1;
+        resolve();
+      });
+    });
+  }
+
+  // The scanner's caption, the last of a tick (#859): the waits not redrawn for captionMs and not
+  // being edited, the longest waiting first, at most captionEditsPerTick.
+  function refreshCaptions(snapshot: Snapshot, nowMs: number): void {
     const due = [...entries.values()]
-      .filter((entry) => waiting(entry) && nowMs - entry.captionAt >= captionMs)
+      .filter(
+        (entry) =>
+          live(entry) && !entry.busy && waiting(entry) && nowMs - entry.captionAt >= captionMs,
+      )
       .sort((a, b) => a.captionAt - b.captionAt)
       .slice(0, captionEditsPerTick);
     for (const entry of due) {
-      if (!live(entry)) continue;
-      let outcome: EditOutcome;
-      try {
-        outcome = await runWithLanguage(entry.language, () => redraw(entry, snapshot, nowMs));
-      } catch (error) {
-        logger.error(
-          { ...errorLogFields(error), ...entryFields(entry) },
-          'signal wait entry failed',
-        );
-        end(entry);
-        continue;
-      }
-      if (outcome === 'paused' || stopped) return;
+      void launch(entry, 'housekeeping', false, () => redraw(entry, snapshot, nowMs));
     }
   }
 
@@ -436,76 +542,111 @@ export function createSignalWaiter({
   const shownAlternatives = (entry: Extract<Entry, { kind: 'pair' }>): readonly ShownSignal[] =>
     typeof entry.pair.alternatives === 'object' ? entry.pair.alternatives.shown : [];
 
-  async function advance(entry: Entry, snapshot: Snapshot, nowMs: number): Promise<EditOutcome> {
+  function decide(entry: Entry, snapshot: Snapshot, nowMs: number): Decision {
     const screens = attached();
-    if (nowMs - entry.startedAt >= maxMs) return finish(entry, screens.expired());
+    if (nowMs - entry.startedAt >= maxMs) return { kind: 'finish', screen: screens.expired() };
     if (entry.kind === 'list') {
       if (entry.shownAt !== undefined) {
-        return nowMs - entry.shownAt >= listTtlMs ? finish(entry, screens.expired()) : 'kept';
+        return nowMs - entry.shownAt >= listTtlMs
+          ? { kind: 'finish', screen: screens.expired() }
+          : KEPT;
       }
       const { signals, catalog } = snapshot;
-      if (signals === undefined || catalog === undefined) return 'kept';
+      if (signals === undefined || catalog === undefined) return KEPT;
       const drawn = screens.list(signals, catalog, nowMs);
-      if (drawn === undefined || drawn.listed === 0) return 'kept';
-      const outcome = await edit(entry, drawn.screen, endMedia(entry));
-      if (outcome === 'drawn') {
-        entry.shownAt = now();
-        remember(entry, ShownSignalSource.List, shownRecordsOf(drawn.shown));
-      }
-      return outcome;
+      if (drawn === undefined || drawn.listed === 0) return KEPT;
+      return { kind: 'list', screen: drawn.screen, shown: drawn.shown };
     }
-    const { pair } = entry;
     const { list, catalog } = snapshot;
     if (list !== undefined && catalog !== undefined) {
-      const check = checkDemoTrade(catalog, pair.assetId, DEMO_DURATION_SEC, nowMs);
-      if (!check.ok) return finish(entry, screens.refusal(check, catalog, nowMs));
-      if (list.signals.some((signal) => signal.assetId === pair.assetId)) {
-        const resolved = await resolve(entry, check.pair);
-        if (resolved !== undefined) return resolved;
-        if (!live(entry)) return 'ended';
+      const check = checkDemoTrade(catalog, entry.pair.assetId, DEMO_DURATION_SEC, nowMs);
+      if (!check.ok) return { kind: 'finish', screen: screens.refusal(check, catalog, nowMs) };
+      if (list.signals.some((signal) => signal.assetId === entry.pair.assetId)) {
+        return { kind: 'signal', pair: check.pair };
       }
-      if (pair.alternatives === 'pending') {
-        // the pair is in the list when the analysis found no signal by its own read
-        const others = list.signals.filter((signal) => signal.assetId !== pair.assetId);
-        const alternatives = screens.alternatives(others, catalog, nowMs);
-        if (alternatives.length === 0) {
-          pair.alternatives = 'done';
-          return 'kept';
-        }
-        const outcome = await edit(
-          entry,
-          screens.waiting(pair.base, alternatives, { list, pair: check.pair }),
-          entry.media,
-        );
-        if (outcome === 'drawn') {
-          pair.alternatives = { shownAt: now(), shown: alternatives };
-          remember(entry, ShownSignalSource.List, shownRecordsOf(alternatives));
-        }
-        return outcome;
+    }
+    return decideAlternatives(entry, snapshot, nowMs);
+  }
+
+  // the other pairs' buttons of a pair's wait: drawn by the first poll that has some, taken down
+  // listTtlMs after they were drawn
+  function decideAlternatives(entry: PairEntry, snapshot: Snapshot, nowMs: number): Decision {
+    const screens = attached();
+    const { pair } = entry;
+    const { list, catalog } = snapshot;
+    const check =
+      list === undefined || catalog === undefined
+        ? undefined
+        : checkDemoTrade(catalog, pair.assetId, DEMO_DURATION_SEC, nowMs);
+    const scan = list !== undefined && check?.ok === true ? { list, pair: check.pair } : undefined;
+    if (pair.alternatives === 'pending' && list !== undefined && catalog !== undefined) {
+      if (scan === undefined) return KEPT;
+      // the pair is in the list when the analysis found no signal by its own read
+      const others = list.signals.filter((signal) => signal.assetId !== pair.assetId);
+      const alternatives = screens.alternatives(others, catalog, nowMs);
+      if (alternatives.length === 0) {
+        pair.alternatives = 'done';
+        return KEPT;
       }
+      return {
+        kind: 'alternatives',
+        screen: screens.waiting(pair.base, alternatives, scan),
+        shown: alternatives,
+      };
     }
     const { alternatives } = pair;
     if (typeof alternatives === 'object' && nowMs - alternatives.shownAt >= listTtlMs) {
-      const check =
-        list === undefined || catalog === undefined
-          ? undefined
-          : checkDemoTrade(catalog, pair.assetId, DEMO_DURATION_SEC, nowMs);
-      const scan =
-        list !== undefined && check?.ok === true ? { list, pair: check.pair } : undefined;
-      const outcome = await edit(entry, screens.waiting(pair.base, [], scan), entry.media);
-      if (outcome === 'drawn') pair.alternatives = 'done';
-      return outcome;
+      return { kind: 'alternatives-expired', screen: screens.waiting(pair.base, [], scan) };
     }
-    return 'kept';
+    return KEPT;
+  }
+
+  async function apply(
+    entry: Entry,
+    decision: Decision,
+    snapshot: Snapshot,
+    nowMs: number,
+  ): Promise<EditOutcome> {
+    switch (decision.kind) {
+      case 'finish':
+        return finish(entry, decision.screen);
+      case 'list': {
+        const outcome = await edit(entry, decision.screen, endMedia(entry));
+        if (outcome === 'drawn' && entry.kind === 'list') {
+          entry.shownAt = now();
+          remember(entry, ShownSignalSource.List, shownRecordsOf(decision.shown));
+        }
+        return outcome;
+      }
+      case 'signal': {
+        if (entry.kind !== 'pair') return 'kept';
+        const resolved = await resolve(entry, decision.pair);
+        if (resolved !== undefined) return resolved;
+        if (!live(entry)) return 'ended';
+        return apply(entry, decideAlternatives(entry, snapshot, nowMs), snapshot, nowMs);
+      }
+      case 'alternatives': {
+        const outcome = await edit(entry, decision.screen, entry.media);
+        if (outcome === 'drawn' && entry.kind === 'pair') {
+          entry.pair.alternatives = { shownAt: now(), shown: decision.shown };
+          remember(entry, ShownSignalSource.List, shownRecordsOf(decision.shown));
+        }
+        return outcome;
+      }
+      case 'alternatives-expired': {
+        const outcome = await edit(entry, decision.screen, entry.media);
+        if (outcome === 'drawn' && entry.kind === 'pair') entry.pair.alternatives = 'done';
+        return outcome;
+      }
+      case 'kept':
+        return 'kept';
+    }
   }
 
   // The chosen pair has a signal: the next step by a fresh access read, or for the analysis its
   // card. undefined when the analysis's answer has no H1 signal after all (a second boundary
   // crossed between the two reads): the entry stays.
-  async function resolve(
-    entry: Extract<Entry, { kind: 'pair' }>,
-    pairView: PairView,
-  ): Promise<EditOutcome | undefined> {
+  async function resolve(entry: PairEntry, pairView: PairView): Promise<EditOutcome | undefined> {
     const screens = attached();
     const { pair } = entry;
     const telegramUserId = String(entry.telegramUserId);
@@ -579,7 +720,7 @@ export function createSignalWaiter({
     card: { text: TelegramHtml; keyboard: BotKeyboard; action: TradeAction },
   ): Promise<EditOutcome> {
     const { photos } = attached();
-    const gated = await gate(() => live(entry));
+    const gated = await gate(entry);
     if (gated !== undefined) return gated;
     try {
       const result = await editMessagePhotoByIdHtml(
@@ -624,25 +765,21 @@ export function createSignalWaiter({
     return outcome;
   }
 
-  // Two writers share the pace, the tick and the freezes: a call reserves its slot before it
-  // sleeps, so two calls never go at once.
-  async function pace(): Promise<void> {
-    const at = Math.max(now(), lastEditAt + editGapMs);
-    lastEditAt = at;
-    if (at > now()) await sleep(at - now());
-  }
-
-  // Before every edit of the wait: its slot in the pace, then the entry still to be edited and no
-  // 429's pause, which a freeze may have taken while the slot was awaited.
-  async function gate(alive: () => boolean): Promise<'ended' | 'paused' | undefined> {
-    await pace();
-    if (!alive()) return 'ended';
-    if (now() < pausedUntil) return 'paused';
+  // Before every edit of the wait: its slot in the pace, at its launch's priority (the end of the
+  // launch's reads), then the entry still to be edited. A 429's pause is waited out inside the
+  // pace; the stop closes it, and a waiting edit ends unsent.
+  async function gate(entry: Entry): Promise<'ended' | undefined> {
+    const launch = gates.get(entry);
+    launch?.reached();
+    const slot = await pacer.take(entry.chatId, launch?.priority ?? 'housekeeping', () =>
+      live(entry),
+    );
+    if (slot !== 'slot' || !live(entry)) return 'ended';
     return undefined;
   }
 
   function pauseFor(error: GrammyError): void {
-    pausedUntil = now() + (error.parameters.retry_after ?? 1) * 1000;
+    pacer.pause(now() + (error.parameters.retry_after ?? 1) * 1000);
   }
 
   // One edit of the message into `screen` as `media` (#859): a text as a text; the same media its
@@ -672,7 +809,7 @@ export function createSignalWaiter({
   async function edit(entry: Entry, screen: DemoScreen, media: WaitMedia): Promise<EditOutcome> {
     const key = renderKey(screen, media);
     if (key === entry.rendered) return 'drawn';
-    const gated = await gate(() => live(entry));
+    const gated = await gate(entry);
     if (gated !== undefined) return gated;
     let drawnAs = media;
     try {
@@ -685,7 +822,7 @@ export function createSignalWaiter({
           { ...errorLogFields(error), ...telegramErrorFields(error), ...entryFields(entry) },
           'the scan media was refused, editing the caption',
         );
-        const again = await gate(() => live(entry));
+        const again = await gate(entry);
         if (again !== undefined) return again;
         drawnAs = entry.media;
         await send(entry, screen, drawnAs);
@@ -752,14 +889,14 @@ export function createSignalWaiter({
   // the window. The launched ones are awaited.
   async function drainEdits(remaining: Entry[]): Promise<void> {
     const deadline = now() + shutdownBudgetMs;
-    if (pausedUntil > now()) {
-      if (pausedUntil >= deadline) return;
-      await sleep(pausedUntil - now());
+    if (pacer.pausedUntil() > now()) {
+      if (pacer.pausedUntil() >= deadline) return;
+      await sleep(pacer.pausedUntil() - now());
     }
-    const launched: Promise<void>[] = [];
+    const sent: Promise<void>[] = [];
     for (const entry of remaining) {
-      if (now() >= deadline || now() < pausedUntil) break;
-      launched.push(
+      if (now() >= deadline || now() < pacer.pausedUntil()) break;
+      sent.push(
         runWithLanguage(entry.language, async () => {
           try {
             const screen = attached().expired();
@@ -781,7 +918,7 @@ export function createSignalWaiter({
       );
       await sleep(editGapMs);
     }
-    await Promise.allSettled(launched);
+    await Promise.allSettled(sent);
   }
 
   const methodOf = (entry: WaitTarget, media: WaitMedia): string =>
@@ -793,16 +930,20 @@ export function createSignalWaiter({
 
   // The user left a wait on screen (a button, a command): its animation would loop on in the chat
   // with stale figures, so it becomes the still with the start of trading, one edit (#859). The
-  // freezes go one at a time outside the tick, at the edits' shared pace, none in a 429's pause: a
-  // pause is waited out, a 429 of the freeze itself waits its retry_after and tries again, another
-  // refusal is not retried. stop() wakes the wait and takes the queued ones into its drain.
+  // freezes go one at a time outside the tick, through the edits' shared pace at the housekeeping
+  // priority, none in a 429's pause: a pause is waited out, a 429 of the freeze itself waits its
+  // retry_after and tries again, another refusal is not retried. stop() closes the pace and takes
+  // the queued ones into its drain.
   async function freeze(entry: Entry): Promise<void> {
     while (!stopped && leaving.has(entry)) {
-      if (now() < pausedUntil) await pauseSleep();
-      else if ((await gate(() => !stopped && leaving.has(entry))) === undefined) {
-        leaving.delete(entry);
-        await runWithLanguage(entry.language, () => sendStill(entry));
-      }
+      const slot = await pacer.take(
+        entry.chatId,
+        'housekeeping',
+        () => !stopped && leaving.has(entry),
+      );
+      if (slot !== 'slot' || stopped || !leaving.has(entry)) return;
+      leaving.delete(entry);
+      await runWithLanguage(entry.language, () => sendStill(entry));
     }
   }
 
@@ -834,15 +975,6 @@ export function createSignalWaiter({
       logger.warn(fields, 'signal wait message not frozen');
     }
   }
-
-  const pauseSleep = () =>
-    new Promise<void>((resolve) => {
-      const handle = setTimeout(resolve, pausedUntil - now());
-      wakePause = () => {
-        clearTimeout(handle);
-        resolve();
-      };
-    });
 
   return {
     attach(next) {
@@ -895,12 +1027,13 @@ export function createSignalWaiter({
       stopped = true;
       if (timer !== undefined) clearTimeout(timer);
       timer = undefined;
-      wakePause();
+      pacer.close();
       const remaining = [...entries.values(), ...leaving];
       entries.clear();
       leaving.clear();
       await Promise.all([
         inflight,
+        ...launched,
         remaining.length > 0 ? drainEdits(remaining) : undefined,
         freezing,
       ]);

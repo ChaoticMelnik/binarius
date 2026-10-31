@@ -41,7 +41,12 @@ import {
   signalsResponse,
   stubShownSignals,
 } from './testing';
-import { SIGNAL_WAIT_POLL_MS, SIGNAL_WAIT_POLL_OFFSET_MS } from './timing';
+import {
+  SIGNAL_WAIT_FANOUT_ENTRIES,
+  SIGNAL_WAIT_FANOUT_MS,
+  SIGNAL_WAIT_POLL_MS,
+  SIGNAL_WAIT_POLL_OFFSET_MS,
+} from './timing';
 
 // The wait for a signal (#664, signal-wait.ts) on fake timers: one tick at each candle's boundary
 // plus the offset, by the bot's clock, from a start that is not on a boundary.
@@ -102,6 +107,10 @@ function setup(
     pollOffsetMs?: number;
     captionMs?: number;
     captionEditsPerTick?: number;
+    // the pace (#869): the scenes that do not name it run one edit every GAP, no gap of a chat
+    editBurst?: number;
+    chatGapMs?: number;
+    resolveConcurrency?: number;
   } = {},
 ) {
   let listed: (readonly [number, TradeAction])[] = [];
@@ -159,6 +168,10 @@ function setup(
     listTtlMs: TTL,
     maxMs: options.maxMs ?? 3_600_000,
     editGapMs: GAP,
+    editsPerSecond: 1000 / GAP,
+    editBurst: options.editBurst ?? 1,
+    chatGapMs: options.chatGapMs ?? 0,
+    resolveConcurrency: options.resolveConcurrency ?? 10,
     // the captions' redraw (#859) stays out of the scenes that do not name it
     captionMs: options.captionMs ?? 3_600_000,
     captionEditsPerTick: options.captionEditsPerTick ?? 2,
@@ -670,7 +683,7 @@ describe('the wait for a signal', () => {
     expect(waiter.has(7)).toBe(false);
   });
 
-  it('W10 stops the tick’s edits on a 429 and resumes no sooner than its retry_after', async () => {
+  it('W10 pauses every edit on a 429 and resumes no sooner than its retry_after', async () => {
     const { waiter, list, target, at, editMessageText, setListed } = setup();
     editMessageText.mockRejectedValueOnce(LIMITED(7));
     waiter.waitList(list(target(1)));
@@ -678,11 +691,15 @@ describe('the wait for a signal', () => {
     setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
     await at(FIRST_TICK + 1_000);
     expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([1]);
-    // paused until FIRST_TICK + 7 s: the next tick is skipped
+    // paused until FIRST_TICK + 7 s: the next tick is skipped, the waiting edit holds its turn
     await at(FIRST_TICK + POLL);
     expect(editMessageText).toHaveBeenCalledTimes(1);
+    await at(FIRST_TICK + 7_000 - 1);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    await at(FIRST_TICK + 7_000);
+    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([1, 2]);
     await at(FIRST_TICK + 2 * POLL + 1_000);
-    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([1, 1, 2]);
+    expect(editMessageText.mock.calls.map((call) => call[0])).toEqual([1, 2, 1]);
   });
 
   it('W10b ends an entry whose message is gone or whose user blocked the bot, sending nothing', async () => {
@@ -726,22 +743,30 @@ describe('the wait for a signal', () => {
     }
   });
 
-  it('W11 paces the edits of a tick editGapMs apart and skips a tick while they run', async () => {
-    const { waiter, list, target, at, editMessageText, setListed, backend } = setup();
+  // #869: the token bucket — the burst at once, then one every GAP — and the ticks go on while the
+  // edits are in flight, an entry being edited left alone
+  it('W11 sends a burst of edits at once, then one every editGapMs, and polls on while they run', async () => {
+    const { waiter, list, target, at, editMessageText, setListed, backend } = setup({
+      editBurst: 5,
+    });
     const times: number[] = [];
     editMessageText.mockImplementation(() => {
-      times.push(Date.now());
+      times.push(Date.now() - FIRST_TICK);
       return Promise.resolve(true);
     });
     for (let user = 1; user <= 30; user += 1) waiter.waitList(list(target(user)));
     setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
     await at(FIRST_TICK + POLL);
-    expect(backend.readSignals).toHaveBeenCalledTimes(1);
+    expect(backend.readSignals).toHaveBeenCalledTimes(2);
     await at(FIRST_TICK + 7_000);
-    expect(times).toHaveLength(30);
-    for (let index = 1; index < times.length; index += 1) {
-      expect(times[index]! - times[index - 1]!).toBeGreaterThanOrEqual(GAP);
-    }
+    expect(times).toEqual([
+      0,
+      0,
+      0,
+      0,
+      0,
+      ...Array.from({ length: 25 }, (_, index) => (index + 1) * GAP),
+    ]);
   });
 
   it('W12 at the stop polls no more and turns the waiting messages into the start of trading inside its window', async () => {
@@ -1152,7 +1177,8 @@ describe('the live wait (#859)', () => {
     expect(editMessageMedia).toHaveBeenCalledTimes(1);
   });
 
-  it('W38 a 429 of a freeze stops the tick it came in, and the freeze goes again after its retry_after', async () => {
+  // #869: the tick's signal edits go before the freeze; its 429 pauses the pace for every edit
+  it('W38 a 429 of a freeze pauses the pace, and the freeze goes again after its retry_after', async () => {
     const { waiter, list, target, at, setListed, editMessageText, editMessageMedia } = setup();
     editMessageMedia.mockRejectedValueOnce(LIMITED(3));
     for (const user of [2, 3, 4]) waiter.waitList(list(target(user)));
@@ -1161,13 +1187,14 @@ describe('the live wait (#859)', () => {
     await at(FIRST_TICK + 50);
     waiter.leave(1);
     await at(FIRST_TICK + 3_000);
-    expect(chatsOf(editMessageText)).toEqual([2, 3]);
+    expect(chatsOf(editMessageText)).toEqual([2, 3, 4]);
+    expect(chatsOf(editMessageMedia)).toEqual([1]);
+    // the freeze's slot came at +600 ms, its pause ends at +3 600 ms
+    await at(FIRST_TICK + 3_600 - 1);
     expect(chatsOf(editMessageMedia)).toEqual([1]);
     await at(FIRST_TICK + 3_600);
     expect(chatsOf(editMessageMedia)).toEqual([1, 1]);
     expect(captionOf(editMessageMedia.mock.calls[1])).toBe('expired');
-    await at(FIRST_TICK + POLL + GAP);
-    expect(chatsOf(editMessageText)).toEqual([2, 3, 4]);
   });
 
   it('W39 a freeze refused for its file forgets the still, a gone one ends quietly, neither tried again', async () => {
@@ -1240,4 +1267,177 @@ describe('the live wait (#859)', () => {
       expect(texts()).toEqual([`list:${PAIR_EURUSD.id}`, ...expired]);
     },
   );
+});
+
+// #869: the tick decides for every entry first, resolves the signals side by side, and paces the
+// edits through the token bucket — signal edits first, a chat at most once a second
+describe('the fan-out and the pace (#869)', () => {
+  it('W42 sends the signal edits of 20 waiting users within the fan-out bound, at most 10 access reads at once, Telegram answering in 2 s', async () => {
+    const { waiter, pair, target, at, setListed, backend, editMessageText } = setup({
+      editBurst: 5,
+      chatGapMs: 1_000,
+      resolveConcurrency: 10,
+    });
+    let reading = 0;
+    let mostReading = 0;
+    backend.readTradingAccess.mockImplementation(() => {
+      reading += 1;
+      mostReading = Math.max(mostReading, reading);
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          reading -= 1;
+          resolve(accessView());
+        }, 300);
+      });
+    });
+    const sentAt: number[] = [];
+    editMessageText.mockImplementation(() => {
+      sentAt.push(Date.now() - FIRST_TICK);
+      return new Promise((resolve) => setTimeout(() => resolve(true), 2_000));
+    });
+    for (let user = 1; user <= SIGNAL_WAIT_FANOUT_ENTRIES; user += 1) {
+      waiter.waitPair(pair(target(user)));
+    }
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + SIGNAL_WAIT_FANOUT_MS);
+    expect(sentAt).toHaveLength(SIGNAL_WAIT_FANOUT_ENTRIES);
+    expect(Math.max(...sentAt)).toBeLessThanOrEqual(SIGNAL_WAIT_FANOUT_MS);
+    expect(mostReading).toBe(10);
+    await at(FIRST_TICK + 2 * SIGNAL_WAIT_FANOUT_MS);
+    expect(waiter.size()).toBe(0);
+  });
+
+  it('W43 a signal edit goes before the TTL edits of an earlier tick still waiting for their slots', async () => {
+    const { waiter, list, pair, target, at, setListed, editMessageText, texts } = setup({
+      pollMs: 1_000,
+      pollOffsetMs: 600,
+    });
+    for (let user = 1; user <= 10; user += 1)
+      waiter.waitList(list({ ...target(user), shown: true }));
+    waiter.waitPair(pair(target(99)));
+    // the lists expire on the tick at 42 600 ms, ten edits one every GAP
+    await at(42_700);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(46_000);
+    const order = texts();
+    expect(order).toHaveLength(11);
+    const signalAt = order.findIndex((text) => text.startsWith('next:'));
+    expect(signalAt).toBeGreaterThanOrEqual(5);
+    expect(signalAt).toBeLessThan(7);
+    expect(order.slice(signalAt + 1).every((text) => text === 'expired')).toBe(true);
+  });
+
+  it('W44 polls every second while an edit is in flight and never edits the busy entry twice', async () => {
+    const { waiter, pair, at, setListed, backend, editMessageText } = setup({
+      pollMs: 1_000,
+      pollOffsetMs: 600,
+    });
+    let release = (): void => {};
+    editMessageText.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = () => resolve(true);
+        }),
+    );
+    waiter.waitPair(pair({ alternatives: 'pending' }));
+    setListed([[PAIR_SHORT.id, TradeAction.Up]]);
+    await at(13_600);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    await at(16_600);
+    expect(backend.readSignals).toHaveBeenCalledTimes(5);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    release();
+    await at(17_600);
+    expect(editMessageText).toHaveBeenCalledTimes(1);
+    expect(waiter.has(7)).toBe(true);
+  });
+
+  it('W45 edits a chat at most once a second: the card’s text after its refused photo, the new wait after the old one’s freeze', async () => {
+    const card = setup({ editBurst: 5, chatGapMs: 1_000 });
+    const mediaAt: number[] = [];
+    const textAt: number[] = [];
+    card.editMessageMedia.mockImplementation(() => {
+      mediaAt.push(Date.now());
+      return Promise.reject(OTHER());
+    });
+    card.editMessageText.mockImplementation(() => {
+      textAt.push(Date.now());
+      return Promise.resolve(true);
+    });
+    card.waiter.waitPair(card.pair({ origin: 'analysis' }));
+    card.setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await card.at(FIRST_TICK + 2_000);
+    expect(mediaAt).toEqual([FIRST_TICK]);
+    expect(textAt).toEqual([FIRST_TICK + 1_000]);
+    expect(card.waiter.has(7)).toBe(false);
+
+    vi.setSystemTime(T0);
+    const user = setup({ editBurst: 5, chatGapMs: 1_000 });
+    const frozenAt: number[] = [];
+    const drawnAt: number[] = [];
+    user.editMessageMedia.mockImplementation(() => {
+      frozenAt.push(Date.now());
+      return Promise.resolve(true);
+    });
+    user.editMessageText.mockImplementation(() => {
+      drawnAt.push(Date.now());
+      return Promise.resolve(true);
+    });
+    user.waiter.waitList(user.list({ ...user.target(7), ...animation }));
+    await user.at(FIRST_TICK - 100);
+    user.waiter.leave(7);
+    user.waiter.waitList(user.list(user.target(7)));
+    user.setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await user.at(FIRST_TICK + 2_000);
+    expect(frozenAt).toEqual([FIRST_TICK - 100]);
+    expect(drawnAt).toEqual([FIRST_TICK + 900]);
+  });
+
+  it('W46 a 429 of one signal edit holds the others until its retry_after, and its entry stays', async () => {
+    const { waiter, list, target, at, setListed, editMessageText } = setup();
+    const sentAt: [unknown, number][] = [];
+    editMessageText
+      .mockImplementationOnce((chat) => {
+        sentAt.push([chat, Date.now() - FIRST_TICK]);
+        return Promise.reject(LIMITED(2));
+      })
+      .mockImplementation((chat) => {
+        sentAt.push([chat, Date.now() - FIRST_TICK]);
+        return Promise.resolve(true);
+      });
+    for (const user of [1, 2, 3]) waiter.waitList(list(target(user)));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 2_500);
+    expect(sentAt).toEqual([
+      [1, 0],
+      [2, 2_000],
+      [3, 2_200],
+    ]);
+    expect(waiter.has(1)).toBe(true);
+    await at(FIRST_TICK + POLL);
+    expect(sentAt[3]).toEqual([1, POLL]);
+  });
+
+  it('W47 at the stop the edits waiting for a slot send nothing, and the drain edits every entry inside its window', async () => {
+    const { waiter, list, target, at, setListed, texts } = setup({ shutdownBudgetMs: 2_000 });
+    for (let user = 1; user <= 5; user += 1) waiter.waitList(list(target(user)));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 50);
+    expect(texts()).toEqual([`list:${String(PAIR_EURUSD.id)}`]);
+    let done = false;
+    void waiter.stop().then(() => {
+      done = true;
+    });
+    await at(FIRST_TICK + 50 + 2_000);
+    expect(done).toBe(true);
+    expect(texts()).toEqual([
+      `list:${String(PAIR_EURUSD.id)}`,
+      'expired',
+      'expired',
+      'expired',
+      'expired',
+      'expired',
+    ]);
+  });
 });

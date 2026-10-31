@@ -278,6 +278,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 67. **Картинка рассылки и ссылки справочного пуша** — картинка — `MailingPhotoMessage` через `photos` движка и `sendMailingPhoto`, отказ файла забывает `file_id`; kind, выключенный env, не планируется и не берётся (`enabledKinds`) → `rules/bot-ui.md`
 68. **Цепочка «демо → реал»** — от конца третьей демо-сессии без депозита, шаг устаревает со следующим; бонус — версия `deposit_bonus` в силе по `activeRuleWhere`; без кассы не планируется и не берётся; тексты без давности, срока и утверждений о пользователе → `rules/bot-ui.md`
 69. **Карточка итогов дня** — сутки по поясу и часу из `mailing.ts`, цифры только SQL раздельно по режимам, итоги одним InitPlan; рендер вне event loop, одна загрузка на хеш SVG → `rules/bot-ui.md`
+70. **Опрос бота — параллельно по пользователям** — свой цикл над grammY: ёмкость `POLLING_CONCURRENCY`, порядок внутри пользователя по `from.id`, offset следующим `getUpdates` и на стопе; правки ожидания через token bucket с приоритетом сигнала → `rules/core.md`
 
 ### Map: path → rules
 
@@ -309,7 +310,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/backend/src/trading` | core 3, 5, 7, 17, 26, 52; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 58, 59, 62, 66; auth 12, 13, 60 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
-| `apps/bot/src` | core 8, 10, 14, 26, 51, 52, 65; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62, 66, 67; payments 39; auth 12, 13 |
+| `apps/bot/src` | core 8, 10, 14, 26, 51, 52, 65, 70; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62, 66, 67; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
 | `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54, 64; signal-h1 44, 45; bot-ui 18, 67 |
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53, 64; auth 12, 60 |
@@ -331,6 +332,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/bot-demo.md` | bot-ui 46, 58 |
 | `docs/bot-navigation.md` | bot-ui 31, 49, 61 |
 | `docs/bot-session.md` | trading 28; bot-ui 47, 59, 61, 62, 66 |
+| `docs/bot-start.md` | core 70 |
 | `docs/bot-texts.md` | bot-ui 18, 30 |
 | `docs/broker-balance.md` | core 65; trading 21 |
 | `docs/broker-rest.md` | trading 24 |
