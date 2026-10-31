@@ -233,6 +233,7 @@ export const BOT_TEXT_VARS = {
     format: (count: string) => formatCount(count),
   }),
   sessions: shown('Число демо-сессий пользователя со словом', '3 демо-сессии'),
+  date: shown('Дата суток карточки итогов дня, дд.мм.гггг', '30.10.2026'),
   tokensPerUsd: variable({
     description: 'Токенов за каждый $1 пополнения, из действующего правила бонуса за пополнение',
     sample: '0.5',

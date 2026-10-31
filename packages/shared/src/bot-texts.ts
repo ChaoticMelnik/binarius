@@ -2109,6 +2109,67 @@ export const BOT_TEXT_CATALOG = {
     'Цепочка «демо → реал»: слово после остальных чисел («5 демо-сессий», «11 демо-сессий»).',
     'демо-сессий',
   ),
+  // The daily summary card (#881, docs/mailing.md → The daily summary): a picture of the previous
+  // Moscow day's totals of every user, demo and real apart, and this caption under it. Every figure
+  // is the database's, signed when negative; no promise and no claim beyond the figures.
+  dailySummaryTitle: html(
+    g.Mailing,
+    'Ежедневная карточка итогов (10:00 МСК, всем пользователям): заголовок подписи под картинкой с датой суток.',
+    '📊 <b>Итоги дня: {date}</b>',
+    { ...caption, vars: ['date'] },
+  ),
+  dailySummaryDemo: html(
+    g.Mailing,
+    'Карточка итогов дня: строка демо — сделки всех пользователей за сутки и их результат в $ со знаком (минус тоже показывается).',
+    '🎮 Демо: {result}, результат {profit}.',
+    { ...caption, vars: ['result', 'profit'] },
+  ),
+  dailySummaryReal: html(
+    g.Mailing,
+    'Карточка итогов дня: строка реала — сделки всех пользователей за сутки и их результат в $ со знаком (минус тоже показывается).',
+    '🚀 Реал: {result}, результат {profit}.',
+    { ...caption, vars: ['result', 'profit'] },
+  ),
+  dailySummaryEntry: html(
+    g.Mailing,
+    'Карточка итогов дня: последняя строка подписи — о кнопке входа в торговлю.',
+    '👇 Торговля — по кнопке ниже.',
+    caption,
+  ),
+  // labels drawn on the picture, each limit the width of its slot there
+  dailyCardTitle: plain(g.Mailing, 'Карточка итогов дня: заголовок на картинке.', 'ИТОГИ ДНЯ', {
+    limit: 24,
+  }),
+  dailyCardDemo: plain(g.Mailing, 'Карточка итогов дня: заголовок колонки демо.', 'ДЕМО', {
+    limit: 12,
+  }),
+  dailyCardReal: plain(g.Mailing, 'Карточка итогов дня: заголовок колонки реала.', 'РЕАЛ', {
+    limit: 12,
+  }),
+  dailyCardSessions: plain(
+    g.Mailing,
+    'Карточка итогов дня: строка числа сессий, запущенных за сутки.',
+    'Сессий',
+    { limit: 16 },
+  ),
+  dailyCardTrades: plain(
+    g.Mailing,
+    'Карточка итогов дня: строка числа закрытых сделок за сутки.',
+    'Сделок',
+    { limit: 16 },
+  ),
+  dailyCardWon: plain(
+    g.Mailing,
+    'Карточка итогов дня: строка сделок в плюс и их доли, %.',
+    'В плюс',
+    { limit: 16 },
+  ),
+  dailyCardResult: plain(
+    g.Mailing,
+    'Карточка итогов дня: строка суммарного результата в $ со знаком.',
+    'Результат',
+    { limit: 16 },
+  ),
 
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(

@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  BOT_TEXT_DEFAULT_SOURCES,
   BotLanguage,
+  CARD_COLOR,
+  dailySummaryCaption,
+  defaultBotTextSource,
   DEMO_TO_REAL_CHAIN,
   demoToRealText,
   FIRST_SESSION_CHAIN,
@@ -10,9 +14,9 @@ import {
   TradeMode,
   decimalStringSchema,
 } from '@binarius/shared';
-import { botKeyboardProblems } from '@binarius/shared/testing';
+import { botKeyboardProblems, botTextSourcesWith } from '@binarius/shared/testing';
 import type { ClientPushMessage } from '../auth/client-push';
-import { clientLabelsOf, clientTextsOf } from '../auth/texts';
+import { clientLabelsOf, clientTextsOf, setBotTextSources } from '../auth/texts';
 import { inlineRows, inlineStyles } from '../admin/testing';
 import type { HelpLinks } from './help-links';
 import { mailingMessage as anyMessage, type MailingContext } from './messages';
@@ -34,17 +38,17 @@ const DEMO: MailingContext = {
   language: BotLanguage.Ru,
 };
 
-// a text kind's message: every kind but the help push, which sends a photo (#879)
+// a text kind's message: every kind but those that send a picture (#879, #881)
 const mailingMessage = (...args: Parameters<typeof anyMessage>): ClientPushMessage => {
   const message = anyMessage(...args);
-  if ('photo' in message) throw new Error(`${args[0]} sends a photo`);
+  if (!('text' in message)) throw new Error(`${args[0]} sends a picture`);
   return message;
 };
 
 type AnyMessage = ReturnType<typeof anyMessage>;
 const buttonsOf = (message: AnyMessage) => inlineRows({ ...message }).flat();
 const stylesOf = (message: AnyMessage) => inlineStyles({ ...message });
-const textOf = (message: AnyMessage) => ('photo' in message ? message.caption : message.text);
+const textOf = (message: AnyMessage) => ('text' in message ? message.text : message.caption);
 
 // #484
 describe('the analysis reminder message', () => {
@@ -293,6 +297,13 @@ describe('the real-mode message after a deposit', () => {
 });
 
 // #880: the chain's payload as the planner writes it, and a deposit_bonus version's params
+// #881: a day with a loss in real
+const DAILY_PAYLOAD = {
+  day: '2024-03-12',
+  demo: { sessions: 3, settled: 4, won: 2, lost: 1, tied: 1, profit: '3.00000000' },
+  real: { sessions: 1, settled: 1, won: 0, lost: 1, tied: 0, profit: '-2.50000000' },
+};
+
 const DEMO_TO_REAL_PAYLOAD = {
   sessions: 3,
   settled: 12,
@@ -441,6 +452,7 @@ describe('the mailings in English (#633)', () => {
     [NotificationKind.DemoToReal1h]: DEMO_TO_REAL_PAYLOAD,
     [NotificationKind.DemoToReal24h]: DEMO_TO_REAL_PAYLOAD,
     [NotificationKind.DemoToReal72h]: { ...DEMO_TO_REAL_PAYLOAD, bonus: DEMO_TO_REAL_BONUS },
+    [NotificationKind.DailySummary]: DAILY_PAYLOAD,
   };
   const contexts = Object.values(TradeMode).flatMap((tradingMode) =>
     [CASHIER_URL, undefined].map((cashierUrl): MailingContext => ({
@@ -719,5 +731,116 @@ describe('the demo-to-real chain messages', () => {
     { ...DEMO_TO_REAL_PAYLOAD, bonus: { ...DEMO_TO_REAL_BONUS, maxTokens: 500 } },
   ])('DM8 throws on payload %j, which the sender settles as not built', (payload) => {
     expect(() => anyMessage(STEP_1H!.kind, payload, DEMO)).toThrow();
+  });
+});
+
+// #881 (docs/mailing.md → The daily summary)
+describe('the daily summary message (#881)', () => {
+  const CYRILLIC = /[А-Яа-яЁё]/u;
+  const cardOf = (payload: Record<string, unknown> = DAILY_PAYLOAD, context = DEMO) => {
+    const message = anyMessage(NotificationKind.DailySummary, payload, context);
+    if (!('card' in message)) throw new Error('the daily summary sends a drawn card');
+    return message;
+  };
+  const textsOfSvg = (svg: string) =>
+    [...svg.matchAll(/<text[^>]*>([^<]*)<\/text>/g)].map((match) => match[1]);
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
+
+  it('DM-DS1 the card with the day and both modes, the caption, and the entry by the user’s mode', () => {
+    const message = cardOf();
+    expect(textsOfSvg(message.card)).toEqual(
+      expect.arrayContaining([
+        'ИТОГИ ДНЯ',
+        '12.03.2024',
+        'ДЕМО',
+        'РЕАЛ',
+        '2 · 50 %',
+        '+$3.00',
+        '-$2.50',
+      ]),
+    );
+    expect(message.caption).toStrictEqual(
+      dailySummaryCaption(
+        { html: RU_TEXTS, plain: RU_LABELS, language: BotLanguage.Ru },
+        {
+          day: '2024-03-12',
+          demo: { ...DAILY_PAYLOAD.demo, profit: decimalStringSchema.parse('3.00000000') },
+          real: { ...DAILY_PAYLOAD.real, profit: decimalStringSchema.parse('-2.50000000') },
+        },
+      ),
+    );
+    expect(message.caption.value.split('\n')).toEqual([
+      '📊 <b>Итоги дня: 12.03.2024</b>',
+      '',
+      '🎮 Демо: 4 сделки — 2 в плюс, 1 в минус, 1 в ноль, результат +$3.00.',
+      '🚀 Реал: 1 сделка — 0 в плюс, 1 в минус, результат -$2.50.',
+      '👇 Торговля — по кнопке ниже.',
+    ]);
+    expect(buttonsOf(message)).toStrictEqual([
+      { text: RU_LABELS.demoButton, callback_data: 'demo' },
+    ]);
+    expect(stylesOf(message)).toEqual([['success']]);
+    expect(
+      buttonsOf(cardOf(DAILY_PAYLOAD, { ...DEMO, tradingMode: TradeMode.Real })),
+    ).toStrictEqual([{ text: RU_LABELS.tradeButton, callback_data: 'demo' }]);
+  });
+
+  it('DM-DS2 a negative result keeps its sign, a zero one is $0.00, a positive one +', () => {
+    const zero = { sessions: 1, settled: 0, won: 0, lost: 0, tied: 0, profit: '0' };
+    const message = cardOf({ ...DAILY_PAYLOAD, demo: zero });
+    expect(message.card).toContain(`fill="${CARD_COLOR.tie}" text-anchor="end">$0.00<`);
+    expect(message.card).toContain(`fill="${CARD_COLOR.loss}" text-anchor="end">-$2.50<`);
+    expect(message.caption.value).toContain(
+      '🎮 Демо: 0 сделок — 0 в плюс, 0 в минус, результат $0.00.',
+    );
+    expect(cardOf().card).toContain(`fill="${CARD_COLOR.win}" text-anchor="end">+$3.00<`);
+  });
+
+  it('DM-DS3 the share of won trades is a whole percent, none without a trade', () => {
+    const all = { sessions: 1, settled: 3, won: 3, lost: 0, tied: 0, profit: '3' };
+    const none = { sessions: 1, settled: 0, won: 0, lost: 0, tied: 0, profit: '0' };
+    const third = { sessions: 1, settled: 3, won: 1, lost: 2, tied: 0, profit: '-1' };
+    const texts = textsOfSvg(cardOf({ ...DAILY_PAYLOAD, demo: all, real: none }).card);
+    expect(texts).toContain('3 · 100 %');
+    expect(texts.filter((text) => text?.includes('%'))).toEqual(['3 · 100 %']);
+    expect(textsOfSvg(cardOf({ ...DAILY_PAYLOAD, demo: third }).card)).toContain('1 · 33 %');
+  });
+
+  it.each([
+    {},
+    { ...DAILY_PAYLOAD, real: undefined },
+    { ...DAILY_PAYLOAD, day: '12.03.2024' },
+    { ...DAILY_PAYLOAD, demo: { ...DAILY_PAYLOAD.demo, profit: 3 } },
+    { ...DAILY_PAYLOAD, demo: { ...DAILY_PAYLOAD.demo, sessions: -1 } },
+    { ...DAILY_PAYLOAD, real: { ...DAILY_PAYLOAD.real, won: 1.5 } },
+  ])('DM-DS4 throws on payload %j, which the sender settles as not built', (payload) => {
+    expect(() => anyMessage(NotificationKind.DailySummary, payload, DEMO)).toThrow();
+  });
+
+  it('DM-DS5 in English the card has no Russian word, and neither language promises a result', () => {
+    const en = cardOf(DAILY_PAYLOAD, { ...DEMO, language: BotLanguage.En });
+    for (const text of textsOfSvg(en.card)) expect(text).not.toMatch(CYRILLIC);
+    expect(en.caption.value).not.toMatch(CYRILLIC);
+    const ru = cardOf();
+    const russian = [ru.caption.value, ...textsOfSvg(ru.card)].join('\n').toLowerCase();
+    for (const word of ['вероятност', 'точност', 'обуч', 'учится', 'модел', 'гарант', 'прибыл']) {
+      expect(russian).not.toContain(word);
+    }
+    const english = [en.caption.value, ...textsOfSvg(en.card)].join('\n').toLowerCase();
+    for (const word of ['guarantee', 'profit', 'probability', 'accuracy']) {
+      expect(english).not.toContain(word);
+    }
+  });
+
+  it('DM-DS6 an override of a card label is read at the build and escaped into the SVG', () => {
+    setBotTextSources(
+      botTextSourcesWith(BotLanguage.Ru, {
+        sourceOf: (key) =>
+          key === 'dailyCardTitle' ? 'A<B & "C"' : defaultBotTextSource.sourceOf(key),
+      }),
+    );
+    const { card } = cardOf();
+    expect(card).toContain('>A&#60;B &#38; &#34;C&#34;</text>');
+    expect(card).not.toContain('A<B');
   });
 });

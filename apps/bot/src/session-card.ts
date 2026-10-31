@@ -1,6 +1,10 @@
 import { Resvg } from '@resvg/resvg-js';
 import {
+  CARD_COLOR,
+  fitSize,
   formatSignedUsd,
+  round,
+  svgText,
   type DecimalString,
   type PairLabel,
   type SessionSummary,
@@ -11,7 +15,7 @@ import {
   sessionCardLabels,
   sessionCardTradeLabel,
 } from './texts';
-import { botFile } from './package-root';
+import { sharedFile } from './package-root';
 
 // The finished session's card (#318, docs/bot-session.md → The summary card): one PNG of the
 // session's trades on a line through their entry and exit prices. The amounts are the backend's
@@ -92,46 +96,8 @@ const CHART_TOP = 250;
 const CHART_BOTTOM = 540;
 const MARKER_RADIUS = 8;
 
-export const COLOR = {
-  background: '#0E1117',
-  grid: '#262D3A',
-  text: '#F2F4F8',
-  muted: '#8B95A7',
-  line: '#C9D1DE',
-  entry: '#4C8DFF',
-  win: '#22C55E',
-  loss: '#EF4444',
-  tie: '#9CA3AF',
-} as const;
-
-// Catalog overrides (#299) can carry `<`, `&` or quotes: every text is escaped into the SVG.
-export const escapeXml = (text: string): string =>
-  text.replace(/[<>&"']/g, (char) => `&#${String(char.charCodeAt(0))};`);
-
-// The renderer measures nothing for us: a text shrinks to fit its slot by an upper estimate of
-// Inter's advance (bold capitals ≈ 0.68 em), so a long override or symbol never overflows.
-export const fitSize = (text: string, width: number, max: number, bold: boolean): number =>
-  Math.max(8, Math.min(max, Math.floor(width / (Math.max(text.length, 1) * (bold ? 0.68 : 0.62)))));
-
-interface TextOptions {
-  x: number;
-  y: number;
-  width: number;
-  size: number;
-  bold?: boolean;
-  fill: string;
-  anchor?: 'start' | 'middle' | 'end';
-}
-
-const text = (value: string, { x, y, width, size, bold = false, fill, anchor }: TextOptions) =>
-  `<text x="${String(x)}" y="${String(y)}" font-size="${String(fitSize(value, width, size, bold))}"${
-    bold ? ' font-weight="700"' : ''
-  } fill="${fill}"${anchor === undefined ? '' : ` text-anchor="${anchor}"`}>${escapeXml(value)}</text>`;
-
-export const round = (value: number): string => String(Math.round(value * 100) / 100);
-
 const circle = (x: number, y: number, fill: string) =>
-  `<circle cx="${round(x)}" cy="${round(y)}" r="${String(MARKER_RADIUS)}" fill="${fill}" stroke="${COLOR.background}" stroke-width="2"/>`;
+  `<circle cx="${round(x)}" cy="${round(y)}" r="${String(MARKER_RADIUS)}" fill="${fill}" stroke="${CARD_COLOR.background}" stroke-width="2"/>`;
 
 export function sessionCardSvg(model: SessionCardModel): string {
   const count = model.trades.length;
@@ -147,24 +113,31 @@ export function sessionCardSvg(model: SessionCardModel): string {
       : CHART_BOTTOM - ((price - low) / span) * (CHART_BOTTOM - CHART_TOP);
 
   const parts: string[] = [
-    `<rect width="${String(SESSION_CARD_WIDTH)}" height="${String(SESSION_CARD_HEIGHT)}" fill="${COLOR.background}"/>`,
-    text(model.asset, { x: PAD, y: 80, width: 700, size: 40, bold: true, fill: COLOR.text }),
-    text(model.title, { x: PAD, y: 118, width: 700, size: 22, fill: COLOR.muted }),
-    text(model.resultLabel, {
+    `<rect width="${String(SESSION_CARD_WIDTH)}" height="${String(SESSION_CARD_HEIGHT)}" fill="${CARD_COLOR.background}"/>`,
+    svgText(model.asset, {
+      x: PAD,
+      y: 80,
+      width: 700,
+      size: 40,
+      bold: true,
+      fill: CARD_COLOR.text,
+    }),
+    svgText(model.title, { x: PAD, y: 118, width: 700, size: 22, fill: CARD_COLOR.muted }),
+    svgText(model.resultLabel, {
       x: SESSION_CARD_WIDTH - PAD,
       y: 70,
       width: 340,
       size: 22,
-      fill: COLOR.muted,
+      fill: CARD_COLOR.muted,
       anchor: 'end',
     }),
-    text(model.result, {
+    svgText(model.result, {
       x: SESSION_CARD_WIDTH - PAD,
       y: 118,
       width: 340,
       size: 44,
       bold: true,
-      fill: COLOR[model.resultTone],
+      fill: CARD_COLOR[model.resultTone],
       anchor: 'end',
     }),
   ];
@@ -176,65 +149,76 @@ export function sessionCardSvg(model: SessionCardModel): string {
     const middle = left + column / 2;
     if (index > 0) {
       parts.push(
-        `<line x1="${round(left)}" y1="${String(COLUMNS_TOP)}" x2="${round(left)}" y2="${String(COLUMNS_BOTTOM)}" stroke="${COLOR.grid}" stroke-width="2" stroke-dasharray="6 6"/>`,
+        `<line x1="${round(left)}" y1="${String(COLUMNS_TOP)}" x2="${round(left)}" y2="${String(COLUMNS_BOTTOM)}" stroke="${CARD_COLOR.grid}" stroke-width="2" stroke-dasharray="6 6"/>`,
       );
     }
     parts.push(
-      text(trade.label, {
+      svgText(trade.label, {
         x: middle,
         y: 184,
         width: column - 12,
         size: 20,
-        fill: COLOR.muted,
+        fill: CARD_COLOR.muted,
         anchor: 'middle',
       }),
-      text(trade.profit, {
+      svgText(trade.profit, {
         x: middle,
         y: 216,
         width: column - 12,
         size: 24,
         bold: true,
-        fill: COLOR[trade.tone],
+        fill: CARD_COLOR[trade.tone],
         anchor: 'middle',
       }),
     );
     const entry = { x: left + column * 0.25, y: yOf(trade.openPrice) };
     const exit = { x: left + column * 0.75, y: yOf(trade.closePrice) };
     points.push(`${round(entry.x)},${round(entry.y)}`, `${round(exit.x)},${round(exit.y)}`);
-    markers.push(circle(entry.x, entry.y, COLOR.entry), circle(exit.x, exit.y, COLOR[trade.tone]));
+    markers.push(
+      circle(entry.x, entry.y, CARD_COLOR.entry),
+      circle(exit.x, exit.y, CARD_COLOR[trade.tone]),
+    );
   });
   parts.push(
-    `<polyline points="${points.join(' ')}" fill="none" stroke="${COLOR.line}" stroke-width="3" stroke-linejoin="round"/>`,
+    `<polyline points="${points.join(' ')}" fill="none" stroke="${CARD_COLOR.line}" stroke-width="3" stroke-linejoin="round"/>`,
     ...markers,
   );
 
   let x = PAD;
   for (const [label, fill] of [
-    [model.legend.entry, COLOR.entry],
-    [model.legend.win, COLOR.win],
-    [model.legend.loss, COLOR.loss],
-    [model.legend.tie, COLOR.tie],
+    [model.legend.entry, CARD_COLOR.entry],
+    [model.legend.win, CARD_COLOR.win],
+    [model.legend.loss, CARD_COLOR.loss],
+    [model.legend.tie, CARD_COLOR.tie],
   ] as const) {
     const size = fitSize(label, 200, 20, false);
     parts.push(
       circle(x + MARKER_RADIUS, 600, fill),
-      text(label, { x: x + 2 * MARKER_RADIUS + 10, y: 607, width: 200, size, fill: COLOR.muted }),
+      svgText(label, {
+        x: x + 2 * MARKER_RADIUS + 10,
+        y: 607,
+        width: 200,
+        size,
+        fill: CARD_COLOR.muted,
+      }),
     );
     x += 2 * MARKER_RADIUS + 10 + Math.ceil(label.length * size * 0.62) + 32;
   }
-  parts.push(text(model.footer, { x: PAD, y: 648, width: INNER, size: 22, fill: COLOR.text }));
+  parts.push(
+    svgText(model.footer, { x: PAD, y: 648, width: INNER, size: 22, fill: CARD_COLOR.text }),
+  );
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${String(SESSION_CARD_WIDTH)}" height="${String(SESSION_CARD_HEIGHT)}" viewBox="0 0 ${String(SESSION_CARD_WIDTH)} ${String(SESSION_CARD_HEIGHT)}" font-family="Inter">${parts.join('')}</svg>`;
 }
 
 // The alpine image has no fonts, and resvg drops text it has no font for without a word: the
-// card's own files are the only fonts it may use (docs/bot-session.md → The summary card). Found
-// from the package's root, which holds under tsx and in the bundle, and checked at import
-// (package-root.ts).
+// card's own files, in packages/shared/fonts (#881: the backend's daily card reads them too), are the
+// only fonts it may use (docs/bot-session.md → The summary card). Found from the package's root,
+// which holds under tsx and in the bundle, and checked at import (package-root.ts).
 export const SESSION_CARD_FONT_FILES: readonly string[] = [
   'Inter-Regular.ttf',
   'Inter-Bold.ttf',
-].map((file) => botFile('fonts', file));
+].map((file) => sharedFile('fonts', file));
 
 export const renderSessionCard = (
   svg: string,

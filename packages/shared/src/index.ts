@@ -7,6 +7,8 @@ export * from './oauth';
 export * from './bot-language';
 export * from './users';
 export * from './mailing';
+export * from './svg-card';
+export * from './daily-summary-text';
 export * from './account';
 export * from './referral';
 export * from './broker-balance';

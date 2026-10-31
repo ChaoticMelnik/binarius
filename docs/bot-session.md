@@ -100,7 +100,9 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   no chat.
 - `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
   (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
-  `apps/bot/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them).
+  `packages/shared/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them; there since #881, which draws
+  the backend's daily summary card with them). The palette and the text helpers are
+  `packages/shared/src/svg-card.ts`.
 - `apps/bot/src/session-promo.ts` (#538) — `promoDirection`, `sessionPromoModel`,
   `sessionPromoSvg`: the promo card of «📤 Поделиться», rendered by the same `renderSessionCard`;
   the bot's logo from `assets.ts` (`PROMO_LOGO_PATH`, #594).
@@ -1762,9 +1764,11 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
   card goes as a photo and «⏳» is deleted ([bot-demo.md → The analysis](bot-demo.md#the-analysis)).
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
-  30 ms per card on the bot's event loop. It loads only `apps/bot/fonts/Inter-*.ttf`
+  30 ms per card on the bot's event loop. It loads only `packages/shared/fonts/Inter-*.ttf`
   (`loadSystemFonts: false`): the alpine image has no fonts, and without a font resvg drops the
-  text without an error. `pnpm check` renders on the host's build and holds that the lockfile has
+  text without an error. The backend's daily summary card (#881, [mailing.md](mailing.md#the-daily-summary-881))
+  is drawn with the same fonts by the same version, through `renderAsync` (libuv's pool), so the
+  backend's event loop is free during a render. `pnpm check` renders on the host's build and holds that the lockfile has
   the `linux-x64-musl` and `linux-arm64-musl` builds (`lockfile-musl.test.ts`); that the musl build
   loads in the image is the owner's check:
 

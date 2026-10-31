@@ -434,6 +434,7 @@ no repeat.
 | the real-mode message after a deposit `realModeByDeposit` (#686, the backend's mailing, [mailing.md](mailing.md#the-real-mode-notification-686)) | ⚙️ Режим торговли (`mode`, the mode screen) \| 🏠 В меню, in the user's language |
 | the help push (#879, the backend's mailing: the banner with its caption, [mailing.md](mailing.md#the-help-push-879)) | 📣 Канал \| ⭐ Отзывы // 💬 Написать менеджеру (URLs from the env; a link not set has no button) |
 | the demo-to-real chain's three steps (#880, the backend's mailing: the 1 h one the banner with its caption, [mailing.md](mailing.md#the-demo-to-real-chain-880)) | 💳 Пополнить (the cashier, `web_app`) // 💬 Написать менеджеру (when `HELP_MANAGER_URL` is set) |
+| the daily summary card (#881, the backend's mailing: the drawn card with its caption, [mailing.md](mailing.md#the-daily-summary-881)) | 🎮 Демо-торговля (🚀 Торговать in real mode) |
 | the staff bot (`apps/backend/src/admin/telegram.ts`) | `/start`: Войти в админку; the login prompt: Подтвердить вход // Это не я (red) |
 
 «📊 Анализ» at the end of a trade opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never

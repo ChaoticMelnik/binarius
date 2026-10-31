@@ -432,7 +432,7 @@ jobs:
           docker image ls "$image"
           docker run --rm --entrypoint sh "$image" -c '
             bad=""
-            for f in node_modules/.bin/tsx packages/db/drizzle/meta/_journal.json apps/bot/fonts \
+            for f in node_modules/.bin/tsx packages/db/drizzle/meta/_journal.json packages/shared/fonts \
                      apps/bot/src/assets packages/shared/assets apps/web/src/admin/static \
                      apps/backend/dist/index.js apps/bot/dist/index.js \
                      apps/trading-worker/dist/index.js apps/web/dist/index.js; do

@@ -20,6 +20,7 @@ import {
   MAILING_SEND_TICK_MS,
 } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
+import type { CardMedia } from './card-media';
 import { enabledKinds, type HelpLinks } from './help-links';
 import { mailingMessage, type MailingMessage, type MailingPhoto } from './messages';
 import type { PhotoMedia } from './photo-media';
@@ -63,6 +64,8 @@ export interface MailingEngineDeps {
   helpLinks: HelpLinks;
   // each mailing picture's file and file_id (#879, photo-media.ts)
   photos: Record<MailingPhoto, PhotoMedia>;
+  // the pictures drawn for a message, rendered and uploaded once each (#881, card-media.ts)
+  cards: CardMedia;
   // the tests' clock and sleep; the engine's own pacing and pause read only these. The clock is
   // monotonic (performance.now by default): a wall-clock step neither stretches nor cuts a gap or
   // Telegram's pause
@@ -195,14 +198,19 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
     }
   }
 
-  // Sends the message by its shape: a picture's by its file_id once one is known, else the file;
-  // a refused file forgets its id, so the retry uploads it again (docs/mailing.md → The sender).
-  async function send(job: ClaimedMailingJob, message: MailingMessage): Promise<void> {
-    if (!('photo' in message)) {
+  // Sends the message by its shape: a text, or a picture's caption with its media — by the file_id
+  // once one is known, else the file; a refused file forgets its id, so the retry uploads it again
+  // (docs/mailing.md → The sender).
+  async function send(
+    job: ClaimedMailingJob,
+    message: MailingMessage,
+    media: PhotoMedia | undefined,
+  ): Promise<void> {
+    if ('text' in message) {
       await push.sendMailing(job.telegramUserId, message);
       return;
     }
-    const media = deps.photos[message.photo];
+    if (media === undefined) throw new Error('a picture message without its media');
     let sent;
     try {
       sent = await push.sendMailingPhoto(job.telegramUserId, {
@@ -220,6 +228,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   // Resolves to what became of the job; undefined when Telegram's answer is unknown.
   async function deliver(job: ClaimedMailingJob): Promise<MailingOutcome | undefined> {
     let message: MailingMessage;
+    let media: PhotoMedia | undefined;
     try {
       message = mailingMessage(job.kind, job.payload, {
         cashierUrl: deps.cashierUrl,
@@ -227,6 +236,14 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
         tradingMode: job.tradingMode,
         language: job.language,
       });
+      // a drawn picture's render fails here, before anything reaches Telegram: retried as a
+      // message that was not built, never an unknown outcome
+      media =
+        'card' in message
+          ? await deps.cards.of(message.card)
+          : 'photo' in message
+            ? deps.photos[message.photo]
+            : undefined;
     } catch (error) {
       logger.error(
         { jobId: job.id, kind: job.kind, ...errorLogFields(error) },
@@ -237,7 +254,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       return outcome;
     }
     try {
-      await send(job, message);
+      await send(job, message, media);
     } catch (error) {
       // identity only: grammY's HttpError wraps a message with the token in its URL
       logger.warn(
@@ -245,7 +262,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
           jobId: job.id,
           kind: job.kind,
           ...errorLogFields(error),
-          ...telegramErrorFields(error, 'photo' in message ? 'sendPhoto' : 'sendMessage'),
+          ...telegramErrorFields(error, 'text' in message ? 'sendMessage' : 'sendPhoto'),
         },
         'mailing not delivered',
       );
