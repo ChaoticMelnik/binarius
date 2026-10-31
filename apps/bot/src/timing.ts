@@ -21,13 +21,18 @@ import {
 // It has to stay below the client timeout, or every long poll would be aborted by our own
 // client and retried.
 export const POLLING_TIMEOUT_S = 5;
-// Updates in work at once in one bot process (#869, polling.ts): fetched and not yet handled. Each
-// getUpdates asks for the free capacity only (its `limit`), and none is sent while the capacity is
-// full, so every fetched update starts at once — a user's updates one after another in their order,
-// different users' side by side. The offset is confirmed by the next getUpdates, and at the stop by
-// one getUpdates({ offset, limit: 1 }); start() settles once every fetched update is handled, so
-// the drain waits for at most this many handlers, in parallel. The Bot API takes a limit of 1-100.
+// Handlers running at once in one bot process (#869, polling.ts): one per user, the head of the
+// user's chain — a user's updates run one after another in their order, different users' side by
+// side. Each getUpdates asks for no more than the smaller remainder of this and POLLING_WAITING_MAX
+// (its `limit`), so an update of a user with no handler running starts on arrival unless the process
+// already holds POLLING_WAITING_MAX waiting updates. The offset is confirmed by the next getUpdates,
+// and at the stop by one getUpdates({ offset, limit: 1 }); start() settles once every fetched update
+// is handled, so the drain runs at most this many handlers in parallel and at most
+// POLLING_WAITING_MAX updates behind them in their users' chains. The Bot API takes a limit of 1-100.
 export const POLLING_CONCURRENCY = 8;
+// Fetched updates waiting behind their user's running handler, in the whole process (#869): while
+// this many wait, no getUpdates goes, with one warn line `polling paused: …`.
+export const POLLING_WAITING_MAX = 16;
 export const TELEGRAM_GET_UPDATES_LIMIT_MAX = 100;
 // Each Bot API call (grammY's ApiClientOptions.timeoutSeconds, default 500), including the
 // confirming getUpdates that the polling loop's stop() issues.
@@ -376,8 +381,12 @@ export const SIGNAL_WAIT_CHAT_EDIT_GAP_MS = 1_000;
 // The resolutions of a tick (readTradingAccess, evaluateSignal) run side by side, at most this many:
 // with POLLING_CONCURRENCY handlers it bounds the bot's access reads in flight (C + R).
 export const SIGNAL_WAIT_RESOLVE_CONCURRENCY = 10;
-// The bound for a signal shown to many waiting users: the signal edits of FANOUT_ENTRIES entries are
-// sent at most FANOUT_MS after the tick's reads, whatever Telegram and the backend take to answer.
+// The bound for a signal shown to many waiting users: with the bucket full, the signal edits of
+// FANOUT_ENTRIES entries that ask for their slots together are sent at most FANOUT_MS after the
+// first asks — the twentieth at about +3 s, whatever Telegram takes to answer. An edit asks once its
+// entry's reads end (the access read; for an analysis the signal and the access read), at most
+// RESOLVE_CONCURRENCY reads at once, so with a slow backend the second ten ask one backend round
+// later.
 export const SIGNAL_WAIT_FANOUT_ENTRIES = 20;
 export const SIGNAL_WAIT_FANOUT_MS = 4_000;
 // a transport failure or another refusal of an entry's edit, retried on the next ticks
@@ -480,6 +489,7 @@ export const sessionFirstNoticeBoundsHold = ({
 const TIMING_CHAIN_HOLDS =
   1 <= POLLING_CONCURRENCY &&
   POLLING_CONCURRENCY <= TELEGRAM_GET_UPDATES_LIMIT_MAX &&
+  1 <= POLLING_WAITING_MAX &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&

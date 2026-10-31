@@ -216,6 +216,11 @@ type Entry =
 interface Common {
   // an edit of the entry is launched and not finished: the next ticks leave the entry alone
   busy: boolean;
+  // the launched edit while it runs, and whether it got its slot in the pace and has sent or is
+  // sending: the stop's drain draws such an entry only after it, unless it drew the final screen
+  edit: Promise<void> | undefined;
+  slotted: boolean;
+  final: boolean;
   rendered: string;
   // when the screen was last drawn or its caption last tried
   captionAt: number;
@@ -352,6 +357,9 @@ export function createSignalWaiter({
   function common({ drawn, media, scanned }: WaitTarget): Common {
     return {
       busy: false,
+      edit: undefined,
+      slotted: false,
+      final: false,
       rendered: renderKey(drawn, media),
       captionAt: scanned ? now() : Number.NEGATIVE_INFINITY,
       editFailures: 0,
@@ -478,9 +486,12 @@ export function createSignalWaiter({
     })().finally(() => {
       release();
       entry.busy = false;
+      entry.edit = undefined;
+      entry.slotted = false;
       gates.delete(entry);
       launched.delete(task);
     });
+    entry.edit = task;
     launched.add(task);
     return readsDone;
   }
@@ -732,10 +743,12 @@ export function createSignalWaiter({
         { reply_markup: card.keyboard },
       );
       photos.remember(card.action, result);
+      entry.final = true;
       end(entry);
       return 'drawn';
     } catch (error) {
       if (error instanceof GrammyError && editRefusal(error) === 'shown') {
+        entry.final = true;
         end(entry);
         return 'drawn';
       }
@@ -761,6 +774,7 @@ export function createSignalWaiter({
     media: WaitMedia = endMedia(entry),
   ): Promise<EditOutcome> {
     const outcome = await edit(entry, screen, media);
+    if (outcome === 'drawn') entry.final = true;
     if (outcome === 'drawn' || outcome === 'ended') end(entry);
     return outcome;
   }
@@ -775,6 +789,7 @@ export function createSignalWaiter({
       live(entry),
     );
     if (slot !== 'slot' || !live(entry)) return 'ended';
+    entry.slotted = true;
     return undefined;
   }
 
@@ -886,7 +901,9 @@ export function createSignalWaiter({
 
   // The stop's edits: one launched every editGapMs, none after the window or inside a 429's pause
   // taken by the stop itself or by a freeze in flight; a 429 of the last tick is waited out inside
-  // the window. The launched ones are awaited.
+  // the window. The launched ones are awaited. An entry whose edit got its slot before the stop is
+  // decided once that edit ends: skipped if it drew the final screen, else drawn as the others,
+  // the window and the pause checked after the wait.
   async function drainEdits(remaining: Entry[]): Promise<void> {
     const deadline = now() + shutdownBudgetMs;
     if (pacer.pausedUntil() > now()) {
@@ -898,6 +915,11 @@ export function createSignalWaiter({
       if (now() >= deadline || now() < pacer.pausedUntil()) break;
       sent.push(
         runWithLanguage(entry.language, async () => {
+          if (entry.slotted) {
+            await entry.edit;
+            if (now() >= deadline || now() < pacer.pausedUntil()) return;
+          }
+          if (entry.final) return;
           try {
             const screen = attached().expired();
             const media = endMedia(entry);

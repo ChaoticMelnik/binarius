@@ -10,7 +10,12 @@ import { runBot } from './lifecycle';
 import { createPollingLoop, type PollingLoop } from './polling';
 import { runWithLanguage } from './language';
 import { PROFILE, setBotTextSources } from './texts';
-import { POLLING_CONCURRENCY, POLLING_RETRY_MS, STARTUP_CALLS } from './timing';
+import {
+  POLLING_CONCURRENCY,
+  POLLING_RETRY_MS,
+  POLLING_WAITING_MAX,
+  STARTUP_CALLS,
+} from './timing';
 import {
   BOT_INFO,
   USER,
@@ -1052,6 +1057,7 @@ function scene(options: SceneOptions = {}) {
     bot: createPollingLoop({
       bot,
       concurrency: POLLING_CONCURRENCY,
+      waitingMax: POLLING_WAITING_MAX,
       retryMs: POLLING_RETRY_MS,
       logger: log,
     }),

@@ -803,17 +803,21 @@ own default is 500 s, so it is set explicitly); one backend call is capped at 5 
 **The polling loop** (#869, `apps/bot/src/polling.ts`) is the bot's own, over grammY's `Bot`
 (`init`, `api.deleteWebhook`, `api.getUpdates`, `handleUpdate`, the `bot.catch` handler) rather than
 `bot.start()`, which runs a batch one update after another, so one user's slow handler held every
-other user. At most `POLLING_CONCURRENCY` = **8** updates are in work at once; each `getUpdates`
-asks for the free capacity only (`limit` = 8 − in work, the Bot API takes 1-100 — a conjunct of
-the chain) and none is sent while the capacity is full, so every fetched update starts at once. A
-user's updates run in their order — chained by `updateKey`: the update's `from.id`, else its
+other user. At most `POLLING_CONCURRENCY` = **8** handlers run at once, one per user — the head of
+the user's chain; at most `POLLING_WAITING_MAX` = **16** fetched updates wait behind their user's
+running handler. A `getUpdates` goes only while both have room and asks for no more than the
+smaller remainder (`limit`, the Bot API takes 1-100 — a conjunct of the chain), so an update of a
+user with no handler running starts on arrival unless the process already holds 16 waiting
+updates; then polling pauses until one of them starts, with one `warn` line
+`polling paused: updates waiting behind their users at the bound`. A user's updates run in their order — chained by `updateKey`: the update's `from.id`, else its
 `chat.id`; an update with neither runs on its own — and different users' side by side. The offset
 moves past every fetched update, and the next `getUpdates` confirms them. `allowed_updates` goes
 only in the first poll: Telegram keeps the last value. A handler's throw goes to the `bot.catch`
 handler; a throw out of that is logged (`bot.catch failed`) and the loop goes on. A `getUpdates` or
-`deleteWebhook` answered 401 (the token revoked) or 409 (another poller) rejects `start()`; a 429
+`deleteWebhook` answered 401 (the token revoked) or 409 (another poller) rejects `start()` once the
+handlers in work are done; a 429
 sleeps its `retry_after`; anything else sleeps `POLLING_RETRY_MS` = 3 s and polls again, and the
-stop cuts either sleep short. `polling.test.ts` P1–P11 hold each of these on a fake `Bot`;
+stop cuts either sleep short. `polling.test.ts` P1–P14 hold each of these on a fake `Bot`;
 `lifecycle.test.ts` runs the loop over the real `Bot` with only the transport replaced, L1 (a slow
 `/start` of user A does not hold user B's `/help`) and L2 (the stop below with two users).
 
@@ -864,9 +868,9 @@ the offset with `getUpdates({ offset, limit: 1 })` past every fetched update, at
 handlers run; `start()` settles only once every fetched update is handled — the ones still
 waiting behind their user's earlier update included. So inside the budget every fetched update is
 handled exactly once and confirmed: none lost, none redelivered. The handlers in work run in
-parallel, so the drain is bounded by the longest one, `HANDLER_BUDGET_MS` + `LANGUAGE_READ_TIMEOUT_MS`,
-as before; one user's updates run in a chain, so k of them in work at the stop take k handlers'
-time — k ≥ 2 only when a user sent updates faster than the bot answered and the stop came in that
+parallel (at most 8), so the drain is bounded by the longest one, `HANDLER_BUDGET_MS` +
+`LANGUAGE_READ_TIMEOUT_MS`, as before; the updates waiting behind them (at most 16 in all) run in
+their users' chains, so k updates of one user take k handlers' time — k ≥ 2 only when a user sent updates faster than the bot answered and the stop came in that
 window (accepted risk). A crash (SIGKILL, OOM) loses the updates in work: the next `getUpdates`
 confirmed them when it fetched more.
 
@@ -898,7 +902,8 @@ inside the 50 s budget, and `start()` then returns without a first `getUpdates`.
 `bot started` is still written, after `shutting down`, because `onStart` finishes before the loop
 sees the stop.
 
-An overrun exits 1, losing the updates in work (up to `POLLING_CONCURRENCY`) rather than the
+An overrun exits 1, losing the updates in work (up to `POLLING_CONCURRENCY` +
+`POLLING_WAITING_MAX`) rather than the
 whole container's shutdown. The
 closing line distinguishes the two ways a drain ends badly: a step that rejected logs itself as
 it fails (`shutdown: bot.stop() failed`, `shutdown: polling loop failed`,

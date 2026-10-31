@@ -1440,4 +1440,51 @@ describe('the fan-out and the pace (#869)', () => {
       'expired',
     ]);
   });
+
+  it('W48 the drain draws an entry whose edit got its slot before the stop only after that edit, and never over a drawn card', async () => {
+    const { waiter, list, pair, target, at, setListed, editMessageText, editMessageMedia } = setup({
+      editBurst: 5,
+    });
+    let answerCard = (): void => {};
+    let answerList = (): void => {};
+    editMessageMedia.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answerCard = () => resolve(true);
+        }),
+    );
+    editMessageText.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answerList = () => resolve(true);
+        }),
+    );
+    const textsTo = (chat: number) =>
+      editMessageText.mock.calls
+        .filter((call) => call[0] === chat)
+        .map((call) => (call[2] as string).replace(/\n⠀.*$/s, ''));
+    waiter.waitPair(pair({ ...target(1), origin: 'analysis' }));
+    waiter.waitList(list(target(2)));
+    setListed([[PAIR_EURUSD.id, TradeAction.Up]]);
+    await at(FIRST_TICK + 50);
+    expect(editMessageMedia.mock.calls.map((call) => call[0])).toEqual([1]);
+    expect(textsTo(2)).toEqual([`list:${String(PAIR_EURUSD.id)}`]);
+
+    let done = false;
+    void waiter.stop().then(() => {
+      done = true;
+    });
+    await at(FIRST_TICK + 1_000);
+    expect(textsTo(1)).toEqual([]);
+    expect(textsTo(2)).toEqual([`list:${String(PAIR_EURUSD.id)}`]);
+
+    answerCard();
+    await at(FIRST_TICK + 2_000);
+    answerList();
+    await at(FIRST_TICK + 3_000);
+    expect(textsTo(1)).toEqual([]);
+    expect(editMessageMedia).toHaveBeenCalledTimes(1);
+    expect(textsTo(2)).toEqual([`list:${String(PAIR_EURUSD.id)}`, 'expired']);
+    expect(done).toBe(true);
+  });
 });

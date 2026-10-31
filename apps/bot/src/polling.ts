@@ -6,11 +6,15 @@ import type { Logger } from './logging';
 // The client bot's long polling (#869, docs/bot-start.md → Timing and shutdown): its own loop over
 // grammY's Bot rather than bot.start(), which runs a batch one update after another, or
 // @grammyjs/runner, whose stop() neither waits for the handlers in flight nor confirms only the
-// updates it handled. A user's updates run in their order, different users' side by side, at most
-// `concurrency` at once; a getUpdates asks only for what can start at once, so every fetched update
-// starts on arrival and the next getUpdates confirms it. stop() aborts the long poll and confirms
-// the offset with getUpdates({ offset, limit: 1 }) as grammY's does; start() settles once every
-// fetched update is handled — none lost, none handled twice inside the drain's budget.
+// updates it handled. A user's updates run in their order, different users' side by side: at most
+// `concurrency` handlers run, one per user (the head of the user's chain), and at most `waitingMax`
+// fetched updates wait behind their user's running handler. A getUpdates goes only while both have
+// room and asks for no more than the smaller remainder, so an update of a user with no handler
+// running starts on arrival unless the process already holds `waitingMax` waiting updates; the next
+// getUpdates confirms the batch. stop() aborts the long poll and confirms the offset with
+// getUpdates({ offset, limit: 1 }) as grammY's does; start() resolves, or rejects on a 401 or a 409,
+// only once every fetched update is handled — none lost, none handled twice inside the drain's
+// budget.
 
 export type PollingBot = Pick<Bot, 'init' | 'handleUpdate' | 'errorHandler' | 'api'>;
 
@@ -36,6 +40,7 @@ export interface PollingLoop {
 export interface PollingLoopOptions {
   bot: PollingBot;
   concurrency: number;
+  waitingMax: number;
   retryMs: number;
   logger: Logger;
 }
@@ -56,6 +61,7 @@ export function updateKey(update: Update): string | undefined {
 export function createPollingLoop({
   bot,
   concurrency,
+  waitingMax,
   retryMs,
   logger,
 }: PollingLoopOptions): PollingLoop {
@@ -64,6 +70,10 @@ export function createPollingLoop({
   let offset = 0;
   const inflight = new Set<Promise<void>>();
   const chains = new Map<string, Promise<void>>();
+  // A head is an update whose handler runs or starts in the next microtask: one per key with a
+  // chain plus every keyless update in work. A head's finally runs while its key still maps to the
+  // tail, so the count never dips between a head ending and the next update of its key starting.
+  let unkeyed = 0;
   let wakeUp: (() => void) | undefined;
 
   const wake = (): void => {
@@ -95,7 +105,7 @@ export function createPollingLoop({
     });
 
   // A call of the loop retried until it answers: 401 (the token revoked) and 409 (another poller)
-  // end the loop, a 429 waits its retry_after, anything else retryMs. undefined once stopped.
+  // end the loop once the handlers in work are done, a 429 waits its retry_after, anything else retryMs. undefined once stopped.
   async function retrying<T>(call: (signal: AbortSignal) => Promise<T>): Promise<T | undefined> {
     const { signal } = controller;
     while (running) {
@@ -145,11 +155,13 @@ export function createPollingLoop({
       .then(() => handle(update))
       .finally(() => {
         inflight.delete(task);
-        if (key !== undefined && chains.get(key) === task) chains.delete(key);
+        if (key === undefined) unkeyed -= 1;
+        else if (chains.get(key) === task) chains.delete(key);
         wake();
       });
     inflight.add(task);
-    if (key !== undefined) chains.set(key, task);
+    if (key === undefined) unkeyed += 1;
+    else chains.set(key, task);
   }
 
   return {
@@ -170,18 +182,30 @@ export function createPollingLoop({
       }
       // Telegram keeps the last allowed_updates, so only the first poll sends them
       let allowed: PollingStartOptions['allowed_updates'] | undefined = allowed_updates;
+      let pausedLogged = false;
+      let failure: { error: unknown } | undefined;
       try {
         while (running) {
-          if (inflight.size >= concurrency) {
+          const heads = chains.size + unkeyed;
+          const waiting = inflight.size - heads;
+          const free = Math.min(concurrency - heads, waitingMax - waiting);
+          if (free <= 0) {
+            if (waiting >= waitingMax && !pausedLogged) {
+              pausedLogged = true;
+              logger.warn(
+                { heads, waiting },
+                'polling paused: updates waiting behind their users at the bound',
+              );
+            }
             await freed();
             continue;
           }
-          const limit = concurrency - inflight.size;
+          pausedLogged = false;
           const updates = await retrying((signal) =>
             bot.api.getUpdates(
               {
                 offset,
-                limit,
+                limit: free,
                 timeout,
                 ...(allowed === undefined ? {} : { allowed_updates: allowed }),
               },
@@ -195,10 +219,13 @@ export function createPollingLoop({
             dispatch(update);
           }
         }
+      } catch (error) {
+        failure = { error };
       } finally {
         running = false;
       }
       await Promise.allSettled([...inflight]);
+      if (failure !== undefined) throw failure.error;
     },
     async stop() {
       if (!running) return;
