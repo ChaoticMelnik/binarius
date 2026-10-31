@@ -97,7 +97,11 @@ is the table in that section); «В начало»/«Далее» look like butt
 «… нет.». The ids a page prints as a code (an account, a payment, a reference of the ledger, the
 ids of the user and intent cards) carry a «Копировать» button; it is there only with JavaScript and
 a browser clipboard (an https page), and the id stays selectable without it. The cards are a framed
-list of fields per section. The bot texts keep their tables from before (#657).
+list of fields per section. The bot texts' lists are the component too (#657). The forms follow
+[admin-design-system.md → Формы](admin-design-system.md#формы): a refused field is outlined and
+read with its message, and the buttons that cannot be undone — «Завершить» a staff session,
+«Вернуть исходный» and «Удалить» a bot text, «Вернуть Stars» — are red and, with JavaScript, ask
+for a confirmation first; without it the form is sent as before.
 
 ### Overview — `GET /admin/overview`
 
@@ -249,8 +253,8 @@ The backend answers 200 on every outcome but `not_found` (404); `web` picks the 
 | Backend | `web` |
 |---|---|
 | 200 `adjusted` | 303 to `/admin/users/<id>?notice=adjusted`: the card with «Токены скорректированы.» over the form |
-| 200 `insufficient_available` | 409: the card from the answer, «Недостаточно доступных токенов: доступно N…», the form as sent |
-| 200 `balance_changed` | 409: the card from the answer, «Баланс изменился с момента открытия карточки: сейчас N…», the form as sent |
+| 200 `insufficient_available` | 409: the card from the answer, «Недостаточно доступных токенов: доступно N…», the form as sent; the «Токены» field is marked invalid and described by the message (#657) |
+| 200 `balance_changed` | 409: the card from the answer, «Баланс изменился с момента открытия карточки: сейчас N…», the form as sent; no field is marked |
 | 404 `not_found` | 404 «Пользователь не найден» |
 | 401 `session_invalid` | cookie cleared, 302 to login |
 | not answered, a 2xx outside the contract, a 5xx | 500 «Результат неизвестен»: the adjustment may have committed — open the card, its balance and the first row of «Движения токенов» show it; do not send the form again before checking |
@@ -452,7 +456,8 @@ to the service page. The backend's `{ service: boolean }` is parsed before the s
 answers `unchanged` — a re-mark keeps the first date. The answer is `{ me, outcome, account }`
 with `outcome` `marked`, `unmarked` or `unchanged`; an unknown account is 404. Not answered or a 5xx
 in `web`: «Результат неизвестен» — the mark may be written; the service page shows how it is, and
-pressing again is harmless.
+pressing again is harmless. Both buttons are secondary and ask nothing (#657): the mark is
+reversible.
 
 The mark survives a revocation and a re-login (owner's answer Q5): a re-login makes the account
 `active` again and it counts as working on the keeper's next tick. A service account may trade, in
@@ -464,7 +469,8 @@ demo and real alike (Q1).
 Stars» posts `reason` and `return=<the page>`. `web` checks the id against `UUID_PATTERN` (404 «Оплата
 не найдена», no backend call) and the reason against `starRefundReasonSchema` — trimmed, 1–200
 characters without control characters, the CLI's `--reason` (400 with the message) — and sends
-`{ reason }`. The backend's order, the Telegram call outside any transaction and the record by the
+`{ reason }`. The button is a danger one: with JavaScript it asks «Вернуть Stars плательщику?
+Действие необратимо.» first (#657). The backend's order, the Telegram call outside any transaction and the record by the
 CLI's writer are in [stars.md → From the admin](stars.md#from-the-admin-510). The route is the second
 one outside `asStaff` (Boundaries below).
 
@@ -563,7 +569,11 @@ shared `adminChangePasswordRequestSchema` (both passwords 1–`STAFF_PASSWORD_MA
 the new one different from the current one). «Новый пароль совпадает с текущим» is shown only when
 the schema's one issue is that one; any other set of issues is «Проверьте введённые данные». Each
 refusal is a 400 with the form, no backend call and no row. A refused form — here or from the
-backend — is rendered without the sessions read, so with the nav and no account block or N.
+backend — is rendered without the sessions read, so with the nav and no account block or N. The
+field a refusal names is marked `aria-invalid` and described by the message (#657): two different
+new passwords → «Новый пароль ещё раз», the same as the current one → «Новый пароль», «Неверный
+текущий пароль» → «Текущий пароль»; «Проверьте введённые данные» and the lockout mark none. The
+result line after the redirect is a notice.
 
 How `web` acts on the backend's answer to the change:
 
@@ -605,9 +615,11 @@ with its `language`, and web shows the page's. A redirect after a POST keeps the
 **The list** shows every catalog key under its group (`BOT_TEXT_GROUP_TITLES`, in catalog order):
 the key (a link to the editor), where the text is shown, and its state — «исходный», or «изменён:
 версия N, login,» and the time (`CLI` for a row the CLI wrote). A row the loaders reject carries
-the reason and «Показан исходный текст». At the end, «Строки без ключа в каталоге»: rows whose key
-this build's catalog does not have (a renamed key), each with «Удалить» — a `POST …/reset` with the
-row's version and language. The section is absent when there are none. `?notice=removed|gone|changed`
+a red badge with the reason and «Показан исходный текст». At the end, «Строки без ключа в
+каталоге»: rows whose key this build's catalog does not have (a renamed key), each with «Удалить» —
+a `POST …/reset` with the row's version and language, a danger button that asks «Удалить строку без
+ключа?» with JavaScript. Every group and the orphans are the table component (#657): below 64rem a
+row is a card. The section is absent when there are none. `?notice=removed|gone|changed`
 reports the result of a delete; any other value shows nothing.
 
 **The editor** shows the key, its group and description, the state as on the list, and
@@ -619,8 +631,11 @@ required —, each fragment with a link to its key, the text in effect and «(и
 single-line key, and «Используется в:» — the keys that quote this one as a fragment. The form has
 the text (the override, or the language's default), a hidden version (0 without an override), the
 hidden language, and two buttons:
-«Предпросмотр» (`formaction` to `…/preview`) and «Сохранить». With an override, «Исходный текст»
-shows the language's default and «Вернуть исходный» posts `…/reset`. `?notice=saved|reset|already_default`
+«Предпросмотр» (secondary, `formaction` to `…/preview`) and «Сохранить» (primary). With an
+override, «Исходный текст» shows the language's default and «Вернуть исходный» (danger; with
+JavaScript it asks «Вернуть исходный текст? Переопределение будет снято.») posts `…/reset`; it
+sits in one row with «Опубликовать заново» (secondary) below the form. When the backend refused the
+text (`refused`), the field is marked `aria-invalid` and described by the list of reasons (#657). `?notice=saved|reset|already_default`
 reports the result of a write («Сохранено. Бот применит текст в течение 35 с» —
 `BOT_TEXTS_APPLIED_WITHIN_S`, which `apps/bot/src/timing.test.ts` holds at least the refresh plus
 the load timeout).
