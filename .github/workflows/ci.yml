@@ -15,36 +15,58 @@ permissions:
   contents: read
 
 jobs:
-  ci:
+  # `pnpm check` (package.json) is `tsc -b --clean && vitest run && tsc -b && eslint .`; CI runs
+  # the same coverage as parallel jobs (#877): `typecheck` (tsc -b), `lint` (eslint .), `test-unit`
+  # and the shards of `test-integration` (together `vitest run`: its two projects), each from a
+  # fresh checkout, so the tests see no dist/ as after the local --clean. The job named `ci` is
+  # the one verdict (tooling/ci-workflow.test.ts C1-C5).
+  typecheck:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: binarius
-          POSTGRES_PASSWORD: binarius
-          POSTGRES_DB: binarius
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U binarius -d binarius"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-      redis:
-        image: redis:8-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
-      # the service container runs on the runner's own kernel clock, so the tests may share it
-      TEST_DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
-      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      # The outputs with their tsconfig.tsbuildinfo: tsc -b re-checks every source whose content
+      # differs from the build info, so a stale entry costs time, never a missed error. The build
+      # info alone is not enough: a project whose sources are newer re-emits only what changed, and
+      # its dependants then miss the rest of its .d.ts (TS6305).
+      - uses: actions/cache@v6
+        with:
+          path: |
+            apps/*/dist
+            packages/*/dist
+            tooling/dist
+          key: tsc-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/tsconfig*.json', '!**/node_modules/**') }}-${{ github.sha }}
+          restore-keys: tsc-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', '**/tsconfig*.json', '!**/node_modules/**') }}-
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # ESLint's cache does not follow a file's dependants, and type-aware rules read them, so a
+      # partial hit could report stale results (ESLint's own warning on --cache). The key covers
+      # every lint input and there are no restore-keys: a hit means nothing ESLint reads changed
+      # (a docs-only commit), a miss lints everything and saves. --cache-strategy content because
+      # a fresh checkout gives every file a new mtime.
+      - uses: actions/cache@v6
+        with:
+          path: .eslintcache
+          key: eslint-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml', 'eslint.config.js', '**/package.json', '**/tsconfig*.json', '**/*.ts', '!**/node_modules/**') }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint --cache --cache-location .eslintcache --cache-strategy content
+
+  test-unit:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -117,8 +139,65 @@ jobs:
           appended = len(head['entries']) - len(base['entries'])
           print(f"journal: {len(base['entries'])} existing entries unchanged, {appended} appended")
           PY
+      - run: pnpm test --project unit
+
+  # The integration project is most of the suite's time; vitest splits its files between the
+  # shards by count, so each file runs in exactly one of them, against that shard's own services.
+  test-integration:
+    runs-on: ubuntu-latest
+    strategy:
+      # the other shard's verdict is still known when one fails
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: binarius
+          POSTGRES_PASSWORD: binarius
+          POSTGRES_DB: binarius
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U binarius -d binarius"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
+      # the service container runs on the runner's own kernel clock, so the tests may share it
+      TEST_DATABASE_URL: postgres://binarius:binarius@localhost:5432/binarius
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - run: pnpm db:migrate
-      - run: pnpm check
+      - run: pnpm test --project integration --shard ${{ matrix.shard }}/2
+
+  # The one verdict: green only when every job above succeeded. `if: always()` because `needs`
+  # alone skips this job when one of them fails, and a skipped check reads as passing; a skipped
+  # or cancelled job counts as a failure here.
+  ci:
+    runs-on: ubuntu-latest
+    needs: [typecheck, lint, test-unit, test-integration, compose]
+    if: always()
+    steps:
+      - run: test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = false
 
   compose:
     runs-on: ubuntu-latest
@@ -316,10 +395,15 @@ jobs:
           echo "::add-mask::$identity"
           echo "BACKUP_AGE_RECIPIENT=$recipient" >> "$GITHUB_ENV"
           echo "BACKUP_AGE_IDENTITY=$identity" >> "$GITHUB_ENV"
+      # compose.yaml alone builds the Dockerfile's `dev` stage, the pair below `prod` (#877); the
+      # dev stage is where the bundles are built, so this also warms the layers `prod` copies
+      # them from. Untagged: the project's one tag stays the prod image's.
+      - name: the dev target builds
+        run: docker build --quiet --target dev .
       # `bot` is started by the last step alone, where its exit is the point: with the fake token
       # above it fails at getMe and exits 1, and `bot` has no healthcheck, so --wait here could
-      # not tell a dead bot from a live one. Under the prod pair this builds the image with its
-      # bundles. The list is derived rather than written out, so a service added to compose.yaml
+      # not tell a dead bot from a live one. Under the prod pair this builds the `prod` target,
+      # with the bundles. The list is derived rather than written out, so a service added to compose.yaml
       # later is started here instead of being silently left behind. It names the one-shot
       # `migrate` too: --wait accepts it once it exited 0 and fails the step when it exited
       # otherwise.
@@ -337,6 +421,38 @@ jobs:
           printf 'starting:%s\n' "$(printf ' %s' $services)"
           docker compose up -d --build --wait --wait-timeout 120 $services
       - run: curl -fsS http://127.0.0.1:3000/health | grep -q '"status":"ok"'
+      # The prod stage (#877): `dependencies` only, tsx among them (migrate and the CLIs the docs
+      # run), the files a container reads (docs/deploy.md -> Files a package reads), the four
+      # bundles; none of what .dockerignore keeps out and none of the dev toolchain. The size is
+      # printed for the record, not asserted.
+      - name: the prod image carries the runtime files and not the dev toolchain
+        run: |
+          set -u
+          image="$(docker compose config --format json | jq -r '.services.migrate.image')"
+          docker image ls "$image"
+          docker run --rm --entrypoint sh "$image" -c '
+            bad=""
+            for f in node_modules/.bin/tsx packages/db/drizzle/meta/_journal.json apps/bot/fonts \
+                     apps/bot/src/assets packages/shared/assets apps/web/src/admin/static \
+                     apps/backend/dist/index.js apps/bot/dist/index.js \
+                     apps/trading-worker/dist/index.js apps/web/dist/index.js; do
+              test -e "$f" || bad="$bad missing:$f"
+            done
+            ls packages/db/drizzle/*.sql > /dev/null || bad="$bad missing:packages/db/drizzle/*.sql"
+            for f in docs audits.md README.md .github deploy; do
+              test ! -e "$f" || bad="$bad present:$f"
+            done
+            for p in typescript vitest eslint drizzle-kit prettier; do
+              if ls node_modules/.pnpm | grep -q "^$p@"; then bad="$bad present:$p"; fi
+            done
+            stray="$(find . -path "*/node_modules" -prune -o \( -name "*.test.ts" -o -name "*.typecheck.ts" -o -name "*_snapshot.json" \) -print | head -n 3)"
+            if [ -n "$stray" ]; then bad="$bad present:$(printf "%s" "$stray" | tr "\n" " ")"; fi
+            du -sh node_modules
+            if [ -n "$bad" ]; then echo "$bad"; exit 1; fi
+          ' || {
+            echo '::error::the prod image lacks a runtime file or carries what it should not (above)'
+            exit 1
+          }
       # `web` has no healthcheck (#65), so --wait treats it as ready the moment the container
       # runs, before the process listens. This step is what makes the difference: it asks for a
       # page only a listening process can serve, and retries to a deadline rather than racing
@@ -586,6 +702,41 @@ jobs:
             docker compose logs bot
             exit 1
           }
+      # .dockerignore (#877): a commit that changes only docs, the audit log, the README or a test
+      # must not invalidate `COPY . .`, a source change must. Layer digests, never image ids: an
+      # id changes on every export even on a full cache hit. The tree is restored and the image
+      # rebuilt from cache before any verdict, so a failure here leaves the tag on the original
+      # content.
+      - name: a docs-only change leaves the image's layers; a source change does not
+        run: |
+          set -u
+          image="$(docker compose config --format json | jq -r '.services.migrate.image')"
+          layers() { docker image inspect -f '{{json .RootFS.Layers}}' "$image"; }
+          build() { docker compose --progress quiet build migrate; }
+          before="$(layers)"
+          echo '<!-- ci -->' >> docs/deploy.md
+          echo 'ci' >> audits.md
+          echo '<!-- ci -->' >> README.md
+          echo '// ci' >> tooling/build.test.ts
+          build && docs="$(layers)" || docs=build-failed
+          echo '// ci' >> apps/backend/src/index.ts
+          build && src="$(layers)" || src=build-failed
+          git checkout -- .
+          build && after="$(layers)" || after=build-failed
+          status=0
+          if [ "$docs" != "$before" ]; then
+            echo '::error::a docs-only change rebuilt the image layers'
+            status=1
+          fi
+          if [ "$src" = "$before" ] || [ "$src" = build-failed ]; then
+            echo "::error::a source change did not rebuild the image layers ($src)"
+            status=1
+          fi
+          if [ "$after" != "$before" ]; then
+            echo '::error::the restored tree did not rebuild the original layers'
+            status=1
+          fi
+          exit "$status"
       - if: failure()
         continue-on-error: true
         run: docker compose logs

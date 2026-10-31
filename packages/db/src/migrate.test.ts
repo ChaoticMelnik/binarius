@@ -115,7 +115,9 @@ describe('runMigrateCli before any connection', () => {
 describe('the compose migrate service', () => {
   it('never restarts, runs the runner and reads the apps’ DATABASE_URL', () => {
     expect(composeServiceValue(composeYaml, 'migrate', 'restart')).toBe('"no"');
-    expect(composeServiceValue(composeYaml, 'migrate', 'command')).toBe('pnpm db:migrate');
+    expect(composeServiceValue(composeYaml, 'migrate', 'command')).toBe(
+      'node --import tsx packages/db/src/cli/migrate.ts',
+    );
     expect(composeServiceEnvValue(composeYaml, 'migrate', 'DATABASE_URL')).toBe('*database-url');
   });
 

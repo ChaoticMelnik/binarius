@@ -16,6 +16,9 @@
     "db:migrate": "pnpm --filter @binarius/db run db:migrate",
     "db:check": "pnpm --filter @binarius/db run db:check"
   },
+  "dependencies": {
+    "tsx": "^4.23.15"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.20.4",
@@ -25,7 +28,6 @@
     "eslint-config-prettier": "^10.1.8",
     "pg": "^8.23.0",
     "prettier": "^3.9.8",
-    "tsx": "^4.23.15",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1",
     "vitest": "^5.0.1"

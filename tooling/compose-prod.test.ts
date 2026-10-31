@@ -2,11 +2,17 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { appEntryPoints } from './build';
-import { composeServiceKeys, composeServices, composeServiceValue } from './compose-text';
+import {
+  composeServiceChildLines,
+  composeServiceKeys,
+  composeServices,
+  composeServiceValue,
+} from './compose-text';
 
-// compose.prod.yaml is an override of compose.yaml and changes three things only (#146, Rule 52):
-// the app commands, log rotation, and a restart policy for postgres and redis. The CI compose job
-// checks the merged configuration on the runner's Compose; these pins hold the file's text.
+// compose.prod.yaml is an override of compose.yaml and changes four things only (#146, #877, Rule
+// 52): the app commands, log rotation, a restart policy for postgres and redis, and the image's
+// target. The CI compose job checks the merged configuration on the runner's Compose; these pins
+// hold the file's text.
 
 const root = path.resolve(import.meta.dirname, '..');
 const base = readFileSync(path.join(root, 'compose.yaml'), 'utf8');
@@ -48,11 +54,11 @@ describe('compose.prod.yaml', () => {
     expect(anchor).toContain('    max-file: "3"\n');
   });
 
-  it('P4 sets nothing but command, logging and restart', () => {
+  it('P4 sets nothing but command, logging, restart and build', () => {
     for (const service of prodServices) {
       expect(
         composeServiceKeys(prod, service).filter(
-          (key) => !['command', 'logging', 'restart'].includes(key),
+          (key) => !['command', 'logging', 'restart', 'build'].includes(key),
         ),
         service,
       ).toEqual([]);
@@ -64,6 +70,34 @@ describe('compose.prod.yaml', () => {
     expect(anchorRestart).toBe('${COMPOSE_RESTART:-unless-stopped}');
     for (const service of ['postgres', 'redis']) {
       expect(composeServiceValue(prod, service, 'restart'), service).toBe(anchorRestart);
+    }
+  });
+
+  it("P6 builds the prod target of every service compose.yaml builds from the root's dev target", () => {
+    expect(/^x-prod-build: &prod-build\n((?: {2}.*\n)+)/m.exec(prod)?.[1]).toBe('  target: prod\n');
+    const anchorBuild = /^x-app: &app\n {2}build:\n((?: {4}.*\n)+)/m.exec(base)?.[1];
+    expect(anchorBuild).toBe('    context: .\n    target: dev\n');
+    // on the anchor (its `<<: *app` line) or with a `build:` of its own whose context is the root
+    const onAnchor = (service: string) =>
+      new RegExp(`^ {2}${service}:\\n {4}<<: \\*app$`, 'm').test(base);
+    const rootBuilt = baseServices.filter(
+      (service) =>
+        onAnchor(service) ||
+        composeServiceChildLines(base, service, 'build').includes('      context: .'),
+    );
+    expect(rootBuilt).toContain('migrate');
+    expect(rootBuilt).toEqual(expect.arrayContaining(appEntryPoints(root).map((app) => app.name)));
+    for (const service of rootBuilt.filter((name) => !onAnchor(name))) {
+      expect(composeServiceChildLines(base, service, 'build'), service).toEqual([
+        '      context: .',
+        '      target: dev',
+      ]);
+    }
+    expect(
+      prodServices.filter((service) => composeServiceValue(prod, service, 'build') !== undefined),
+    ).toEqual(prodServices.filter((service) => rootBuilt.includes(service)));
+    for (const service of rootBuilt) {
+      expect(composeServiceValue(prod, service, 'build'), service).toBe('*prod-build');
     }
   });
 });

@@ -2,6 +2,7 @@ node_modules
 dist
 *.tsbuildinfo
 coverage
+.eslintcache
 # every .env variant: the one that is safe to track is the example
 .env*
 !.env.example

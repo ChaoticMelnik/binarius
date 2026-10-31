@@ -19,11 +19,13 @@ x-broker-environment: &broker-environment
   # by the backend's start route and its `h1 session start` CLI; see docs/stake.md -> Defaults
   SESSION_STAKE_STRATEGY:
 
-# One tag for every service built from the repository root (`build: .`; `migrate` names it
+# One tag for every service built from the repository root (`context: .`; `migrate` names it
 # too), so a partial `build` or `up --build <service>` never leaves `migrate` on an older journal
-# (#75, PR #731).
+# (#75, PR #731). The Dockerfile's `dev` stage; compose.prod.yaml overrides the target to `prod`.
 x-app: &app
-  build: .
+  build:
+    context: .
+    target: dev
   image: ${COMPOSE_PROJECT_NAME}-app
   init: true
   restart: ${COMPOSE_RESTART:-unless-stopped}
@@ -110,14 +112,17 @@ services:
   # One-shot: applies the migrations under an advisory lock (packages/db/src/cli/migrate.ts) and
   # exits; backend and trading-worker wait for its exit 0. Not built on x-app: that anchor's
   # restart policy would loop a finished one-shot (and hang `up`), and its depends_on names this
-  # service itself. It still shares the anchor's image tag, so a partial build never leaves it on
-  # an older journal.
+  # service itself. It still shares the anchor's image tag and target, so a partial build never
+  # leaves it on an older journal. The runner straight under node, no pnpm in the start chain
+  # (#877): the same command under both profiles, tsx being a root dependency (Rule 16).
   migrate:
-    build: .
+    build:
+      context: .
+      target: dev
     image: ${COMPOSE_PROJECT_NAME}-app
     init: true
     restart: "no"
-    command: pnpm db:migrate
+    command: node --import tsx packages/db/src/cli/migrate.ts
     depends_on:
       postgres:
         condition: service_healthy
