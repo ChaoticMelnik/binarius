@@ -135,6 +135,9 @@ export interface WorkerTuning {
   catchupGraceMs: number;
   phase1BudgetMs: number;
   phase2BudgetMs: number;
+  // GETs the budget counts as sent at its creation: the cap in production (#909), 0 in a test
+  // composition
+  brokerGetsCarriedOver: number;
 }
 
 const PRODUCTION_TUNING: Omit<WorkerTuning, 'sessions'> = {
@@ -154,6 +157,7 @@ const PRODUCTION_TUNING: Omit<WorkerTuning, 'sessions'> = {
   catchupGraceMs: CATCHUP_GRACE_MS,
   phase1BudgetMs: SHUTDOWN_PHASE1_BUDGET_MS,
   phase2BudgetMs: SHUTDOWN_PHASE2_BUDGET_MS,
+  brokerGetsCarriedOver: WORKER_BROKER_GETS_PER_MINUTE,
 };
 
 export interface WorkerTestSeams {
@@ -349,8 +353,11 @@ export function createWorker({
 
   // the GETs of the reconciliation pass and the settlement catch-up share the worker's share of
   // the broker's per-IP limit at runtime (#872); the submits (POST) and the sockets are not GETs
-  // of the two loops
-  const gets = createBrokerGetBudget({ perMinute: WORKER_BROKER_GETS_PER_MINUTE });
+  // of the two loops. The window starts full: the process before this one may have spent it (#909).
+  const gets = createBrokerGetBudget({
+    perMinute: WORKER_BROKER_GETS_PER_MINUTE,
+    carriedOver: tuning.brokerGetsCarriedOver,
+  });
   const passGets = gets.meter(brokerRest);
   const catchupGets = gets.meter(brokerRest);
 

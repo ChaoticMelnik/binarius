@@ -187,8 +187,17 @@ function startWorker(
     sockets,
     demoOnly = false,
     tuning = {},
-  }: { sockets: boolean; demoOnly?: boolean; tuning?: Partial<WorkerTuning> },
+    carryOver,
+  }: {
+    sockets: boolean;
+    demoOnly?: boolean;
+    tuning?: Partial<WorkerTuning>;
+    // 'production': the GET budget's carry-over is left to createWorker's own default (#909)
+    carryOver?: 'production';
+  },
 ): Running {
+  const merged: Partial<WorkerTuning> = { ...TEST_WORKER_TUNING, ...tuning };
+  if (carryOver === 'production') delete merged.brokerGetsCarriedOver;
   const lines: Record<string, unknown>[] = [];
   const logger = pino(logOptions('debug'), {
     write: (line: string) => void lines.push(JSON.parse(line) as Record<string, unknown>),
@@ -202,7 +211,7 @@ function startWorker(
     redis,
     logger,
     testing: {
-      tuning: { ...TEST_WORKER_TUNING, ...tuning },
+      tuning: merged,
       queuePrefix: prefix,
       tokens: {
         accessToken: (accountId) => {
@@ -1088,6 +1097,28 @@ describe('the wake of the reconciliation pass through the composition (#872)', (
     expect(logsOf(w, 'reconciliation tick')).toEqual([
       expect.objectContaining({ candidates: 1, woken: 1 }),
     ]);
+    expect(await shutdown(w)).toBe('clean');
+  });
+});
+
+describe('the GET budget across a restart (#909)', () => {
+  it('W-CO1 a new process sends no GET in its first window: the wake’s tick is refused before the claim, with the production carry-over', async () => {
+    const w = startWorker('CO1', {
+      sockets: false,
+      tuning: { reconcileTickMs: 86_400_000 },
+      carryOver: 'production',
+    });
+    await until('the start', () => logsOf(w, 'trading-worker started').length === 1);
+    broker.rest.clearJournal();
+    const { intent } = await seedUnknownIntent(tmp.db);
+    // the intent's own submit row and its reconciliation row
+    expect(await publishPending([intent.id])).toBe(2);
+    await until('the tick', () => logsOf(w, 'reconciliation tick').length === 1);
+    expect(logsOf(w, 'reconciliation tick')).toEqual([
+      expect.objectContaining({ candidates: 1, woken: 1, budget: 1 }),
+    ]);
+    expect((await intentRows([intent.id]))[0]!.reconcileClaimedAt).toBeNull();
+    expect(broker.rest.journal.filter((r) => r.endpoint === 'tradesList')).toEqual([]);
     expect(await shutdown(w)).toBe('clean');
   });
 });

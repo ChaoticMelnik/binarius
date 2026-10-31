@@ -192,8 +192,9 @@ it logs `shutdown: active jobs did not finish within the budget, exiting without
 ## Accepted risks
 
 1. **Double broker reads for the overlap.** Both processes run the reconciliation pass and the
-   catch-up: up to 2 × `WORKER_BROKER_GETS_PER_MINUTE` (2 × 400) a minute for the overlap (≤ 160 s
-   when the script completes, longer after an interrupted run until an operator acts), which with
+   catch-up, the new one's loops sending nothing in its first 60 s (#909): up to
+   2 × `WORKER_BROKER_GETS_PER_MINUTE` (2 × 400) a minute for the overlap past that minute
+   (≤ 100 s when the script completes, longer after an interrupted run until an operator acts), which with
    the backend's shares (2 × 100) is over the broker's 600 a minute per IP in the worst case.
    Falsifiable: `rate_limited` in the reconciliation or catch-up ticks during a deploy.
 2. **Memory on the pilot** during the overlap: two worker processes on one host. Falsifiable:

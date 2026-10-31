@@ -279,6 +279,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 68. **Цепочка «демо → реал»** — от конца третьей демо-сессии без депозита, шаг устаревает со следующим; бонус — версия `deposit_bonus` в силе по `activeRuleWhere`; без кассы не планируется и не берётся; тексты без давности, срока и утверждений о пользователе → `rules/bot-ui.md`
 69. **Карточка итогов дня** — сутки по поясу и часу из `mailing.ts`, цифры только SQL раздельно по режимам, итоги одним InitPlan; рендер вне event loop, одна загрузка на хеш SVG → `rules/bot-ui.md`
 70. **Опрос бота — параллельно по пользователям** — свой цикл над grammY: обработчиков не больше `POLLING_CONCURRENCY` (по одному на пользователя), ждущих за ними не больше `POLLING_WAITING_MAX`, порядок внутри пользователя по `from.id`, offset следующим `getUpdates` и на стопе; правки ожидания через token bucket с приоритетом сигнала → `rules/core.md`
+71. **Окно бюджета GET worker'а при старте процесса** — бюджет создаётся с окном, занятым на `carriedOver` GET (production — весь потолок), первый GET циклов нового процесса не раньше 60 с; окно, пересекающее рестарт, ≤ потолка → `rules/trading.md`
 
 ### Map: path → rules
 
@@ -312,8 +313,8 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
 | `apps/bot/src` | core 8, 10, 14, 26, 51, 52, 65, 70; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62, 66, 67; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
-| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54, 64; signal-h1 44, 45; bot-ui 18, 67 |
-| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53, 64; auth 12, 60 |
+| `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54, 64, 71; signal-h1 44, 45; bot-ui 18, 67 |
+| `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53, 64, 71; auth 12, 60 |
 | `apps/trading-worker/src/circuit-breaker` | core 10; trading 22, 25, 28; signal-h1 20, 43 |
 | `apps/trading-worker/src/cli` | trading 27 |
 | `apps/trading-worker/src/fleet` | core 10; trading 25, 28, 53, 54; signal-h1 43 |
@@ -353,13 +354,13 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/stake.md` | trading 23 |
 | `docs/stars.md` | core 10; payments 39 |
 | `docs/trade-executor.md` | trading 15 |
-| `docs/trade-intent-transport.md` | trading 50, 54, 64; auth 13 |
+| `docs/trade-intent-transport.md` | trading 50, 54, 64, 71; auth 13 |
 | `docs/trade-log.md` | signal-h1 42, 45 |
 | `docs/trading-access.md` | bot-ui 29 |
 | `docs/trading-mode.md` | trading 36 |
 | `docs/trading-session.md` | trading 28, 63; signal-h1 48; auth 13 |
 | `docs/worker-capacity.md` | trading 53 |
-| `docs/worker-deploy.md` | core 10, 16; trading 32 |
+| `docs/worker-deploy.md` | core 10, 16; trading 32, 71 |
 | `eslint.config.js` | core 8; bot-ui 18 |
 | `packages/broker-rest/src` | core 10, 26, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |
 | `packages/broker-socket/src` | core 10, 14, 51; trading 15, 27, 28, 33; signal-h1 44, 45; bot-ui 18 |

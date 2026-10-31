@@ -427,10 +427,17 @@ candidate is not claimed and keeps its place at the head of the order, a catch-u
 asked for a token and not held back, and the next tick takes them once the window frees; the
 tick summary counts it as `budget`. So the GETs sent in any 60 s window stay at or under 400 while
 an attempt keeps to its reservation (stated: the page caps of `readTradePages`, one GET a check);
-a GET beyond it is still counted, and the next reservation waits for it. The submits (POST) and
-the sockets are not GETs of the two loops and stay outside the budget. The budget is per worker
-process: a deploy's
-overlap runs two for the readiness wait (≤ 120 s) plus the drain (≤ 40 s), or until an operator
+a GET beyond it is still counted, and the next reservation waits for it. A new process cannot
+see what the one before it sent in the last 60 s, so its budget starts with the window full
+(`carriedOver`, the whole cap in production: `WorkerTuning.brokerGetsCarriedOver`, #909): the
+first GET of its reconciliation pass, balance check and catch-up comes no sooner than 60 s after
+its start, and a restart puts no more than the cap of the old process's GETs and the new one's
+into any 60 s window. A wake inside that minute is refused before the claim and the intent waits
+for the interval tick; the catch-up's overdue accounts wait for the window. The submits (POST) and
+the sockets are not GETs of the two loops and stay outside the budget, and are not delayed. The
+budget is per worker process: a deploy's
+overlap runs two for the readiness wait (≤ 120 s) plus the drain (≤ 40 s), the new one sending
+nothing for its first 60 s (#909), or until an operator
 resolves an interrupted run ([worker-deploy.md](worker-deploy.md) → The overlap's length, #95), and
 one process otherwise: `TRADING_WORKER_REPLICAS` stays 1 until #815 bounds the fleet
 ([worker-capacity.md](worker-capacity.md)). The reconciliation job wakes the pass after its
@@ -677,6 +684,7 @@ spellings) that refuses real intents and sessions in it, read at start
   **#815** partitions the loops and the GET budget across processes.
 - **#872** (shipped): the worker's GET budget at runtime and the wake of the pass by the
   reconciliation job (Budget and the wake above); parallel reconciliation attempts are **#899**.
+  **#909** (shipped): the window carried over a restart (Budget and the wake above).
 - Real-mode eligibility: **#144** replaced #134's env flag with the global trading switch, one
   for demo and real ([kill-switch.md](kill-switch.md)); **#135** what a revoked grant does to
   running sessions; **#121** real mode from the bot: a real intent only for a user in real mode,

@@ -75,6 +75,8 @@ export const TEST_WORKER_TUNING: Partial<WorkerTuning> = {
   catchupGraceMs: 10_000,
   phase1BudgetMs: 10_000,
   phase2BudgetMs: 4_000,
+  // a test composition does not wait a minute for its first GET (W-CO1 leaves it to production)
+  brokerGetsCarriedOver: 0,
 };
 
 // a tuning edited out of order fails at import, not as a flaky case
