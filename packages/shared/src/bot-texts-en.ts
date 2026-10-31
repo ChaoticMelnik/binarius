@@ -511,7 +511,7 @@ Where to learn more about the bot — the buttons below.`,
   helpChannelButton: '📣 Channel',
   helpReviewsButton: '⭐ Reviews',
   managerButton: '💬 Message the manager',
-  demoToRealIntro1h: `🎓 <b>You've got the hang of the demo</b>
+  demoToRealIntro1h: `🎓 <b>Your demo so far</b>
 
 The next stage is a real account.`,
   demoToRealIntro24h: `💳 <b>A real account: a reminder</b>
