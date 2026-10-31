@@ -6,6 +6,7 @@ import {
   BOT_TEXT_SOURCES_EN,
   BotLanguage,
   decimalStringSchema,
+  fitSize,
   formatPaymentDate,
   MAX_SESSION_SUMMARY_TRADES,
   TradeAction,
@@ -17,7 +18,7 @@ import {
 } from '@binarius/shared';
 import { botTextSourcesWith } from '@binarius/shared/testing';
 import { PROMO_LOGO_PATH } from './assets';
-import { fitSize, renderSessionCard } from './session-card';
+import { renderSessionCard } from './session-card';
 import {
   promoDirection,
   SESSION_PROMO_HEIGHT,

@@ -69,7 +69,11 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   `helpReviewsButton`, `managerButton`; #880: the demo-to-real chain's `demoToRealIntro1h`,
   `demoToRealIntro24h`, `demoToRealIntro72h`, `demoToRealFacts`, `demoToRealBonus`,
   `demoToRealBonusAnyAmount`, `demoToRealRisk`, `demoToRealDeposit` and the words
-  `demoSessionOne/Few/Many`), so the bot's `TEXTS` leaves the group out. `deposit`
+  `demoSessionOne/Few/Many`; #881: the daily summary's caption keys `dailySummaryTitle`,
+  `dailySummaryDemo`, `dailySummaryReal`, `dailySummaryEntry` and the card's labels
+  `dailyCardTitle`, `dailyCardDemo`, `dailyCardReal`, `dailyCardSessions`, `dailyCardTrades`,
+  `dailyCardWon`, `dailyCardResult`, each limited to the width of its slot on the picture), so the
+  bot's `TEXTS` leaves the group out. `deposit`
   holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
   `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus
@@ -322,7 +326,8 @@ The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `st
 `closePrice`, `noSignalCandles`, `candleSec`, and the wait's scanner lines `pairs`, `quotes`, `moves`,
 `closest`, `pct` of #859 — `scan-summary.ts` builds them from `GET /trading/signals`' summary, the
 pair word by the language's plural rule, `scanPairOne/Few/Many` — the demo-to-real chain's
-`sessions` of #880, the count with `demoSessionOne/Few/Many`, …) are a line's value the
+`sessions` of #880, the count with `demoSessionOne/Few/Many`, the daily summary's `date` of #881,
+`dd.mm.yyyy` by `formatDay`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
 names what they hold.
 
@@ -645,7 +650,9 @@ built by `helpLinksCaption` in `packages/shared/src/help-links-text.ts`, #879; t
 chain's step, `demoToReal` — the intro of each step, the facts, the bonus line in either form or
 none, the risk and the button, built by `demoToRealText` in
 `packages/shared/src/demo-to-real-text.ts`, a caption of 1024 for all three steps since the 1 h
-one is the banner's, #880), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+one is the banner's, #880; the daily summary's caption, `dailySummary` — the title with the date,
+the demo and the real line and the button's, built by `dailySummaryCaption` in
+`packages/shared/src/daily-summary-text.ts`, a caption of 1024 under the drawn card, #881), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its

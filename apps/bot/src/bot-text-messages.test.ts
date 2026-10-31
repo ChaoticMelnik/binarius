@@ -57,6 +57,7 @@ import {
   helpLinksCaption,
   createBotTexts,
   demoToRealText,
+  dailySummaryCaption,
   type BotLanguage as BotLanguageCode,
   type DemoToRealIntroKey,
 } from '@binarius/shared';
@@ -570,6 +571,20 @@ const REAL: Record<string, () => TelegramHtml[]> = {
         ),
       ),
     ),
+  // the daily summary's caption (#881, daily-summary-text.ts): each plural form of the trades at
+  // int4 counts (a count(*)::int) and the widest signed decimal
+  dailySummary: () =>
+    [INT4_MAX, 1, 2].map((settled) => {
+      const side = {
+        sessions: INT4_MAX,
+        settled,
+        won: INT4_MAX,
+        lost: INT4_MAX,
+        tied: INT4_MAX,
+        profit: USD,
+      };
+      return dailySummaryCaption(liveTexts(), { day: '2026-12-31', demo: side, real: side });
+    }),
   intentStatus: () =>
     [pairLabel({ symbol: x(W.symbol + 10) }), null].flatMap((symbol) =>
       [...DEMO_DURATIONS_SEC, INT4_MAX].flatMap((durationSec) =>

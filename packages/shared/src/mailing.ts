@@ -25,6 +25,7 @@ export const NotificationKind = {
   DemoToReal1h: 'demo_to_real_1h',
   DemoToReal24h: 'demo_to_real_24h',
   DemoToReal72h: 'demo_to_real_72h',
+  DailySummary: 'daily_summary',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -150,9 +151,34 @@ export const demoToRealPayloadSchema = z.object({
 });
 export type DemoToRealPayload = z.infer<typeof demoToRealPayloadSchema>;
 
+// The daily summary card (#881, docs/mailing.md → The daily summary; manager 2026-10-31): every day
+// at DAILY_SUMMARY_HOUR:00 in DAILY_SUMMARY_TIME_ZONE, the totals of the calendar day before in that
+// zone, to every user the bot may mail. Europe/Moscow has no DST: every day is 24 hours.
+export const DAILY_SUMMARY_HOUR = 10;
+export const DAILY_SUMMARY_TIME_ZONE = 'Europe/Moscow';
+
+// One mode's totals of the day, one SQL pass for every user: the sessions started in it, the
+// settled trades created in it with their split by the sign of the profit, and the profits' sum as
+// text (rule 2), signed.
+export const dailySummarySideSchema = z.object({
+  sessions: tradeCountSchema,
+  ...settledScoreShape,
+  profit: decimalStringSchema,
+});
+export type DailySummarySide = z.infer<typeof dailySummarySideSchema>;
+
+// daily_summary's payload: the day (YYYY-MM-DD in DAILY_SUMMARY_TIME_ZONE) and each mode's totals,
+// demo and real never mixed
+export const dailySummaryPayloadSchema = z.object({
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  demo: dailySummarySideSchema,
+  real: dailySummarySideSchema,
+});
+export type DailySummaryPayload = z.infer<typeof dailySummaryPayloadSchema>;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
-// immediate kinds (referral_rewarded, the low-token nudges, real_mode_by_deposit and
-// weekly_summary, 0) are not in it: the link about the planner's tick concerns only a kind that
+// immediate kinds (referral_rewarded, the low-token nudges, real_mode_by_deposit, weekly_summary
+// and daily_summary, 0) are not in it: the link about the planner's tick concerns only a kind that
 // waits.
 export const MAILING_MIN_OFFSET_MS = Math.min(
   ...FIRST_SESSION_CHAIN.map((step) => step.afterHours * 3_600_000),

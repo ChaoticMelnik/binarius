@@ -86,6 +86,7 @@ function setup({
         logger,
       }),
     },
+    cards: { of: () => Promise.reject(new Error('no card in these tests')) },
     ...(plan === undefined ? {} : { plan }),
   });
   engines.push(mailing);

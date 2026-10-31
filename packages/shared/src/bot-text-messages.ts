@@ -75,6 +75,8 @@ export const BOT_TEXT_WIDTHS = {
   page: 3,
   // formatPaymentDate: 'dd.mm.yyyy hh:mm'
   paymentDate: 16,
+  // formatDay: 'dd.mm.yyyy', the daily summary's day (#881)
+  day: 10,
   // a Stars amount: int4, formatCount over INT4_MAX (star_payments.total_amount)
   starAmount: String(INT4_MAX).length + Math.floor((String(INT4_MAX).length - 1) / 3),
   // /paysupport's list (#118)
@@ -294,6 +296,7 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   tokensPerUsd: () => w.decimal,
   minAmountUsd: () => w.stake,
   maxTokens: () => w.decimal,
+  date: () => w.day,
 };
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {
@@ -310,6 +313,9 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   cardEmail: { email: () => w.email },
   // the demo-to-real chain's result (#880): every settled demo trade of the user, a count(*)::int
   demoToRealFacts: { result: demoResult },
+  // the daily summary's results (#881): every settled trade of a mode in the day, a count(*)::int
+  dailySummaryDemo: { result: demoResult },
+  dailySummaryReal: { result: demoResult },
   statusReal: { amount: () => w.usd },
   statusDemo: { amount: () => w.usd },
   analysisMomentum: {
@@ -985,6 +991,21 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       k('demoToRealRisk'),
       '\n',
       k('demoToRealDeposit'),
+    ],
+  },
+  // the daily summary card's caption (#881, daily-summary-text.ts → dailySummaryCaption)
+  {
+    id: 'dailySummary',
+    title: 'Карточка итогов дня: подпись картинки',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [
+      k('dailySummaryTitle'),
+      '\n\n',
+      k('dailySummaryDemo'),
+      '\n',
+      k('dailySummaryReal'),
+      '\n',
+      k('dailySummaryEntry'),
     ],
   },
 ];

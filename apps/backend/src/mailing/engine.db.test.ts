@@ -4,6 +4,9 @@ import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BotLanguage,
+  DAILY_SUMMARY_TIME_ZONE,
+  dailySummaryCaption,
+  dailySummaryPayloadSchema,
   DEMO_TO_REAL_CHAIN,
   demoToRealText,
   DepositModeSwitch,
@@ -20,6 +23,7 @@ import {
 } from '@binarius/shared';
 import { until } from '@binarius/shared/testing';
 import {
+  dailyDayStart,
   depositEvents,
   MAILING_OUTCOME_UNKNOWN,
   NotificationJobStatus,
@@ -48,6 +52,8 @@ import { createMailingEngine, type MailingConfig } from './engine';
 import { DEMO_TO_REAL_BANNER_PATH } from './demo-to-real';
 import { HELP_BANNER_PATH, type HelpLinks } from './help-links';
 import { createPhotoMedia } from './photo-media';
+import { createCardMedia, type CardMedia } from './card-media';
+import { renderDailyCard } from './daily-summary-card';
 
 // the Russian texts, the language of every user these tests make (#633)
 const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
@@ -69,6 +75,8 @@ beforeAll(async () => {
   await helpPushFrom(sql`now() + interval '1 year'`);
   // and the demo-to-real chain (#880) only in its own cases, for the same reason
   await demoChainFrom(sql`now() + interval '1 year'`);
+  // and the daily summary (#881) only in its own: it plans for every user
+  await dailyFrom(sql`now() + interval '1 year'`);
 });
 
 const helpPushFrom = (at: SQL) =>
@@ -86,6 +94,11 @@ const demoChainFrom = (at: SQL) =>
         DEMO_TO_REAL_CHAIN.map((step) => step.kind),
       ),
     );
+const dailyFrom = (at: SQL) =>
+  tmp.db
+    .update(notificationKinds)
+    .set({ plansFrom: at })
+    .where(eq(notificationKinds.kind, NotificationKind.DailySummary));
 afterAll(() => tmp.drop());
 
 // each case starts with no job waiting, so a claim can only take the case's own
@@ -141,6 +154,7 @@ function engine(
   helpLinks: HelpLinks = NO_HELP_LINKS,
   // an object, so a case can pass an undefined cashier (a default parameter would replace it)
   { cashierUrl }: { cashierUrl: string | undefined } = { cashierUrl: CASHIER_URL },
+  cards?: CardMedia,
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
@@ -161,6 +175,7 @@ function engine(
         logger,
       }),
     },
+    cards: cards ?? createCardMedia({ render: renderDailyCard, name: 'daily summary', logger }),
     ...(clock === 'default' ? {} : { now: () => clock.now }),
     sleep,
   });
@@ -1242,6 +1257,141 @@ describe('the demo-to-real chain through the engine', () => {
     expect(await chainJobsOf(user.userId)).toMatchObject([
       { id: row!.id, status: NotificationJobStatus.Pending, attempts: 0 },
     ]);
+    await mailing.stop();
+  });
+});
+
+// #881 (docs/mailing.md → The daily summary)
+describe('the daily summary through the engine', () => {
+  const KIND = NotificationKind.DailySummary;
+  const EN_TEXTS = clientTextsOf(BotLanguage.En);
+  const EN_LABELS = clientLabelsOf(BotLanguage.En);
+  // every user is a recipient: the earlier cases' too, so the sends are counted per language
+  const dailyEngine = (cards?: CardMedia) =>
+    engine(
+      { sendBatch: 1000 },
+      { now: 0 },
+      async () => {},
+      NO_HELP_LINKS,
+      { cashierUrl: CASHIER_URL },
+      cards,
+    );
+  const dailyJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => job.kind === KIND);
+  const photosTo = (calls: ReturnType<typeof captureApi>['calls'], telegramUserId: string) =>
+    callsTo(calls, 'sendPhoto').filter((call) => call.payload.chat_id === telegramUserId);
+  // the caption's language, so each upload answers with its own file_id
+  const languageOf = (payload: Record<string, unknown>) =>
+    String(payload.caption).includes('Day results') ? 'en' : 'ru';
+  const CARD = (payload: Record<string, unknown>) => ({
+    message_id: 11,
+    photo: [{ file_id: 'small' }, { file_id: `card-${languageOf(payload)}` }],
+  });
+
+  beforeAll(async () => {
+    await dailyFrom(sql`now() - interval '200 hours'`);
+    // a session in the middle of the summarised day of the real clock, so the day has a fact
+    const user = await seedUser(tmp.db);
+    const accountId = await seedBrokerAccount(tmp.db, user.userId);
+    await tmp.db.insert(tradingSessions).values({
+      brokerAccountId: accountId,
+      mode: TradeMode.Demo,
+      settings: sessionSettings({ durationSec: 5 }),
+      status: TradingSessionStatus.Stopped,
+      stopReason: TradingSessionStopReason.Completed,
+      startedAt: sql`(${dailyDayStart(sql`now()`)} + interval '12 hours') at time zone ${DAILY_SUMMARY_TIME_ZONE}`,
+      endedAt: sql`(${dailyDayStart(sql`now()`)} + interval '13 hours') at time zone ${DAILY_SUMMARY_TIME_ZONE}`,
+    });
+  });
+  afterAll(() => dailyFrom(sql`now() + interval '1 year'`));
+
+  it('E-DS1 uploads the card once per language and sends the rest by its file_id, the caption and the entry by mode', async () => {
+    const ru = await seedUser(tmp.db);
+    const en = await seedUser(tmp.db);
+    await tmp.db.update(users).set({ language: BotLanguage.En }).where(eq(users.id, en.userId));
+    const real = await seedUser(tmp.db, { tradingMode: TradeMode.Real });
+    const { mailing, captured } = dailyEngine();
+    captured.answers.set('sendPhoto', CARD);
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const photos = callsTo(captured.calls, 'sendPhoto');
+    for (const language of ['ru', 'en']) {
+      const ofLanguage = photos.filter((call) => languageOf(call.payload) === language);
+      expect(ofLanguage.filter((call) => call.payload.photo instanceof InputFile)).toHaveLength(1);
+      expect(
+        ofLanguage
+          .filter((call) => !(call.payload.photo instanceof InputFile))
+          .every((call) => call.payload.photo === `card-${language}`),
+      ).toBe(true);
+    }
+    const cases = [
+      [ru, { html: RU_TEXTS, plain: RU_LABELS }, RU_LABELS.demoButton, BotLanguage.Ru],
+      [en, { html: EN_TEXTS, plain: EN_LABELS }, EN_LABELS.demoButton, BotLanguage.En],
+      [real, { html: RU_TEXTS, plain: RU_LABELS }, RU_LABELS.tradeButton, BotLanguage.Ru],
+    ] as const;
+    for (const [user, texts, button, language] of cases) {
+      const [job] = await dailyJobsOf(user.userId);
+      expect(job).toMatchObject({ status: NotificationJobStatus.Sent, lastError: null });
+      const [call] = photosTo(captured.calls, user.telegramUserId);
+      expect(call!.payload.caption).toBe(
+        dailySummaryCaption({ ...texts, language }, dailySummaryPayloadSchema.parse(job!.payload)).value,
+      );
+      expect(call!.payload.parse_mode).toBe('HTML');
+      expect(inlineRows(call!.payload)).toEqual([[{ text: button, callback_data: 'demo' }]]);
+    }
+    await mailing.stop();
+  });
+
+  it('E-DS2 a refused file forgets its file_id: the retry uploads the card again', async () => {
+    const { mailing, captured } = dailyEngine();
+    captured.answers.set('sendPhoto', CARD);
+    await seedUser(tmp.db);
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const refused = await seedUser(tmp.db);
+    await mailing.planTick();
+    captured.apiErrors.set('sendPhoto', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: wrong file identifier/HTTP URL specified',
+    });
+    await mailing.sendTick();
+    captured.apiErrors.delete('sendPhoto');
+    const [retry] = await dailyJobsOf(refused.userId);
+    expect(retry).toMatchObject({ status: NotificationJobStatus.Pending, attempts: 1 });
+    // the retry's wait passed
+    await tmp.db
+      .update(notificationJobs)
+      .set({ scheduledAt: sql`now()` })
+      .where(eq(notificationJobs.id, retry!.id));
+    await mailing.sendTick();
+
+    expect(
+      photosTo(captured.calls, refused.telegramUserId).map((call) => call.payload.photo),
+    ).toEqual(['card-ru', expect.any(InputFile)]);
+    expect(await dailyJobsOf(refused.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, lastError: null },
+    ]);
+    await mailing.stop();
+  });
+
+  it('E-DS3 a card that fails to render is a message not built: retried, nothing sent', async () => {
+    const user = await seedUser(tmp.db);
+    const { mailing, captured, logs } = dailyEngine({
+      of: () => Promise.reject(new Error('render failed')),
+    });
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    expect(photosTo(captured.calls, user.telegramUserId)).toEqual([]);
+    expect(await dailyJobsOf(user.userId)).toMatchObject([
+      { status: NotificationJobStatus.Pending, attempts: 1, lastError: 'Error' },
+    ]);
+    expect(logs().filter((line) => line.msg === 'mailing not built' && line.kind === KIND)).not.toEqual(
+      [],
+    );
     await mailing.stop();
   });
 });

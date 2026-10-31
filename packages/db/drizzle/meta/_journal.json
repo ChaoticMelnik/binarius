@@ -645,6 +645,20 @@
       "when": 1793457003539,
       "tag": "0091_demo_to_real_seed",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1793462568671,
+      "tag": "0092_daily_summary",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1793462569308,
+      "tag": "0093_daily_summary_seed",
+      "breakpoints": true
     }
   ]
 }

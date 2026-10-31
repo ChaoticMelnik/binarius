@@ -89,6 +89,7 @@ describe('wakePlan (#686)', () => {
         help_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} },
         demo_to_real_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} },
       },
+      cards: { of: () => Promise.reject(new Error('no card in these tests')) },
       plan,
     });
     const open = async (index: number) => {

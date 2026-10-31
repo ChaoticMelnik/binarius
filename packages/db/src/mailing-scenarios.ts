@@ -4,6 +4,10 @@ import {
   ANALYSIS_UNUSED_UNTIL_MS,
   BonusRuleKind,
   BrokerAccountStatus,
+  DAILY_SUMMARY_HOUR,
+  DAILY_SUMMARY_TIME_ZONE,
+  dailySummaryPayloadSchema,
+  dailySummarySideSchema,
   DEMO_TO_REAL_CHAIN,
   DEMO_TO_REAL_SESSIONS,
   demoToRealPayloadSchema,
@@ -482,6 +486,71 @@ const demoToRealStep = (kind: NotificationKind): MailingScenario =>
     payload: demoToRealPayload,
   });
 
+// ---- The daily summary (#881, docs/mailing.md → The daily summary) -----------------------------
+
+// The day, spelled in DAILY_SUMMARY_TIME_ZONE so the session's TimeZone does not move it: the anchor
+// is the latest passed DAILY_SUMMARY_HOUR:00 on that zone's wall clock (a timestamp without time
+// zone), the summarised day the calendar day before it. Builders over `now`, so a test can pass a
+// literal moment.
+const DAILY_TZ = sql`${DAILY_SUMMARY_TIME_ZONE}`;
+const DAY_HOUR = sql`make_interval(hours => ${DAILY_SUMMARY_HOUR})`;
+const dailyLocal = (now: SQL) => sql`((${now}) at time zone ${DAILY_TZ})`;
+export const dailyAnchor = (now: SQL) =>
+  sql`(date_trunc('day', ${dailyLocal(now)} - ${DAY_HOUR}) + ${DAY_HOUR})`;
+export const dailyDayStart = (now: SQL) =>
+  sql`(${dailyAnchor(now)} - ${DAY_HOUR} - interval '1 day')`;
+const dailyDayEnd = (now: SQL) => sql`(${dailyAnchor(now)} - ${DAY_HOUR})`;
+// `column` (a timestamptz) lies in the summarised day
+export const dailyRange = (now: SQL, column: SQL | Column) =>
+  sql`(${column} >= ${dailyDayStart(now)} at time zone ${DAILY_TZ}
+    and ${column} < ${dailyDayEnd(now)} at time zone ${DAILY_TZ})`;
+export const dailyKey = (now: SQL) =>
+  sql`('daily_summary:' || to_char(${dailyDayStart(now)}, 'YYYY-MM-DD'))`;
+
+// the payload's keys as its schemas name them, so the message's parse and this SQL cannot drift
+const DAILY_KEY = dailySummaryPayloadSchema.keyof().enum;
+const DAILY_SIDE_KEY = dailySummarySideSchema.keyof().enum;
+
+// One mode's totals of the day: the sessions started in it (any status, a running one too) and the
+// settled trades created in it, single and session ones, with their summed profit as text (rule
+// 2). No reference to `users`: Postgres computes it once per statement (an InitPlan), however many
+// users the statement plans for.
+const daySide = (now: SQL, mode: TradeMode) => sql`(select jsonb_build_object(
+    ${literal(DAILY_SIDE_KEY.sessions)}, (select count(*)::int from ${tradingSessions}
+      where ${tradingSessions.mode} = ${literal(mode)}
+        and ${dailyRange(now, tradingSessions.startedAt)}),
+    ${scorePayload('score')},
+    ${literal(DAILY_SIDE_KEY.profit)}, score.profit::text)
+  from ${settledScore(sql`${tradeIntents.mode} = ${literal(mode)}
+    and ${dailyRange(now, tradeIntents.createdAt)}`)} score)`;
+
+// a session started or a settled trade created in the day, in either mode: two cheap probes, so the
+// filter does not compute the sides a second time
+const dayHasActivity = (now: SQL) => sql`(exists (select 1 from ${tradeIntents}
+    where ${tradeIntents.status} = ${literal(TradeIntentStatus.Settled)}
+      and ${dailyRange(now, tradeIntents.createdAt)})
+  or exists (select 1 from ${tradingSessions}
+    where ${dailyRange(now, tradingSessions.startedAt)}))`;
+
+// The card over a moment, so a test can plan and claim at a literal one: one job per user the bot
+// may mail and not blocked by the admin, keyed by the day, due at the anchor; a day without a
+// session or a settled trade has no fact. The key holds until the next anchor, so a job a `reduced`
+// window held back still goes out with its day on it; once the anchor moves it is cancelled at the
+// claim.
+export const dailySummaryAt = (now: SQL): MailingScenario => ({
+  facts: sql`(select ${dailyAnchor(now)} at time zone ${DAILY_TZ} as at,
+      to_char(${dailyDayStart(now)}, 'YYYY-MM-DD') as day,
+      ${daySide(now, TradeMode.Demo)} as demo,
+      ${daySide(now, TradeMode.Real)} as real
+    where ${dayHasActivity(now)})`,
+  afterMs: 0,
+  dedupeKey: dailyKey(now),
+  payload: sql`jsonb_build_object(${literal(DAILY_KEY.day)}, fact.day,
+    ${literal(DAILY_KEY.demo)}, fact.demo, ${literal(DAILY_KEY.real)}, fact.real)`,
+  stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)})`,
+  keyApplies: sql`(${notificationJobs.dedupeKey} = ${dailyKey(now)})`,
+});
+
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
   [NotificationKind.FirstSession1h]: firstSessionStep(NotificationKind.FirstSession1h),
@@ -567,6 +636,7 @@ export const MAILING_SCENARIOS = {
   [NotificationKind.DemoToReal1h]: demoToRealStep(NotificationKind.DemoToReal1h),
   [NotificationKind.DemoToReal24h]: demoToRealStep(NotificationKind.DemoToReal24h),
   [NotificationKind.DemoToReal72h]: demoToRealStep(NotificationKind.DemoToReal72h),
+  [NotificationKind.DailySummary]: dailySummaryAt(sql`now()`),
 } as const satisfies Record<NotificationKind, MailingScenario>;
 
 // The important kinds (MailingScenario.important), from the scenarios alone.

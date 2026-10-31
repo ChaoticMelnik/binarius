@@ -41,6 +41,8 @@ import { createMailingEngine } from './mailing/engine';
 import { DEMO_TO_REAL_BANNER_PATH } from './mailing/demo-to-real';
 import { HELP_BANNER_PATH } from './mailing/help-links';
 import { createPhotoMedia } from './mailing/photo-media';
+import { createCardMedia } from './mailing/card-media';
+import { renderDailyCard } from './mailing/daily-summary-card';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeListener } from './trading/session-notice-listener';
 import { createScanMedia } from './trading/scan-media';
@@ -384,7 +386,7 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
-// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879, #880); started
+// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879, #880, #881); started
 // with the other loops after listen(), stopped in phase 1
 const mailing = createMailingEngine({
   db,
@@ -400,6 +402,7 @@ const mailing = createMailingEngine({
       logger: app.log,
     }),
   },
+  cards: createCardMedia({ render: renderDailyCard, name: 'daily summary', logger: app.log }),
 });
 
 // docs/trading-mode.md → The automatic switch after a deposit (#686): switches a demo user to real

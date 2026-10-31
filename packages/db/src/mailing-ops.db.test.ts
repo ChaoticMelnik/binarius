@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   BonusRuleKind,
   BotLanguage,
   BrokerAccountStatus,
+  DAILY_SUMMARY_TIME_ZONE,
   DEMO_TO_REAL_CHAIN,
   DEMO_TO_REAL_SESSIONS,
   DepositEventStatus,
@@ -60,6 +62,10 @@ import {
   users,
 } from './schema/index';
 import {
+  dailyAnchor,
+  dailyKey,
+  dailyRange,
+  dailySummaryAt,
   MAILING_SCENARIOS,
   weeklyAnchor,
   weeklyKey,
@@ -71,7 +77,12 @@ import {
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { createTradeIntent } from './trade-intent-ops';
 import { DEPOSIT_BONUS_RULE_CODE } from './bonus-rule-ops';
-import { markTelegramBlocked, markTelegramReachable, setNotificationLevel } from './delivery-ops';
+import {
+  deliverable,
+  markTelegramBlocked,
+  markTelegramReachable,
+  setNotificationLevel,
+} from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
 import { grantReferralReward, lockReferralInviter } from './referral-reward-ops';
 import {
@@ -106,16 +117,22 @@ const SCAN = 50;
 const [STEP_1H, STEP_24H, STEP_72H] = FIRST_SESSION_CHAIN;
 // The help push (#879) shares the chain's fact: a case that counts a linked user's every job plans
 // without it, and its own cases are in «the help push».
+// The daily summary (#881) plans for every user: its own cases are in «the daily summary».
 const CHAIN_ERA_KINDS = Object.values(NotificationKind).filter(
-  (kind) => kind !== NotificationKind.HelpLinks,
+  (kind) => kind !== NotificationKind.HelpLinks && kind !== NotificationKind.DailySummary,
 );
 
-// The cutoff of every kind, `minutes` before now() on the database clock.
+// The cutoff of every kind, `minutes` before now() on the database clock. Without `kind` the daily
+// summary's stays: it plans the real clock's day for every user, and only its own block moves it.
 const plansFromMinutesAgo = async (minutes: number, kind?: NotificationKind): Promise<void> => {
   await tmp.db
     .update(notificationKinds)
     .set({ plansFrom: sql`now() - make_interval(mins => ${minutes})` })
-    .where(kind === undefined ? undefined : eq(notificationKinds.kind, kind));
+    .where(
+      kind === undefined
+        ? ne(notificationKinds.kind, NotificationKind.DailySummary)
+        : eq(notificationKinds.kind, kind),
+    );
 };
 
 interface Linked {
@@ -3308,5 +3325,259 @@ describe('the demo-to-real chain (#880)', () => {
     expect(await planMailingKind(tmp.db, OUT.kind)).toBeGreaterThanOrEqual(1);
     expect((await jobsOf(spent.userId)).map((job) => job.kind)).toContain(OUT.kind);
     expect(await trapped(OUT.kind, spent.userId)).toBe(0);
+  });
+});
+
+// #881 (docs/mailing.md → The daily summary)
+describe('the daily summary (#881)', () => {
+  const KIND = NotificationKind.DailySummary;
+  const moment = (text: string) => sql`${text}::timestamptz`;
+  const utcEpoch = (iso: string) => String(Date.parse(iso) / 1000);
+
+  // A Wednesday of 2024, 15:00 in Moscow: the summarised day is 2024-03-12 in Moscow, [2024-03-11
+  // 21:00Z, 2024-03-12 21:00Z). No other test touches 2024, and each case below sums a day of its
+  // own: the totals are every user's, so a day is one case's fixture.
+  const NOW = '2024-03-13 12:00:00+00';
+  const planDaily = (now = NOW) => planMailingKind(tmp.db, KIND, dailySummaryAt(moment(now)));
+  const dailyPlansFrom = (at: SQL) =>
+    tmp.db
+      .update(notificationKinds)
+      .set({ plansFrom: at })
+      .where(eq(notificationKinds.kind, KIND));
+  beforeAll(() => dailyPlansFrom(sql`'2024-01-01 00:00:00+00'::timestamptz`));
+  afterAll(() => dailyPlansFrom(sql`now() + interval '1 year'`));
+
+  const jobsOfKey = (key: string) =>
+    tmp.db
+      .select()
+      .from(notificationJobs)
+      .where(and(eq(notificationJobs.kind, KIND), eq(notificationJobs.dedupeKey, key)));
+  const keyJobsOf = async (userId: string) => kindJobsOf(userId, KIND);
+
+  // a session of `accountId` started at `startedAt`, stopped at `endedAt` or still running
+  const daySession = async (
+    accountId: string,
+    startedAt: string,
+    { mode = TradeMode.Demo, endedAt }: { mode?: TradeMode; endedAt?: string } = {},
+  ) => {
+    await tmp.db.insert(tradingSessions).values({
+      brokerAccountId: accountId,
+      mode,
+      settings: sessionSettings({ durationSec: 5 }),
+      startedAt: moment(startedAt),
+      ...(endedAt === undefined
+        ? {}
+        : {
+            status: TradingSessionStatus.Stopped,
+            stopReason: TradingSessionStopReason.Completed,
+            endedAt: moment(endedAt),
+          }),
+    });
+  };
+
+  // the anchor's instant and the key at `now`, under the session's time zone `zone`
+  const dayOf = (zone: string, now: string) =>
+    tmp.db.transaction(async (tx) => {
+      await tx.execute(sql.raw(`set local time zone '${zone}'`));
+      const result = await tx.execute<{ at: string; key: string }>(
+        sql`select extract(epoch from ${dailyAnchor(moment(now))} at time zone ${DAILY_SUMMARY_TIME_ZONE})::bigint::text
+            as at, ${dailyKey(moment(now))} as key`,
+      );
+      return result.rows[0]!;
+    });
+
+  const PROBES = [
+    ['2024-03-13 06:59:59+00', '2024-03-12T07:00:00Z', 'daily_summary:2024-03-11'],
+    ['2024-03-13 07:00:00+00', '2024-03-13T07:00:00Z', 'daily_summary:2024-03-12'],
+    ['2024-03-13 20:59:59+00', '2024-03-13T07:00:00Z', 'daily_summary:2024-03-12'],
+    ['2024-03-13 21:00:00+00', '2024-03-13T07:00:00Z', 'daily_summary:2024-03-12'],
+    ['2024-03-14 06:59:59+00', '2024-03-13T07:00:00Z', 'daily_summary:2024-03-12'],
+    ['2024-03-14 07:00:00+00', '2024-03-14T07:00:00Z', 'daily_summary:2024-03-13'],
+    ['2025-01-01 07:00:00+00', '2025-01-01T07:00:00Z', 'daily_summary:2024-12-31'],
+  ] as const;
+
+  it('DS1 anchors on the latest passed 10:00 in Moscow and keys the Moscow day before it', async () => {
+    for (const [now, at, key] of PROBES) {
+      expect([now, await dayOf('UTC', now)]).toEqual([now, { at: utcEpoch(at), key }]);
+    }
+  });
+
+  it.each(['Europe/Moscow', 'America/New_York'])(
+    'DS2 gives the same anchor and key under the session time zone %s',
+    async (zone) => {
+      for (const [now, at, key] of PROBES) {
+        expect([now, await dayOf(zone, now)]).toEqual([now, { at: utcEpoch(at), key }]);
+      }
+    },
+  );
+
+  it('DS3 counts the Moscow day: its 00:00 in, the next 00:00 out', async () => {
+    const result = await tmp.db.execute<{ inside: boolean[] }>(
+      sql`select array[
+        ${dailyRange(moment(NOW), moment('2024-03-11 21:00:00+00'))},
+        ${dailyRange(moment(NOW), moment('2024-03-12 20:59:59.999999+00'))},
+        ${dailyRange(moment(NOW), moment('2024-03-12 21:00:00+00'))},
+        ${dailyRange(moment(NOW), moment('2024-03-11 20:59:59.999999+00'))}] as inside`,
+    );
+    expect(result.rows[0]!.inside).toEqual([true, true, false, false]);
+  });
+
+  it('DS4 plans one job per user the bot may mail, the day’s totals of each mode apart, due at the anchor', async () => {
+    const a = await retained();
+    for (const profit of ['1', '3', '-1', '0']) {
+      await trade(a, { createdAt: moment('2024-03-12 09:00:00+00'), profit });
+    }
+    await trade(a, {
+      createdAt: moment('2024-03-12 09:00:00+00'),
+      status: TradeIntentStatus.Rejected,
+    });
+    await trade(a, { createdAt: moment('2024-03-11 20:59:59+00') });
+    await daySession(a.accountId, '2024-03-12 10:00:00+00');
+    const b = await retained({ tradingMode: TradeMode.Real });
+    await trade(b, { createdAt: moment('2024-03-12 20:59:59+00'), mode: TradeMode.Real, profit: '-2.5' });
+    await daySession(b.accountId, '2024-03-12 11:00:00+00', {
+      mode: TradeMode.Real,
+      endedAt: '2024-03-12 11:30:00+00',
+    });
+    await daySession(b.accountId, '2024-03-12 21:30:00+00', { endedAt: '2024-03-12 21:40:00+00' });
+    await planDaily();
+
+    const payload = {
+      day: '2024-03-12',
+      demo: { sessions: 1, settled: 4, won: 2, lost: 1, tied: 1, profit: '3.00000000' },
+      real: { sessions: 1, settled: 1, won: 0, lost: 1, tied: 0, profit: '-2.50000000' },
+    };
+    for (const user of [a, b]) {
+      expect((await keyJobsOf(user.userId)).map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+        [NotificationJobStatus.Pending, 'daily_summary:2024-03-12', payload],
+      ]);
+    }
+    const jobs = await jobsOfKey('daily_summary:2024-03-12');
+    const mailable = await tmp.db.execute<{ count: number }>(
+      sql`select count(*)::int as count from ${users}
+        where ${users.status} = ${UserStatus.Active} and ${deliverable()}`,
+    );
+    expect(jobs).toHaveLength(mailable.rows[0]!.count);
+    expect(jobs.filter((job) => !isDeepStrictEqual(job.payload, payload))).toEqual([]);
+    expect(new Set(jobs.map((job) => job.scheduledAt.toISOString()))).toEqual(
+      new Set(['2024-03-13T07:00:00.000Z']),
+    );
+  });
+
+  it('DS5 plans nothing for a day without a session or a settled trade', async () => {
+    const user = await retained();
+    await trade(user, {
+      createdAt: moment('2024-03-19 09:00:00+00'),
+      status: TradeIntentStatus.Rejected,
+    });
+    expect(await planDaily('2024-03-20 12:00:00+00')).toBe(0);
+    expect(await jobsOfKey('daily_summary:2024-03-19')).toEqual([]);
+  });
+
+  it('DS6 a day with a session alone: zero trades and a zero result, the other mode all zeros', async () => {
+    const user = await retained();
+    await daySession(user.accountId, '2024-04-09 09:00:00+00', { endedAt: '2024-04-09 09:10:00+00' });
+    await planDaily('2024-04-10 12:00:00+00');
+    expect((await keyJobsOf(user.userId)).map((job) => job.payload)).toEqual([
+      {
+        day: '2024-04-09',
+        demo: { sessions: 1, settled: 0, won: 0, lost: 0, tied: 0, profit: '0' },
+        real: { sessions: 0, settled: 0, won: 0, lost: 0, tied: 0, profit: '0' },
+      },
+    ]);
+  });
+
+  it('DS7 a second pass plans nothing more', async () => {
+    const user = await retained();
+    await planDaily();
+    expect(await planDaily()).toBe(0);
+    expect(await keyJobsOf(user.userId)).toHaveLength(1);
+  });
+
+  it('DS8 the claim cancels a job of another day and keeps the day’s until the next anchor', async () => {
+    const user = await retained();
+    const stale = await insertJob(user.userId, KIND, 'daily_summary:2020-01-01', {
+      status: NotificationJobStatus.Pending,
+    });
+    expect(await claimOnly(stale.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(stale.id)).status).toBe(NotificationJobStatus.Canceled);
+
+    const current = await insertJob(user.userId, KIND, 'daily_summary:2024-03-12', {
+      status: NotificationJobStatus.Pending,
+    });
+    const appliesAt = async (now: string) => {
+      const scenario = dailySummaryAt(moment(now));
+      const result = await tmp.db.execute<{ applies: boolean }>(
+        sql`select coalesce(${scenario.stillApplies} and ${scenario.keyApplies}, false) as applies
+          from ${notificationJobs} join ${users} on ${users.id} = ${notificationJobs.userId}
+          where ${notificationJobs.id} = ${current.id}`,
+      );
+      return result.rows[0]!.applies;
+    };
+    expect(await appliesAt(NOW)).toBe(true);
+    expect(await appliesAt('2024-03-14 06:59:59+00')).toBe(true);
+    expect(await appliesAt('2024-03-14 07:00:00+00')).toBe(false);
+  });
+
+  it('DS9 CUT plans nothing for a day anchored before the kind’s plans_from', async () => {
+    const user = await retained();
+    await trade(user, { createdAt: moment('2024-05-14 09:00:00+00') });
+    await dailyPlansFrom(sql`'2024-05-15 07:00:01+00'::timestamptz`);
+    try {
+      expect(await planDaily('2024-05-15 12:00:00+00')).toBe(0);
+    } finally {
+      await dailyPlansFrom(sql`'2024-01-01 00:00:00+00'::timestamptz`);
+    }
+    expect(await planDaily('2024-05-15 12:00:00+00')).toBeGreaterThan(0);
+    expect(await keyJobsOf(user.userId)).toHaveLength(1);
+  });
+
+  it('DS10 plans nothing for a user with mailings off, who blocked the bot, or blocked by the admin', async () => {
+    const mailed = await retained();
+    await trade(mailed, { createdAt: moment('2024-06-11 09:00:00+00') });
+    const off = await retained();
+    await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+    const gone = await retained();
+    await markTelegramBlocked(tmp.db, gone.telegramUserId);
+    const banned = await retained();
+    await tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, banned.userId));
+    await planDaily('2024-06-12 12:00:00+00');
+    expect(await keyJobsOf(mailed.userId)).toHaveLength(1);
+    for (const user of [off, gone, banned]) expect(await keyJobsOf(user.userId)).toEqual([]);
+  });
+
+  it('DS11 the engine plans and claims the scenario over now()', () => {
+    const dialect = new PgDialect();
+    const render = (scenario: MailingScenario) =>
+      [scenario.facts, scenario.dedupeKey, scenario.payload!, scenario.stillApplies, scenario.keyApplies].map(
+        (part) => dialect.sqlToQuery(part),
+      );
+    expect(render(MAILING_SCENARIOS[KIND])).toEqual(render(dailySummaryAt(sql`now()`)));
+  });
+
+  // the totals reference no user: an InitPlan computed once per statement, not a scan per user
+  it('DS12 the day’s totals are scanned once per statement, never per user', async () => {
+    const result = await tmp.db.execute<{ 'QUERY PLAN': unknown }>(
+      sql`explain (format json) select ${users.id}, fact.* from ${users}
+        cross join lateral ${dailySummaryAt(moment(NOW)).facts} fact`,
+    );
+    interface PlanNode {
+      'Relation Name'?: string;
+      'Parent Relationship'?: string;
+      Plans?: PlanNode[];
+    }
+    const [root] = result.rows[0]!['QUERY PLAN'] as [{ Plan: PlanNode }];
+    const scans: { relation: string; once: boolean }[] = [];
+    const walk = (node: PlanNode, once: boolean) => {
+      const here = once || node['Parent Relationship'] === 'InitPlan';
+      const relation = node['Relation Name'];
+      if (relation === 'trade_intents' || relation === 'trading_sessions') {
+        scans.push({ relation, once: here });
+      }
+      for (const child of node.Plans ?? []) walk(child, here);
+    };
+    walk(root.Plan, false);
+    expect(scans.length).toBeGreaterThan(0);
+    expect(scans.filter((scan) => !scan.once)).toEqual([]);
   });
 });

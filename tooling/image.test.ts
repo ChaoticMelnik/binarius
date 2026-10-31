@@ -42,7 +42,7 @@ const migrationSql = readdirSync(path.join(root, 'packages/db/drizzle')).find((f
 const RUNTIME_FILES = [
   `packages/db/drizzle/${migrationSql ?? 'no-sql-file'}`,
   'packages/db/drizzle/meta/_journal.json',
-  'apps/bot/fonts/Inter-Regular.ttf',
+  'packages/shared/fonts/Inter-Regular.ttf',
   'apps/bot/src/assets.ts',
   'apps/bot/src/assets',
   'packages/shared/assets',

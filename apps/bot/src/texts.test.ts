@@ -176,6 +176,7 @@ const inputsOf = (text: string): Record<BotTextVarName, unknown> => ({
   rewardTokens: '50',
   nudgeTokens: '50',
   sessions: text,
+  date: text,
   tokensPerUsd: '0.5',
   minAmountUsd: '10',
   maxTokens: '500',

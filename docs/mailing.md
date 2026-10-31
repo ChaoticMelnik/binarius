@@ -16,7 +16,8 @@ three days without activity, a day after the last session, a weekly summary of t
 and a second word two days after the tokens ran out, the **help push** (#879), one picture
 with the links to the bot's channel, its reviews and the manager, 2 hours after the connect, and
 the **demo-to-real chain** (#880), three pushes toward a first deposit after the third demo
-session.
+session, and the **daily summary** (#881), one drawn card a day with the previous Moscow day's
+totals of all users, demo and real apart, to every user the bot may mail.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts apps/backend/src/trading/signal-routes.test.ts   # no database or Redis
@@ -34,7 +35,9 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `realModeByDepositPayloadSchema` (#686), `INACTIVE_AFTER_MS`, `INACTIVE_REPEAT_DAYS`,
   `SESSION_IDLE_AFTER_MS`, `WEEKLY_SUMMARY_HOUR_UTC`, `TOKENS_OUT_REPEAT_AFTER_MS`,
   `sessionIdlePayloadSchema` and `weeklySummaryPayloadSchema` (#124), `HELP_LINKS_AFTER_MS` (#879),
-  `DEMO_TO_REAL_SESSIONS`, `DEMO_TO_REAL_CHAIN` and `demoToRealPayloadSchema` (#880), and
+  `DEMO_TO_REAL_SESSIONS`, `DEMO_TO_REAL_CHAIN` and `demoToRealPayloadSchema` (#880),
+  `DAILY_SUMMARY_HOUR`, `DAILY_SUMMARY_TIME_ZONE`, `dailySummarySideSchema` and
+  `dailySummaryPayloadSchema` (#881), and
   `MAILING_MIN_OFFSET_MS`, the earliest offset among the kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
@@ -46,7 +49,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   user goes through `oneFact`: its facts are one row, its key reads the user's row only and the
   claim compares it directly. `weeklyAnchor`, `weeklyRange`, `weeklyKey` and `weeklyTimely` (#124)
   are the weekly summary's week as builders over a moment, and `weeklySummaryAt` the scenario over a
-  moment (the entry is `weeklySummaryAt(now())`), exported for the tests.
+  moment (the entry is `weeklySummaryAt(now())`), exported for the tests; `dailyAnchor`,
+  `dailyDayStart`, `dailyRange`, `dailyKey` and `dailySummaryAt` are the daily summary's (#881).
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs` (one `planMailingKind` per
   kind; a test passes `planMailingKind` a scenario built over a literal moment), `claimMailingJob`,
   `settleMailingJob`. The planner and the claim take `kinds`, the kinds the process sends (all by
@@ -56,18 +60,25 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   claim; every kind is written in that language, #686, #633); the
   chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the same as the link
   push's re-login, the analysis reminder's a new analysis. A message is a text
-  (`ClientPushMessage`) or a picture with a caption (`MailingPhotoMessage`, #879), which names its
-  picture (`MailingPhoto`) and leaves the file to the engine.
+  (`ClientPushMessage`), a picture with a caption (`MailingPhotoMessage`, #879), which names its
+  picture (`MailingPhoto`) and leaves the file to the engine, or a picture drawn for the message
+  (`MailingCardMessage`, #881), which carries its SVG and leaves the render and the file to the
+  engine.
 - `apps/backend/src/mailing/help-links.ts` — the help push's links (`HelpLinks`, from the env),
   `enabledKinds`, the keyboard and `managerButton`, the mailing kinds' shared «💬 Написать
   менеджеру» (#879, #880); `apps/backend/src/mailing/photo-media.ts` — `createPhotoMedia`, a
   picture's file and its `file_id` (Rule 58); `apps/backend/src/mailing/demo-to-real.ts` — the
   chain's banner path and keyboard (#880), its text `demoToRealText` in
-  `packages/shared/src/demo-to-real-text.ts`.
+  `packages/shared/src/demo-to-real-text.ts`; `apps/backend/src/mailing/daily-summary-card.ts` —
+  the daily summary's card (model, SVG, `renderDailyCard`) and `card-media.ts` — `createCardMedia`,
+  a drawn picture's PNG and `file_id` by the hash of its SVG (#881); the caption `dailySummaryCaption`
+  in `packages/shared/src/daily-summary-text.ts`, the SVG helpers in
+  `packages/shared/src/svg-card.ts`.
 - `apps/backend/src/mailing/engine.ts` — the two loops, the pacer, the failure policy and
   `wakePlan()` (#686, The planner → The wake); its
-  `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, its `helpLinks` the env's and its `photos` one
-  `createPhotoMedia` per picture, passed once by `apps/backend/src/index.ts`;
+  `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, its `helpLinks` the env's, its `photos` one
+  `createPhotoMedia` per picture and its `cards` one `createCardMedia` (#881), passed once by
+  `apps/backend/src/index.ts`;
   `apps/backend/src/auth/client-push.ts` — `sendMailing` and `sendMailingPhoto` (#879), beside the
   link push.
 - `apps/backend/src/timing.ts` — the `MAILING_*` numbers and their links in `TIMING_CHAIN_HOLDS`.
@@ -133,7 +144,10 @@ sessions, weeks and sent `tokens_out` jobs after the deploy count, so the deploy
 the whole base, and the first weekly summary goes out on the first Monday after it. The help push's
 row is seeded by `0089_help_links_seed.sql` (#879): only accounts connected after its deploy get it.
 The demo-to-real chain's three rows are seeded by `0091_demo_to_real_seed.sql` in one statement
-(#880): only users whose third demo session ends after its deploy get the chain.
+(#880): only users whose third demo session ends after its deploy get the chain. The daily
+summary's row is seeded by `0093_daily_summary_seed.sql` (#881): its fact is the day's anchor, so
+the first card goes out at the first 10:00 Moscow time after the deploy (the deploy's day whole
+when the migration ran before 10:00, else the next day's).
 
 ## The analysis reminder (#484)
 
@@ -581,6 +595,71 @@ Tests: `mailing-ops.db.test.ts` DR1–DR12 (its CUT is DR9), `engine.db.test.ts`
 `packages/shared/src/demo-to-real-text.test.ts` DT1–DT5, `bot-text-format.test.ts` F-rate,
 `tooling/demo-to-real-banner.test.ts` DB1–DB3, the pin in `timing.test.ts`.
 
+## The daily summary (#881)
+
+| Kind            | Sent                                             | Message (`mailing` group)                                                | Buttons                                          |
+| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------ |
+| `daily_summary` | every day at 10:00 Moscow time, the day before's | the drawn card; `dailySummaryTitle`, `…Demo`, `…Real`, `…Entry`, caption | «🎮 Демо-торговля» («🚀 Торговать» in real mode) |
+
+The manager's answers of 2026-10-31 (issue #881, the owner may revise them at review): four
+metrics per mode, 10:00 `Europe/Moscow` with the Moscow calendar day, every user the bot may mail.
+Top traders are out of scope (an opt-in of the users and the owner's decision first).
+
+- **The day.** `DAILY_SUMMARY_HOUR` (10) and `DAILY_SUMMARY_TIME_ZONE` (`Europe/Moscow`) in
+  `mailing.ts`. The anchor is the latest passed 10:00 on Moscow's wall clock, the day the Moscow
+  calendar day before it: at 2024-03-13 06:59:59Z (09:59:59 MSK) the anchor is 2024-03-12 07:00Z
+  and the key `daily_summary:2024-03-11`; at 07:00:00Z they are 2024-03-13 07:00Z and
+  `daily_summary:2024-03-12`, and stay so until 2024-03-14 07:00Z. The window is
+  [00:00, 24:00) MSK of that day; the session's TimeZone does not move it (DS1–DS3). Moscow has
+  no DST, so a day is 24 h (Rule 69).
+- **The figures**, per mode (`trade_intents.mode`, `trading_sessions.mode`), never mixed:
+  `sessions`, the sessions started in the day (any status, a running one too); `settled`, `won`,
+  `lost`, `tied`, the settled trades created in the day, single and session ones, by the sign of
+  the profit, as the weekly summary counts them; `profit`, their summed profit as text (Rule 2),
+  signed. The set is fixed: a figure is shown whatever its sign, never dropped on a bad day.
+- **No activity, no card.** A day without a session started or a settled trade created, in either
+  mode, has no fact: nothing is planned. A day with one mode only shows the other as zeros.
+- **Once per statement.** The totals are everyone's: the fact is scalar subqueries with no
+  reference to `users`, which Postgres runs once per statement (an `InitPlan`; DS12 holds the
+  plan's shape), so the INSERT computes them once however many users it plans for.
+- **Whom.** Every user not blocked by the admin whom the bot may mail (`deliverable()` at
+  planning, `acceptsMailing()` at the claim), with or without an account: an ordinary kind.
+  `off` and the bot block cancel the pending job; `reduced` holds it for the window.
+- **One card a day.** The key is `daily_summary:<YYYY-MM-DD>` of the day; it holds until the next
+  anchor, so a job the `reduced` window held goes out late with its date on it, and at the next
+  10:00 a job still pending is cancelled at the claim.
+- **The payload** (`dailySummaryPayloadSchema`): `day` and `demo`, `real`, each
+  `{ sessions, settled, won, lost, tied, profit }`, as the planning saw them.
+- **The card** (`daily-summary-card.ts`): 1200 × 675, the session card's palette
+  (`CARD_COLOR`), the title and the date, then the demo and the real column: sessions, trades,
+  won with its whole percent of the settled (none at zero trades) and the result with its sign,
+  green, red or grey. The labels are plain keys of the catalog (`dailyCard*`, each with the width
+  of its slot), read at the build, overrides escaped. It is rendered by resvg's `renderAsync` (the
+  libuv pool, not the event loop; DC5) with the fonts in `packages/shared/fonts` only.
+- **One upload per picture.** The engine's `cards` (`createCardMedia`) keys a card by the SHA-256
+  of its SVG: the first job of a key renders the PNG and uploads it, the rest send the `file_id`
+  the answer brought; a second language or a changed override is another key. At most
+  `CARD_MEDIA_KEEP` (4) keys are kept, the oldest dropped with its id.
+- **The caption** (`dailySummaryCaption`, shared, described as `dailySummary` in
+  `BOT_TEXT_MESSAGES`): the title with the date, an empty line, the demo and the real lines («🎮
+  Демо: 4 сделки — 2 в плюс, 1 в минус, 1 в ноль, результат +$3.00.») and the line about the
+  button. The button is the entry by the user's mode, the weekly summary's.
+
+What becomes of a job of this kind:
+
+| Outcome                                                        | The job                                                                         |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| a day without a session or a settled trade                     | never created                                                                   |
+| the planner: notifications `off`, bot blocked, admin-blocked   | not created                                                                     |
+| the claim: the key is the current day's                        | `sent` with `outcome_unknown`, then the sender's table                          |
+| the claim: the anchor moved (a held `reduced` job), or blocked | `canceled` in the same statement                                                |
+| the card fails to render                                       | `pending` again after `MAILING_RETRY_MS`, attempt counted (`mailing not built`) |
+| Telegram refuses the file                                      | its `file_id` forgotten, `pending` again; the retry uploads the kept PNG        |
+
+Tests: `mailing-ops.db.test.ts` DS1–DS12 (its CUT is DS9), `engine.db.test.ts` E-DS1–E-DS3,
+`messages.test.ts` DM-DS1–DM-DS6, `daily-summary-card.test.ts` DC1–DC5, `card-media.test.ts`
+CM1–CM6, `packages/shared/src/daily-summary-text.test.ts` DT-DS1–DT-DS3, `svg-card.test.ts`
+S1–S3, `mailing.test.ts` (shared).
 ## The planner
 
 Once at `start()` (#874, Rule 65: it reads only the database) and then every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
@@ -593,7 +672,7 @@ scenario applies — one job per row of the kind's `facts` (`cross join lateral`
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
 `tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`; `inactive_3d:<epoch>`,
-`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`; `demo_to_real:1h`, `…:24h`, `…:72h`) makes it idempotent: a second run, a second backend process or a restart
+`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`; `demo_to_real:1h`, `…:24h`, `…:72h`; `daily_summary:<YYYY-MM-DD>`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 A user whose key already has a job (for a `replansCanceled` kind, one not canceled) is left out in
@@ -630,17 +709,18 @@ a time, each by one statement (`claimMailingJob`):
 
 Then it sends through the client push — a text by `sendMailing`, a picture by `sendMailingPhoto`
 (#879: the file, or its `file_id` once known; a refused file forgets the id before the outcome
-below, so the retry uploads it) — and writes the outcome:
+below, so the retry uploads it) — and writes the outcome. A picture drawn for the message (#881,
+`MailingCardMessage`) is rendered while the message is built (`cards.of`), before anything
+reaches Telegram, so a render that fails is a message not built:
 
-| Outcome                                              | The job                                                                                                               |
-| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Telegram accepted                                    | `sent`, `last_error` cleared                                                                                          |
-| 403                                                  | `failed`, attempt counted; `recordTelegramSendFailure` marks the user unreachable and cancels their pending jobs (M7) |
-| 429                                                  | `pending` again after `retry_after`, no attempt counted; the sender pauses for `retry_after` (M8)                     |
-| another refusal (4xx), or a text that fails to build | `pending` again after `MAILING_RETRY_MS` (5 min), attempt counted; `failed` at `MAILING_MAX_ATTEMPTS` (3)             |
-| no answer (a timeout, a transport error), a 5xx      | left `sent` with `outcome_unknown`: never sent again (M9); the batch goes on (Accepted risks)                         |
-| the process died after the claim                     | the same: `sent` with `outcome_unknown`, never sent again (M11)                                                       |
-
+| Outcome                                                                           | The job                                                                                                               |
+| --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Telegram accepted                                                                 | `sent`, `last_error` cleared                                                                                          |
+| 403                                                                               | `failed`, attempt counted; `recordTelegramSendFailure` marks the user unreachable and cancels their pending jobs (M7) |
+| 429                                                                               | `pending` again after `retry_after`, no attempt counted; the sender pauses for `retry_after` (M8)                     |
+| another refusal (4xx), a text that fails to build, or a card that fails to render | `pending` again after `MAILING_RETRY_MS` (5 min), attempt counted; `failed` at `MAILING_MAX_ATTEMPTS` (3)             |
+| no answer (a timeout, a transport error), a 5xx                                   | left `sent` with `outcome_unknown`: never sent again (M9); the batch goes on (Accepted risks)                         |
+| the process died after the claim                                                  | the same: `sent` with `outcome_unknown`, never sent again (M11)                                                       |
 Such a send may have been delivered: a lost reminder is preferred to a duplicate. An unknown
 answer does not stop the batch, so an outage loses every job claimed while it lasts (Accepted
 risks). `last_error` holds a name and a code only (`GrammyError:403`, rule 8); the log line has the
@@ -718,10 +798,20 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
    `createPhotoMedia` in the engine's `photos` (`Record<MailingPhoto, PhotoMedia>`: a picture
    without one does not compile). A kind the env can switch off: its condition in `enabledKinds`
    (`help-links.ts`; the help push without a link, the demo-to-real chain without the cashier,
-   #880), so it is neither planned nor claimed while off.
+   #880), so it is neither planned nor claimed while off. A kind whose picture is drawn from the
+   payload (#881): a `MailingCardMessage` with the SVG; the engine's `cards` renders and uploads it
+   once per distinct SVG.
 
 ## Accepted risks
 
+- The daily summary (#881): its PNGs and `file_id`s live in the process's memory, so each restart
+  and each second process renders and uploads a card once more. Between 00:00 and 10:00 Moscow time
+  the key is still the day before yesterday's: a user who becomes mailable then, or whose `reduced`
+  window frees then, gets that day's card, with its date on it. For a `reduced` user the card
+  takes the day's window and moves the other kinds a day later; for a `full` one it comes beside
+  them. The day's window is a sequential scan of `trade_intents` and `trading_sessions` (no index
+  on `created_at`/`started_at`), once a day per planner tick that finds new users — stated for the
+  pilot's tables, not measured.
 - The help push (#879): its `file_id` lives in the process's memory, so each restart and each
   second process uploads the banner once (~180 KB); a job left `pending` after the links were
   removed goes out when they are back, however late; for a `reduced` user it takes the window and

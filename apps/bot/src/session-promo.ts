@@ -1,15 +1,18 @@
 import { readFileSync } from 'node:fs';
 import {
   BOT_TEXT_CATALOG,
+  CARD_COLOR,
   formatPrice,
   formatSignedUsd,
   pairLabel,
+  round,
+  svgText,
   TradeAction,
   type SessionShare,
   type TradingSessionView,
 } from '@binarius/shared';
 import { PROMO_LOGO_PATH } from './assets';
-import { COLOR, escapeXml, fitSize, round, toneOf, type SessionCardTone } from './session-card';
+import { toneOf, type SessionCardTone } from './session-card';
 import { sessionAssetLabel, sessionPromoLabels, sessionPromoWhen } from './texts';
 
 // The promo card shared by «📤 Поделиться» (#538, docs/bot-session.md → Sharing the card): a
@@ -112,23 +115,8 @@ const LOGO_GAP = 24;
 const BRAND_CENTER_Y = 1050;
 const LOGO_HREF = `data:image/png;base64,${readFileSync(PROMO_LOGO_PATH).toString('base64')}`;
 
-interface TextOptions {
-  x: number;
-  y: number;
-  width: number;
-  size: number;
-  bold?: boolean;
-  fill: string;
-  anchor?: 'start' | 'middle' | 'end';
-}
-
-const text = (value: string, { x, y, width, size, bold = false, fill, anchor }: TextOptions) =>
-  `<text x="${round(x)}" y="${round(y)}" font-size="${String(fitSize(value, width, size, bold))}"${
-    bold ? ' font-weight="700"' : ''
-  } fill="${fill}"${anchor === undefined ? '' : ` text-anchor="${anchor}"`}>${escapeXml(value)}</text>`;
-
 const circle = (x: number, y: number, fill: string) =>
-  `<circle cx="${round(x)}" cy="${round(y)}" r="${String(MARKER_RADIUS)}" fill="${fill}" stroke="${COLOR.background}" stroke-width="2"/>`;
+  `<circle cx="${round(x)}" cy="${round(y)}" r="${String(MARKER_RADIUS)}" fill="${fill}" stroke="${CARD_COLOR.background}" stroke-width="2"/>`;
 
 // The badge's width follows its label (an override up to its limit), from the default label's up
 // to half the card; the arrow is a path, since resvg drops a glyph Inter lacks without a word.
@@ -146,19 +134,19 @@ function badge(direction: TradeAction, label: string): { svg: string; width: num
     direction === TradeAction.Up
       ? `M${round(arrowLeft)} ${round(middle + half * 0.8)} L${round(arrowLeft + half)} ${round(middle - half * 0.8)} L${round(arrowLeft + BADGE_ARROW)} ${round(middle + half * 0.8)} Z`
       : `M${round(arrowLeft)} ${round(middle - half * 0.8)} L${round(arrowLeft + half)} ${round(middle + half * 0.8)} L${round(arrowLeft + BADGE_ARROW)} ${round(middle - half * 0.8)} Z`;
-  const fill = direction === TradeAction.Up ? COLOR.win : COLOR.loss;
+  const fill = direction === TradeAction.Up ? CARD_COLOR.win : CARD_COLOR.loss;
   return {
     width,
     svg: [
       `<rect data-badge="${direction}" x="${round(left)}" y="${String(BADGE_TOP)}" width="${round(width)}" height="${String(BADGE_HEIGHT)}" rx="${String(BADGE_HEIGHT / 2)}" fill="${fill}"/>`,
-      `<path d="${arrow}" fill="${COLOR.text}"/>`,
-      text(label, {
+      `<path d="${arrow}" fill="${CARD_COLOR.text}"/>`,
+      svgText(label, {
         x: arrowLeft + BADGE_ARROW + BADGE_GAP,
         y: middle + BADGE_TEXT_SIZE * 0.36,
         width: textWidth,
         size: BADGE_TEXT_SIZE,
         bold: true,
-        fill: COLOR.text,
+        fill: CARD_COLOR.text,
       }),
     ].join(''),
   };
@@ -166,27 +154,27 @@ function badge(direction: TradeAction, label: string): { svg: string; width: num
 
 export function sessionPromoSvg(model: SessionPromoModel): string {
   const parts: string[] = [
-    `<rect width="${String(SESSION_PROMO_WIDTH)}" height="${String(SESSION_PROMO_HEIGHT)}" fill="${COLOR.background}"/>`,
+    `<rect width="${String(SESSION_PROMO_WIDTH)}" height="${String(SESSION_PROMO_HEIGHT)}" fill="${CARD_COLOR.background}"/>`,
   ];
   const shown = model.direction === null ? null : badge(model.direction, model.directionLabel);
   if (shown !== null) parts.push(shown.svg);
   parts.push(
-    text(model.asset, {
+    svgText(model.asset, {
       x: PAD,
       y: 124,
       width: INNER - (shown === null ? 0 : shown.width + 24),
       size: 56,
       bold: true,
-      fill: COLOR.text,
+      fill: CARD_COLOR.text,
     }),
-    text(model.resultLabel, { x: PAD, y: 250, width: INNER, size: 38, fill: COLOR.muted }),
-    text(model.result, {
+    svgText(model.resultLabel, { x: PAD, y: 250, width: INNER, size: 38, fill: CARD_COLOR.muted }),
+    svgText(model.result, {
       x: PAD,
       y: 370,
       width: INNER,
       size: 120,
       bold: true,
-      fill: COLOR[model.resultTone],
+      fill: CARD_COLOR[model.resultTone],
     }),
   );
 
@@ -207,37 +195,40 @@ export function sessionPromoSvg(model: SessionPromoModel): string {
     const entry = { x: xOf(2 * index), y: yOf(point.open) };
     const exit = { x: xOf(2 * index + 1), y: yOf(point.close) };
     line.push(`${round(entry.x)},${round(entry.y)}`, `${round(exit.x)},${round(exit.y)}`);
-    markers.push(circle(entry.x, entry.y, COLOR.entry), circle(exit.x, exit.y, COLOR[point.tone]));
+    markers.push(
+      circle(entry.x, entry.y, CARD_COLOR.entry),
+      circle(exit.x, exit.y, CARD_COLOR[point.tone]),
+    );
   });
   if (line.length > 0) {
     parts.push(
-      `<line x1="${String(PAD)}" y1="${String(CHART_BOTTOM + 70)}" x2="${String(SESSION_PROMO_WIDTH - PAD)}" y2="${String(CHART_BOTTOM + 70)}" stroke="${COLOR.grid}" stroke-width="2"/>`,
-      `<polyline points="${line.join(' ')}" fill="none" stroke="${COLOR.line}" stroke-width="4" stroke-linejoin="round"/>`,
+      `<line x1="${String(PAD)}" y1="${String(CHART_BOTTOM + 70)}" x2="${String(SESSION_PROMO_WIDTH - PAD)}" y2="${String(CHART_BOTTOM + 70)}" stroke="${CARD_COLOR.grid}" stroke-width="2"/>`,
+      `<polyline points="${line.join(' ')}" fill="none" stroke="${CARD_COLOR.line}" stroke-width="4" stroke-linejoin="round"/>`,
       ...markers,
     );
     const first = model.points[0];
     const last = model.points.at(-1);
     if (model.entryPrice !== null && first !== undefined) {
       parts.push(
-        text(model.entryPrice, {
+        svgText(model.entryPrice, {
           x: xOf(0),
           // under the first point: the line leaves it upwards as often as not
           y: yOf(first.open) + 48,
           width: INNER / 3,
           size: 30,
-          fill: COLOR.muted,
+          fill: CARD_COLOR.muted,
           anchor: 'start',
         }),
       );
     }
     if (model.exitPrice !== null && last !== undefined) {
       parts.push(
-        text(model.exitPrice, {
+        svgText(model.exitPrice, {
           x: xOf(prices.length - 1),
           y: yOf(last.close) - 26,
           width: INNER / 3,
           size: 30,
-          fill: COLOR.text,
+          fill: CARD_COLOR.text,
           anchor: 'end',
         }),
       );
@@ -246,16 +237,16 @@ export function sessionPromoSvg(model: SessionPromoModel): string {
 
   parts.push(
     `<image x="${String(PAD)}" y="${String(BRAND_CENTER_Y - LOGO_SIZE / 2)}" width="${String(LOGO_SIZE)}" height="${String(LOGO_SIZE)}" href="${LOGO_HREF}"/>`,
-    text(model.brand, {
+    svgText(model.brand, {
       x: PAD + LOGO_SIZE + LOGO_GAP,
       y: BRAND_CENTER_Y + 18,
       width: INNER - LOGO_SIZE - LOGO_GAP,
       size: 52,
       bold: true,
-      fill: COLOR.text,
+      fill: CARD_COLOR.text,
     }),
-    text(model.call, { x: PAD, y: 1180, width: INNER, size: 38, fill: COLOR.text }),
-    text(model.when, { x: PAD, y: 1270, width: INNER, size: 30, fill: COLOR.muted }),
+    svgText(model.call, { x: PAD, y: 1180, width: INNER, size: 38, fill: CARD_COLOR.text }),
+    svgText(model.when, { x: PAD, y: 1270, width: INNER, size: 30, fill: CARD_COLOR.muted }),
   );
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${String(SESSION_PROMO_WIDTH)}" height="${String(SESSION_PROMO_HEIGHT)}" viewBox="0 0 ${String(SESSION_PROMO_WIDTH)} ${String(SESSION_PROMO_HEIGHT)}" font-family="Inter">${parts.join('')}</svg>`;

@@ -5,6 +5,8 @@ import {
   callbackButton,
   commandRetryCallbackData,
   cycleDoorCallbackData,
+  dailySummaryCaption,
+  dailySummaryPayloadSchema,
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
   demoToRealPayloadSchema,
@@ -29,6 +31,7 @@ import {
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
 import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/texts';
+import { dailyCardModel, dailyCardSvg } from './daily-summary-card';
 import { demoToRealKeyboard } from './demo-to-real';
 import { helpLinksConfigured, helpLinksKeyboard, type HelpLinks } from './help-links';
 
@@ -55,7 +58,15 @@ export interface MailingPhotoMessage {
   reply_markup: BotKeyboard;
 }
 
-export type MailingMessage = ClientPushMessage | MailingPhotoMessage;
+// A mailing with a picture drawn for it (#881): the SVG, which the engine renders and uploads once
+// per distinct picture (MailingEngineDeps.cards), the caption carrying the text.
+export interface MailingCardMessage {
+  card: string;
+  caption: TelegramHtml;
+  reply_markup: BotKeyboard;
+}
+
+export type MailingMessage = ClientPushMessage | MailingPhotoMessage | MailingCardMessage;
 
 // The first-session chain leads into the demo (#320's entry), the path to a session.
 const chainStep =
@@ -239,6 +250,21 @@ const demoToRealStep =
       : { text, reply_markup };
   };
 
+// The daily summary card (#881, docs/mailing.md → The daily summary): the day's totals from the
+// payload, the planning's, drawn on the card and repeated in the caption in the user's language;
+// the button is the entry by the user's mode, as the weekly summary's. A payload that does not
+// parse throws (`mailing not built`).
+function dailySummary(payload: Payload, context: MailingContext): MailingCardMessage {
+  const day = dailySummaryPayloadSchema.parse(payload);
+  const { language } = context;
+  const plain = clientLabelsOf(language);
+  return {
+    card: dailyCardSvg(dailyCardModel(day, plain)),
+    caption: dailySummaryCaption({ html: clientTextsOf(language), plain, language }, day),
+    reply_markup: keyboardOf([entryButton(context)]),
+  };
+}
+
 // What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
 // text override reaches it. One entry per kind: a kind added to NotificationKind without a message
 // does not compile.
@@ -260,6 +286,7 @@ const MAILING_MESSAGES = {
   [NotificationKind.DemoToReal1h]: demoToRealStep('demoToRealIntro1h', true),
   [NotificationKind.DemoToReal24h]: demoToRealStep('demoToRealIntro24h', false),
   [NotificationKind.DemoToReal72h]: demoToRealStep('demoToRealIntro72h', false),
+  [NotificationKind.DailySummary]: dailySummary,
 } as const satisfies Record<
   NotificationKind,
   (payload: Payload, context: MailingContext) => MailingMessage
