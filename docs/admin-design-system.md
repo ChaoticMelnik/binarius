@@ -5,8 +5,9 @@ stays as it was: routes, staff sessions, audit and the `Origin` check do not cha
 This document is what a new admin section is laid out from. The pages themselves are described in
 [admin-pages.md](admin-pages.md).
 
-Screenshots of part 1, of the lists and cards of #656 and of the audit log and the service accounts
-of #817 (dark/light, desktop 1280×800 and phone 375×812): `docs/admin/screenshots/`.
+Screenshots of part 1, of the lists and cards of #656, of the audit log and the service accounts
+of #817 and of the forms and the bot texts of #657 (dark/light, desktop 1280×800 and phone
+375×812): `docs/admin/screenshots/`.
 
 ## Files
 
@@ -16,7 +17,7 @@ of #817 (dark/light, desktop 1280×800 and phone 375×812): `docs/admin/screensh
 | `apps/web/src/admin/static/admin.css` | `@font-face` and every component, only through `var(--…)` |
 | `apps/web/src/admin/static.ts` | `ADMIN_CSS` (= `themeCss()` + `admin.css`), `ADMIN_FONTS`, the static paths, `MINI_APP_CSS` |
 | `apps/web/src/admin/icons.ts` | the Lucide icons, `iconSprite()`, `icon(name)` |
-| `apps/web/src/admin/client.ts` | `ADMIN_CLIENT_JS`, the one script: the theme switch and the copy button |
+| `apps/web/src/admin/client.ts` | `ADMIN_CLIENT_JS`, the one script: the theme switch, the copy button, the confirm and busy state of forms |
 | `apps/web/src/admin/pages.ts` | `adminLayout`, `adminShell`, `authShell`, `adminNoticePage` and the pages |
 | `apps/web/src/admin/export-pages.ts` | the pages as static files, for screenshots |
 | `apps/web/src/admin/static/fonts/` | Inter 400/500/600 woff2 and `OFL.txt` |
@@ -50,8 +51,9 @@ Dark is the default (`:root`). Light applies by the system setting
 (`@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) }`) or by the switch
 (`:root[data-theme="light"]`). Each block sets `color-scheme`, so native controls follow the theme.
 
-The switch is the only script (`/admin/static/app.js`, loaded synchronously in `<head>` so a stored
-theme applies before the first paint). It removes the `no-js` class from `<html>`, reads
+The one script (`/admin/static/app.js`, loaded synchronously in `<head>` so a stored theme applies
+before the first paint) holds three behaviours: the switch (below), the copy button (Table and row
+card) and the forms' confirm and busy state (Формы). For the switch it removes the `no-js` class from `<html>`, reads
 `localStorage['admin-theme']` (`dark` or `light`; anything else is ignored) and on a click cycles
 system → dark → light → system. Storage that throws leaves the system theme. Without JavaScript
 `no-js` stays, `.no-js-hidden` hides the switch, and the system setting decides.
@@ -162,26 +164,24 @@ All defined in `admin.css`; markup to use:
 | entity card | `<dl class="props"><dt>…</dt><dd>…</dd>…</dl>` (a plain `<dl>` is a two-column list too) |
 | table | `table(columns, rows)` in `pages.ts`: `<div class="table-wrap"><table class="table"><thead><tr><th>…</th></tr></thead><tbody><tr><td data-label="…">…</td>…</tr></tbody></table></div>`; `td.num` right-aligns a number (see Table and row card) |
 | badge | `badge(variant, body)`: `<span class="badge badge-success">…</span>`; `-warning`, `-danger`, `-info`, `-neutral`; a `<code>` inside drops its own background |
-| buttons | `<button type="submit">` is primary; `class="btn btn-secondary"`, `class="btn btn-danger"`; `class="icon-btn"` with an `aria-label` for an icon alone |
-| form | `<form class="stack">` with `<label>Text <input …/></label>`; `form.search` / `.toolbar` for a filter row (a column of full-width fields up to 30rem); `label.choice` for a radio or checkbox |
+| buttons | `<button type="submit">` is primary; `class="btn btn-secondary"`, `class="btn btn-danger"` with `data-confirm` (roles: Формы); `class="icon-btn"` with an `aria-label` for an icon alone |
+| form | `<form class="stack">` with `<label>Text <input …/></label>`; `form.search` / `.toolbar` for a filter row (a column of full-width fields up to 30rem); `label.choice` for a radio or checkbox; `<div class="actions">` for a row of buttons; a refused field `aria-invalid="true" aria-describedby="<message id>"` (Формы) |
 | messages | `<p class="error">`, `<ul class="error">`, `<p class="notice">`, `<p class="hint">` |
 | pager | `<p class="pager"><a href="…">…</a></p>`: plain links, styled as secondary buttons by `.pager > a` |
 | empty state | `empty(text)`: `<p class="empty">…</p>`, in place of the table |
 | copy an id | `idCode(value)`: `<code>…</code>` and its copy button (see Table and row card) |
 
-The lists, the audit log, the service accounts and the user and intent cards are built from these
-components (#656, #817). The bot texts (#657) keep their markup from before #459; the element
-rules (`table`, `dl`, `form.search`, `label`, `details`, `.tg-bubble`, …) restyle it, and each of
-their tables (`main table:not(.table)`) is as wide as its content and scrolls inside itself when
-that is wider than the page, so no page scrolls sideways. #657 removes that rule with the last such
-table.
+Every list, the audit log, the service accounts, the user and intent cards and the bot texts are
+built from these components (#656, #817, #657); no rule styles a table outside `table()`
+(`static.test.ts` S7), and every table of the lists and of the bot texts is the component
+(`app.test.ts` L1).
 
 ## Table and row card
 
 Every list is `table(columns, rows)` (`pages.ts`). A column is `{ label, num?, className? }`; its
 `label` is the `<th>` text and the `data-label` of each of its cells — one source, so a card's
-labels are the header's. A column with an empty label (the staff sessions' «Завершить») has no
-`data-label`, and its cell takes the card's full width. `num` puts `class="num"` on the cell: right-
+labels are the header's. A column with an empty label (the staff sessions' «Завершить», the bot
+texts' «Удалить») has no `data-label`, and its cell takes the card's full width. `num` puts `class="num"` on the cell: right-
 aligned with `tabular-nums` at full width. `rowClass` gives a row a class (`tr.current` of the
 current staff session); every other `<tr>` has no attribute. A table with an optional column (the
 owner of the broker accounts and Stars payments lists) builds the column and the cell from the same
@@ -231,9 +231,70 @@ changes nothing. Without JavaScript the button is hidden (`no-js-hidden`); witho
 below the 40px of the other buttons, on purpose: it is an extra over a selectable value inside a
 row; in a card it is a full `.icon-btn`. A link to a card (an intent id in a list) has no button.
 
+A bot text's rejection is a sentence in a `danger` badge inside the «Состояние» column (`.wrap`);
+`.table td.wrap .badge` lets it wrap at full width too.
+
 Accessibility: the skip link is the first element of `<body>`; `:focus-visible` draws a 2px
 `--color-focus` ring; the current section has `aria-current="page"`; buttons and nav links are at
 least 40px high; there are no animations.
+
+## Формы
+
+Markup: `<form class="stack" method="post" action="…">` with `<label>Text <input …/></label>`, a
+`<fieldset><legend>…</legend>` of `label.choice` radios (the token adjustment's direction), the
+submit button last. Every field — the `textarea` included — has `font-size: max(16px,
+var(--text-base))`, so iOS does not zoom the page on focus (#662). `form.editor` is the bot text
+editor (a grid); `<div class="actions">` is a row of buttons that wraps on a phone — the editor's
+«Предпросмотр» and «Сохранить», and below it the one-button forms «Вернуть исходный» and
+«Опубликовать заново».
+
+Buttons have three roles:
+
+| Role | Markup | Buttons |
+|---|---|---|
+| primary — the form's main action | `<button type="submit">` without a class | «Войти», «Сохранить», «Применить», «Сменить пароль» |
+| secondary — a side action | `class="btn btn-secondary"` | «Предпросмотр», «Опубликовать заново», «Сделать служебным», «Снять», «Выйти» |
+| danger — cannot be undone | `class="btn btn-danger" data-confirm="<TEXTS.confirm…>"` | «Завершить» (a staff session), «Вернуть исходный», «Удалить» (a bot text row without a key), «Вернуть Stars» |
+
+States:
+
+- **focus** — `:focus-visible` draws the `--color-focus` ring on every field and button, an invalid
+  field included.
+- **invalid** — `[aria-invalid='true']` has a `--color-danger` border. The server sets
+  `aria-invalid="true" aria-describedby="<id>"` on exactly the field a refusal names, and the
+  message carries that id: «Новые пароли не совпадают» → «Новый пароль ещё раз», «совпадает с
+  текущим» → «Новый пароль», «Неверный текущий пароль» → «Текущий пароль» (`p.error#password-error`);
+  «Недостаточно доступных токенов» → «Токены» (`p.error#adjust-error`); a bot text the backend
+  refused → the `textarea` (`ul.error#source-problems`). A refusal that names no single field — a
+  malformed form, a lockout, a moved balance, a version conflict, the sign-in errors, a bad filter —
+  marks none. There is no `.is-invalid` class.
+- **busy** — on a submit that goes ahead the script sets `aria-busy="true"` on the form, and
+  `form[aria-busy='true']` dims its buttons with a `progress` cursor. Nothing is disabled: a double
+  click still reaches the server, which refuses it as before (the hidden balance, the version, PRG).
+  The script clears `aria-busy` on `pageshow`, so a page restored by «Назад» is live.
+- **disabled** — `button:disabled` is dimmed with a `not-allowed` cursor.
+
+**Confirm.** `client.ts` listens for `submit` on the document: when `event.submitter` carries
+`data-confirm`, it asks `window.confirm(<text>)` and a «Отмена» cancels the submit. Every
+`data-confirm` value is a `TEXTS.confirm*` entry (`app.test.ts` F7). Without JavaScript, and in a
+browser without `event.submitter` (or for `form.submit()`), the form is sent unasked, as before
+#657 — the confirm is an improvement, the server's guards are what holds.
+
+## Предпросмотр Telegram
+
+The bot text editor's preview and publish blocks, styled in both themes:
+
+- `<div class="tg-bubble">` — the message as Telegram would show it, rebuilt tag by tag by
+  `telegramPreview` (`telegram-preview.ts`): `b`, `i`, `u`, `s`, `a`, `code`, `pre`, `blockquote`
+  and `blockquote.expandable` (cut at 4.5em, about three lines), `<span class="tg-spoiler">` (hidden
+  until hover). Text in `--color-fg` on `--color-surface-2`; `pre-wrap` keeps the text's own line
+  breaks.
+- `<span class="tg-label">` — a button label's text (a plain-text key), drawn as Telegram's inline
+  button: `--color-on-accent` on `--color-accent-bg`.
+- `<ul class="publish">` — the result of publishing the command menu and the profile, one `<li>` per
+  method; a refused one is `li.error`.
+- `<details><summary>…</summary><pre>…</pre></details>` — the current text on a version conflict
+  (open) and the default text of an overridden key (closed).
 
 ## A new section
 
@@ -261,7 +322,8 @@ server):
 1. `browser_emulate_media` with `colorScheme` `dark` or `light`;
 2. `browser_resize` to 1280×800 or 375×812;
 3. `browser_navigate` to `http://127.0.0.1:8459/<page>.html` (`login`, `confirm`, `link`,
-   `not-found`, `overview`, `users`, … — the keys of `EXPORTED_PAGES`);
+   `not-found`, `overview`, `users`, … — the keys of `EXPORTED_PAGES`; the refused forms are
+   `bot-text-refused`, `password-refused`, `user-adjust-refused`);
 4. `browser_take_screenshot` with an absolute path under `docs/admin/screenshots/`, named
    `<page>-<theme>-<desktop|mobile>.png`; the open menu: `browser_click` on `.burger` first,
    saved as `overview-<theme>-mobile-menu.png`;
