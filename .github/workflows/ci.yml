@@ -471,17 +471,17 @@ jobs:
           done
       # The prod command is one node process under tini (init: true), no pnpm and no tsx: the
       # pilot's memory is the reason (#146), and it is what makes the process's exit the
-      # container's. Every service whose resolved command starts with node must be running
-      # here, bot aside (the dead-process step below starts it, as the start step says), and is
+      # container's. Every service that runs its bundle (`node apps/<s>/dist/index.js`; `migrate`
+      # runs node too since #877, a one-shot that has exited) must be running here, bot aside (the dead-process step below starts it, as the start step says), and is
       # asked for its process list; `ps` is the exec'd one. A service that is not running fails
       # the step: a worker that logged its schema line and then died would pass otherwise.
       - name: every app container runs one node process and nothing else
         run: |
           set -u
           config="$(docker compose config --format json)"
-          nodes="$(printf '%s' "$config" | jq -r '.services | to_entries[] | select(.value.command[0]? == "node") | .key' | grep -vx bot || true)"
+          nodes="$(printf '%s' "$config" | jq -r '.services | to_entries[] | select(.value.command == ["node", "apps/\(.key)/dist/index.js"]) | .key' | grep -vx bot || true)"
           if [ -z "$nodes" ]; then
-            echo '::error::no service but bot resolves to a node command'
+            echo '::error::no service but bot resolves to its bundle'
             exit 1
           fi
           running="$(docker compose ps --status running --format '{{.Service}}')"
