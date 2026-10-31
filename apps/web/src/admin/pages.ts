@@ -73,8 +73,15 @@ import { ADMIN_SCRIPT_PATH, ADMIN_STYLESHEET_PATH } from './static';
 import { telegramPreview } from './telegram-preview';
 import { sessionLengthLabel, TEXTS } from './texts';
 
-const error = (message: string | undefined): SafeHtml =>
-  message === undefined ? html`` : html`<p class="error">${message}</p>`;
+// `id` is the target of the aria-describedby on the field the message is about (#657)
+const error = (message: string | undefined, id?: string): SafeHtml =>
+  message === undefined
+    ? html``
+    : html`<p class="error"${id === undefined ? '' : html` id="${id}"`}>${message}</p>`;
+
+// The field a refusal names (#657): the server marks it and points it at the message's id.
+const invalidAttrs = (describedBy: string): SafeHtml =>
+  html` aria-invalid="true" aria-describedby="${describedBy}"`;
 
 // Every admin page, the sign-in ones included (#459): the design system's stylesheet, the theme
 // script in <head> (synchronous, so a stored theme applies before the first paint) and `no-js`,
@@ -214,7 +221,9 @@ const sessionCells = (session: StaffSessionView): Cell[] => [
   when(session.lastSeenAt),
   when(session.expiresAt),
   html`<form method="post" action="/admin/sessions/${session.id}/revoke">
-    <button type="submit" class="btn btn-danger">${TEXTS.revokeSubmit}</button>
+    <button type="submit" class="btn btn-danger" data-confirm="${TEXTS.confirmRevokeSession}">
+      ${TEXTS.revokeSubmit}
+    </button>
   </form>`,
 ];
 
@@ -468,23 +477,32 @@ export const passwordHref = (changed?: number): string =>
  * `login` and `others` come from the sessions read of a GET; a refused POST asks the backend
  * nothing and renders without them.
  */
+export type PasswordField = 'currentPassword' | 'newPassword' | 'newPasswordRepeat';
+
+const PASSWORD_ERROR_ID = 'password-error';
+
 export const passwordPage = ({
   login,
   others,
   changed,
   message,
+  invalid,
 }: {
   login?: string;
   others?: number;
   changed?: number;
   message?: string;
-}): SafeHtml =>
-  adminShell({
+  // the field the refusal in `message` is about (#657)
+  invalid?: PasswordField;
+}): SafeHtml => {
+  const mark = (field: PasswordField): SafeHtml | string =>
+    invalid === field ? invalidAttrs(PASSWORD_ERROR_ID) : '';
+  return adminShell({
     title: TEXTS.passwordTitle,
     login,
     body: html`<h1>${TEXTS.passwordHeading}</h1>
-      ${changed === undefined ? '' : html`<p>${TEXTS.passwordChanged(changed)}</p>`}
-      ${error(message)}
+      ${changed === undefined ? '' : html`<p class="notice">${TEXTS.passwordChanged(changed)}</p>`}
+      ${error(message, PASSWORD_ERROR_ID)}
       ${
         others === undefined
           ? ''
@@ -495,19 +513,35 @@ export const passwordPage = ({
       <form class="stack" method="post" action="${PASSWORD_PATH}">
         <label
           >${TEXTS.currentPasswordField}
-          <input name="currentPassword" type="password" autocomplete="current-password" required />
+          <input
+            name="currentPassword"
+            type="password"
+            autocomplete="current-password"
+            required${mark('currentPassword')}
+          />
         </label>
         <label
           >${TEXTS.newPasswordField}
-          <input name="newPassword" type="password" autocomplete="new-password" required />
+          <input
+            name="newPassword"
+            type="password"
+            autocomplete="new-password"
+            required${mark('newPassword')}
+          />
         </label>
         <label
           >${TEXTS.newPasswordRepeatField}
-          <input name="newPasswordRepeat" type="password" autocomplete="new-password" required />
+          <input
+            name="newPasswordRepeat"
+            type="password"
+            autocomplete="new-password"
+            required${mark('newPasswordRepeat')}
+          />
         </label>
         <button type="submit">${TEXTS.passwordSubmit}</button>
       </form>`,
   });
+};
 
 export const sessionsPage = (sessions: readonly StaffSessionView[], login: string): SafeHtml =>
   adminShell({
@@ -693,7 +727,9 @@ const starRefundForm = (paymentId: string, returnPath: string): SafeHtml =>
       >${TEXTS.starRefundReason}
       <input name="reason" maxlength="${STAR_REFUND_REASON_MAX}" required />
     </label>
-    <button type="submit" class="btn btn-secondary">${TEXTS.starRefundSubmit}</button>
+    <button type="submit" class="btn btn-danger" data-confirm="${TEXTS.confirmStarRefund}">
+      ${TEXTS.starRefundSubmit}
+    </button>
   </form>`;
 
 // The Stars payments of the user card and of the requests page (with the owner column): one set
@@ -743,8 +779,11 @@ export interface TokenAdjustmentForm {
 
 export interface UserPageOptions {
   notice?: keyof typeof TEXTS.userNotice;
-  adjustment?: { message: string; form?: TokenAdjustmentForm };
+  // `field`: the input the refusal is about, marked aria-invalid (#657)
+  adjustment?: { message: string; form?: TokenAdjustmentForm; field?: 'amount' };
 }
+
+const ADJUST_ERROR_ID = 'adjust-error';
 
 // The hidden balance is the one this page shows: the backend refuses when it moved (#246 В4). A
 // 409 page carries the balance of the answer it was built from, on purpose.
@@ -756,7 +795,7 @@ const tokenAdjustmentForm = (
   const debit = form?.direction === 'debit';
   return html`<h3>${TEXTS.userAdjustHeading}</h3>
     ${notice === 'adjusted' ? html`<p class="notice">${TEXTS.userNotice[notice]}</p>` : ''}
-    ${error(adjustment?.message)}
+    ${error(adjustment?.message, ADJUST_ERROR_ID)}
     <form class="stack" method="post" action="/admin/users/${user.id}/tokens">
       <input type="hidden" name="balance" value="${user.tokens.balance}" />
       <fieldset>
@@ -779,7 +818,7 @@ const tokenAdjustmentForm = (
           max="${TOKEN_ADJUSTMENT_MAX_TOKENS}"
           step="1"
           value="${form?.amount ?? ''}"
-          required
+          required${adjustment?.field === 'amount' ? invalidAttrs(ADJUST_ERROR_ID) : ''}
         />
       </label>
       <label
@@ -1745,7 +1784,7 @@ const publishBlock = (published: readonly AdminBotProfileMethodResult[] | undefi
 const republishForm = (action: string, language: BotLanguage): SafeHtml =>
   html`<form method="post" action="${action}">
     ${languageField(language)}
-    <button type="submit">${TEXTS.botProfileRepublish}</button>
+    <button type="submit" class="btn btn-secondary">${TEXTS.botProfileRepublish}</button>
   </form>`;
 
 const notice = (text: string | undefined): SafeHtml | string =>
@@ -1761,20 +1800,47 @@ const changedState = (row: {
 const rejected = (reason: string | null): SafeHtml | string =>
   reason === null ? '' : html`<p class="error">${TEXTS.botTextRejected(reason)}</p>`;
 
-const orphanRow = (row: AdminBotTextOverrideView): SafeHtml =>
-  html`<tr>
-    <td>${code(row.key)}</td>
-    <td class="num">${row.version}</td>
-    <td>${when(row.updatedAt)}</td>
-    <td>${row.updatedByLogin ?? 'CLI'}</td>
-    <td>
-      <form method="post" action="${botTextPath(row.key)}/reset">
-        ${languageField(row.language)}
-        <input type="hidden" name="version" value="${row.version}" />
-        <button type="submit">${TEXTS.botTextDelete}</button>
-      </form>
-    </td>
-  </tr>`;
+const BOT_TEXT_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnBotTextKey },
+  { label: TEXTS.columnBotTextDescription, className: 'wrap' },
+  { label: TEXTS.columnBotTextState, className: 'wrap' },
+];
+
+const botTextCells =
+  (language: BotLanguage, byKey: ReadonlyMap<string, AdminBotTextOverrideView>) =>
+  (key: BotTextKey): Cell[] => {
+    const row = byKey.get(key);
+    const rejection = row?.rejection ?? null;
+    return [
+      html`<a href="${botTextHref(language, key)}">${key}</a>`,
+      BOT_TEXT_CATALOG[key].description,
+      html`${row === undefined ? TEXTS.botTextDefault : changedState(row)}${
+        rejection === null ? '' : html` ${badge('danger', TEXTS.botTextRejected(rejection))}`
+      }`,
+    ];
+  };
+
+const ORPHAN_COLUMNS: readonly Column[] = [
+  { label: TEXTS.columnBotTextKey },
+  { label: TEXTS.columnBotTextVersion, num: true },
+  { label: TEXTS.columnLastSeenAt },
+  { label: TEXTS.columnLogin },
+  { label: TEXTS.columnAction },
+];
+
+const orphanCells = (row: AdminBotTextOverrideView): Cell[] => [
+  code(row.key),
+  row.version,
+  when(row.updatedAt),
+  row.updatedByLogin ?? 'CLI',
+  html`<form method="post" action="${botTextPath(row.key)}/reset">
+    ${languageField(row.language)}
+    <input type="hidden" name="version" value="${row.version}" />
+    <button type="submit" class="btn btn-danger" data-confirm="${TEXTS.confirmDeleteBotText}">
+      ${TEXTS.botTextDelete}
+    </button>
+  </form>`,
+];
 
 // the state of `language`'s texts; the other language's rows are not shown
 export const botTextsPage = (
@@ -1815,48 +1881,14 @@ export const botTextsPage = (
                 : ''
             }
             <h2>${BOT_TEXT_GROUP_TITLES[group]}</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>${TEXTS.columnBotTextKey}</th>
-                  <th>${TEXTS.columnBotTextDescription}</th>
-                  <th>${TEXTS.columnBotTextState}</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${botTextKeysOf(group).map((key) => {
-                  const row = byKey.get(key);
-                  return html`<tr>
-                    <td><a href="${botTextHref(language, key)}">${key}</a></td>
-                    <td>${BOT_TEXT_CATALOG[key].description}</td>
-                    <td>
-                      ${row === undefined ? TEXTS.botTextDefault : changedState(row)}
-                      ${rejected(row?.rejection ?? null)}
-                    </td>
-                  </tr>`;
-                })}
-              </tbody>
-            </table>`,
+            ${table(BOT_TEXT_COLUMNS, botTextKeysOf(group).map(botTextCells(language, byKey)))}`,
       )}
       ${
         orphans.length === 0
           ? ''
           : html`<h2>${TEXTS.botTextOrphansHeading}</h2>
               <p class="hint">${TEXTS.botTextOrphansHint}</p>
-              <table>
-                <thead>
-                  <tr>
-                    <th>${TEXTS.columnBotTextKey}</th>
-                    <th>${TEXTS.columnBotTextVersion}</th>
-                    <th>${TEXTS.columnLastSeenAt}</th>
-                    <th>${TEXTS.columnLogin}</th>
-                    <th>${TEXTS.columnAction}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${orphans.map(orphanRow)}
-                </tbody>
-              </table>`
+              ${table(ORPHAN_COLUMNS, orphans.map(orphanCells))}`
       }`,
   });
 };
@@ -1930,6 +1962,9 @@ export interface BotTextPageOptions {
   published?: readonly AdminBotProfileMethodResult[];
 }
 
+// the id of the refusal's list, which the refused textarea points to (#657)
+const SOURCE_PROBLEMS_ID = 'source-problems';
+
 // The textarea's content starts with a line feed: the HTML parser drops exactly one right after
 // the opening tag, so a text that itself starts with one keeps it.
 export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions): SafeHtml => {
@@ -1966,7 +2001,7 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
       ${
         options.problems === undefined
           ? ''
-          : html`<ul class="error">
+          : html`<ul class="error" id="${SOURCE_PROBLEMS_ID}">
               ${options.problems.map(
                 (problem) =>
                   html`<li>${problem.key === key ? '' : `${problem.key}: `}${problem.reason}</li>`,
@@ -1988,11 +2023,17 @@ export const botTextPage = (text: AdminBotTextView, options: BotTextPageOptions)
       <form class="editor" method="post" action="${botTextPath(key)}/save">
         ${languageField(language)}
         <label for="source">${TEXTS.botTextSourceField}</label>
-        <textarea id="source" name="source" maxlength="${BOT_TEXT_SOURCE_MAX}" rows="12">
+        <textarea
+          id="source"
+          name="source"
+          maxlength="${BOT_TEXT_SOURCE_MAX}"
+          rows="12"
+          ${options.problems === undefined ? '' : invalidAttrs(SOURCE_PROBLEMS_ID)}
+        >
 ${value}</textarea>
         <input type="hidden" name="version" value="${version}" />
-        <div class="buttons">
-          <button type="submit" formaction="${botTextPath(key)}/preview">
+        <div class="actions">
+          <button type="submit" class="btn btn-secondary" formaction="${botTextPath(key)}/preview">
             ${TEXTS.botTextPreviewSubmit}
           </button>
           <button type="submit">${TEXTS.botTextSaveSubmit}</button>
@@ -2008,15 +2049,31 @@ ${value}</textarea>
         override === null
           ? ''
           : html`<details>
-                <summary>${TEXTS.botTextDefaultSource}</summary>
-                <pre>${defaultSource}</pre>
-              </details>
-              <form method="post" action="${botTextPath(key)}/reset">
-                ${languageField(language)}
-                <input type="hidden" name="version" value="${version}" />
-                <button type="submit">${TEXTS.botTextResetSubmit}</button>
-              </form>`
+              <summary>${TEXTS.botTextDefaultSource}</summary>
+              <pre>${defaultSource}</pre>
+            </details>`
       }
-      ${publishes ? republishForm(`${botTextPath(key)}/publish`, language) : ''}`,
+      ${
+        override === null && !publishes
+          ? ''
+          : html`<div class="actions">
+              ${
+                override === null
+                  ? ''
+                  : html`<form method="post" action="${botTextPath(key)}/reset">
+                      ${languageField(language)}
+                      <input type="hidden" name="version" value="${version}" />
+                      <button
+                        type="submit"
+                        class="btn btn-danger"
+                        data-confirm="${TEXTS.confirmResetBotText}"
+                      >
+                        ${TEXTS.botTextResetSubmit}
+                      </button>
+                    </form>`
+              }
+              ${publishes ? republishForm(`${botTextPath(key)}/publish`, language) : ''}
+            </div>`
+      }`,
   });
 };

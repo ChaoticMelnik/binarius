@@ -12,6 +12,7 @@ import {
   BOT_TEXT_SOURCE_MAX,
   BOT_TEXT_SOURCES_EN,
   BotTextGroup,
+  botTextKeysOf,
   AuditAction,
   AuditEntityType,
   BrokerAccountStatus,
@@ -4263,7 +4264,11 @@ describe('the Stars refund and the requests page (#510)', () => {
     expect(card.body).toContain('<code>charge-&lt;1&gt;</code>');
     expect(card.body).toMatch(formOf(PAYMENT, CARD));
     expect(card.body).not.toMatch(formOf(SAMPLE_STAR_PAYMENT_REFUNDED.id, CARD));
-    expect(card.body).toContain(`<button type="submit" class="btn btn-secondary">${TEXTS.starRefundSubmit}</button>`);
+    expect(card.body).toMatch(
+      new RegExp(
+        `<button type="submit" class="btn btn-danger" data-confirm="${TEXTS.confirmStarRefund.replace('?', '\\?')}">\\s*${TEXTS.starRefundSubmit}\\s*</button>`,
+      ),
+    );
   });
 
   it('SR-W2 the requests page lists the requests with the user link and the form, the nav item current', async () => {
@@ -4415,6 +4420,7 @@ describe('the admin lists and cards (#656)', () => {
     'service-accounts',
     'star-refunds',
     'audit',
+    'bot-texts',
   ] as const;
   const render = (name: string): string => EXPORTED_PAGES[name]?.().value ?? '';
   const attrOf = (tag: string, name: string): string | undefined =>
@@ -4820,4 +4826,226 @@ describe('the audit log and the service accounts on the components (#817)', () =
     ).toBe(SAMPLE_AUDIT.entries.length);
     expect(count(body, `</code> ${TEXTS.auditPayloadTruncated}</td>`)).toBe(1);
   });
+});
+
+describe('the admin forms on the components (#657)', () => {
+  const withCookie = { [SESSION_COOKIE]: TOKEN };
+  const rebuild = async (backend: Partial<BackendClient>) => {
+    await app.close();
+    app = build(backend);
+  };
+  const CONFIRMS = [
+    TEXTS.confirmRevokeSession,
+    TEXTS.confirmResetBotText,
+    TEXTS.confirmDeleteBotText,
+    TEXTS.confirmStarRefund,
+  ];
+  const unescape = (value: string) =>
+    value
+      .replaceAll('&quot;', '"')
+      .replaceAll('&#39;', "'")
+      .replaceAll('&lt;', '<')
+      .replaceAll('&gt;', '>')
+      .replaceAll('&amp;', '&');
+  // the state cell of the key's row in the list
+  const stateOf = (body: string, key: string) =>
+    new RegExp(
+      `<a href="/admin/bot-texts/${key}">${key}</a></td><td[^>]*>[\\s\\S]*?</td><td data-label="${TEXTS.columnBotTextState}" class="wrap">([\\s\\S]*?)</td>`,
+    ).exec(body)?.[1];
+  const textareaTag = (body: string) => /<textarea\b[^>]*>/.exec(body)?.[0] ?? '';
+  const inputTag = (body: string, name: string) =>
+    new RegExp(`<input\\s+[^>]*name="${name}"[^>]*>`).exec(body)?.[0] ?? '';
+  const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const MARKED = (id: string) => `aria-invalid="true" aria-describedby="${id}"`;
+
+  it('F1 the bot texts list: a rejection is a danger badge, «Удалить» a confirmed danger button', async () => {
+    for (const group of Object.values(BotTextGroup)) {
+      expect(botTextKeysOf(group).length, group).toBeGreaterThan(0);
+    }
+    const { body } = await get('/admin/bot-texts', withCookie);
+    expect(stateOf(body, 'startCommand')).toContain(
+      `<span class="badge badge-danger">${TEXTS.botTextRejected('Пустой текст')}</span>`,
+    );
+    const plain = stateOf(body, 'welcome');
+    expect(plain).toContain(TEXTS.botTextChanged(7, 'ada'));
+    expect(plain).not.toContain('badge');
+    expect(body).toMatch(
+      new RegExp(
+        `<button type="submit" class="btn btn-danger" data-confirm="${escapeRe(TEXTS.confirmDeleteBotText)}">\\s*${TEXTS.botTextDelete}\\s*</button>`,
+      ),
+    );
+    expect(body).toContain(
+      `<button type="submit" class="btn btn-secondary">${TEXTS.botProfileRepublish}</button>`,
+    );
+  });
+
+  it('F2 the editor: the button roles, a confirmed reset, and a field marked by nothing', async () => {
+    const { body } = await get('/admin/bot-texts/welcome', withCookie);
+    expect(body).toMatch(
+      /<button\s+type="submit"\s+class="btn btn-secondary"\s+formaction="\/admin\/bot-texts\/welcome\/preview"\s*>/,
+    );
+    expect(body).toContain(`<button type="submit">${TEXTS.botTextSaveSubmit}</button>`);
+    expect(body).toMatch(
+      new RegExp(
+        `<button\\s+type="submit"\\s+class="btn btn-danger"\\s+data-confirm="${escapeRe(TEXTS.confirmResetBotText)}"\\s*>\\s*${TEXTS.botTextResetSubmit}`,
+      ),
+    );
+    expect(textareaTag(body)).not.toContain('aria-invalid');
+    expect(body.match(/<div class="actions">/g)).toHaveLength(2);
+  });
+
+  const problems = [{ key: 'welcome', reason: 'Битый HTML: x' }];
+  const answering = (outcome: Record<string, unknown>) =>
+    ({ me: SAMPLE_ME, text: SAMPLE_BOT_TEXT, ...outcome }) as never;
+  const editorForm = { language: 'ru', version: '7', source: '<b>x' };
+
+  it.each([
+    ['preview', 'previewBotText'],
+    ['save', 'saveBotText'],
+  ] as const)(
+    'F3 a refused %s marks the textarea and points it at the problems',
+    async (action, method) => {
+      await rebuild({ [method]: async () => answering({ outcome: 'refused', problems }) });
+      const response = await post(`/admin/bot-texts/welcome/${action}`, editorForm, withCookie);
+      expect(response.statusCode).toBe(400);
+      expect(textareaTag(response.body)).toContain(MARKED('source-problems'));
+      expect(response.body).toContain('<ul class="error" id="source-problems">');
+    },
+  );
+
+  it.each([
+    [409, { outcome: 'version_conflict', currentVersion: 12, currentSource: 'Чужой' }],
+    [200, { outcome: 'unchanged' }],
+  ] as const)('F3 a save answered %s marks no field', async (status, outcome) => {
+    await rebuild({ saveBotText: async () => answering(outcome) });
+    const response = await post('/admin/bot-texts/welcome/save', editorForm, withCookie);
+    expect(response.statusCode).toBe(status);
+    expect(response.body).not.toContain('aria-invalid');
+  });
+
+  const NEW = 'NEW-SECRET';
+  const passwords = { currentPassword: 'CURRENT-SECRET', newPassword: NEW, newPasswordRepeat: NEW };
+  const PASSWORD_FIELDS = ['currentPassword', 'newPassword', 'newPasswordRepeat'] as const;
+  const expectMarked = (body: string, field: (typeof PASSWORD_FIELDS)[number]) => {
+    for (const name of PASSWORD_FIELDS) {
+      const tag = inputTag(body, name);
+      if (name === field) expect(tag, name).toContain(MARKED('password-error'));
+      else expect(tag, name).not.toContain('aria-invalid');
+    }
+    expect(body).toContain('<p class="error" id="password-error">');
+  };
+
+  it('F4 the password form marks the field each refusal names', async () => {
+    const mismatch = await post(
+      '/admin/password',
+      { ...passwords, newPasswordRepeat: 'OTHER-SECRET' },
+      withCookie,
+    );
+    expect(mismatch.statusCode).toBe(400);
+    expectMarked(mismatch.body, 'newPasswordRepeat');
+
+    const same = await post(
+      '/admin/password',
+      { currentPassword: NEW, newPassword: NEW, newPasswordRepeat: NEW },
+      withCookie,
+    );
+    expect(same.statusCode).toBe(400);
+    expectMarked(same.body, 'newPassword');
+
+    await rebuild({
+      changePassword: () => Promise.reject(httpFailure(401, AdminErrorCode.InvalidCredentials)),
+    });
+    const wrong = await post('/admin/password', passwords, withCookie);
+    expect(wrong.statusCode).toBe(401);
+    expectMarked(wrong.body, 'currentPassword');
+  });
+
+  it('F4 a refusal that names no field marks none, and the result is a notice', async () => {
+    const twice = await app.inject({
+      method: 'POST',
+      url: '/admin/password',
+      headers: { origin: ORIGIN, 'content-type': 'application/x-www-form-urlencoded' },
+      payload: `currentPassword=a&currentPassword=b&newPassword=${NEW}&newPasswordRepeat=${NEW}`,
+      cookies: withCookie,
+    });
+    expect(twice.statusCode).toBe(400);
+    expect(twice.body).toContain(TEXTS.badRequest);
+    expect(twice.body).not.toContain('aria-invalid');
+
+    await rebuild({
+      changePassword: () => Promise.reject(httpFailure(429, AdminErrorCode.TooManyAttempts)),
+    });
+    const locked = await post('/admin/password', passwords, withCookie);
+    expect(locked.statusCode).toBe(429);
+    expect(locked.body).not.toContain('aria-invalid');
+
+    const changed = await get('/admin/password?changed=2', withCookie);
+    expect(changed.body).toContain(`<p class="notice">${TEXTS.passwordChanged(2)}</p>`);
+  });
+
+  const adjustUrl = `/admin/users/${SAMPLE_USER_ID}/tokens`;
+  const adjustment = { direction: 'debit', amount: '50', note: 'Списание', balance: '5' };
+
+  it('F5 insufficient_available marks the amount and points it at the message', async () => {
+    await rebuild({
+      adjustTokens: async () =>
+        sampleAdjustmentRefusal('insufficient_available', {
+          balance: '7',
+          reserved: '2',
+          available: '5',
+        }),
+    });
+    const response = await post(adjustUrl, adjustment, withCookie);
+    expect(response.statusCode).toBe(409);
+    expect(inputTag(response.body, 'amount')).toContain(MARKED('adjust-error'));
+    expect(inputTag(response.body, 'note')).not.toContain('aria-invalid');
+    expect(response.body).toContain(
+      `<p class="error" id="adjust-error">${TEXTS.tokenAdjustInsufficient('5')}</p>`,
+    );
+  });
+
+  it('F5 balance_changed and the card itself mark no field', async () => {
+    await rebuild({
+      adjustTokens: async () =>
+        sampleAdjustmentRefusal('balance_changed', { balance: '9', reserved: '0', available: '9' }),
+    });
+    const moved = await post(adjustUrl, adjustment, withCookie);
+    expect(moved.statusCode).toBe(409);
+    expect(moved.body).toContain(TEXTS.tokenAdjustBalanceChanged('9'));
+    expect(moved.body).not.toContain('aria-invalid');
+
+    const card = await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie);
+    expect(card.body).not.toContain('aria-invalid');
+  });
+
+  it('F6 the irreversible buttons ask first; the reversible service mark does not', async () => {
+    const sessions = await get('/admin/sessions', withCookie);
+    expect(sessions.body).toMatch(
+      new RegExp(
+        `<button type="submit" class="btn btn-danger" data-confirm="${escapeRe(TEXTS.confirmRevokeSession)}">\\s*${TEXTS.revokeSubmit}\\s*</button>`,
+      ),
+    );
+    const refund = new RegExp(
+      `<button type="submit" class="btn btn-danger" data-confirm="${escapeRe(TEXTS.confirmStarRefund)}">\\s*${TEXTS.starRefundSubmit}\\s*</button>`,
+    );
+    expect((await get(`/admin/users/${SAMPLE_USER_ID}`, withCookie)).body).toMatch(refund);
+    expect((await get('/admin/star-refunds', withCookie)).body).toMatch(refund);
+
+    const service = await get('/admin/service-accounts', withCookie);
+    expect(service.body).toContain('/service"');
+    expect(service.body).not.toContain('data-confirm');
+  });
+
+  it.each(Object.keys(EXPORTED_PAGES))(
+    'F7 %s: every data-confirm is a TEXTS entry, every aria-describedby has its one target',
+    (name) => {
+      const body = EXPORTED_PAGES[name]?.().value ?? '';
+      for (const [, value] of body.matchAll(/\sdata-confirm="([^"]*)"/g)) {
+        expect(CONFIRMS).toContain(unescape(value ?? ''));
+      }
+      for (const [, id] of body.matchAll(/\saria-describedby="([^"]*)"/g)) {
+        expect(body.match(new RegExp(`\\sid="${id}"`, 'g')), id).toHaveLength(1);
+      }
+    },
+  );
 });

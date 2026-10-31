@@ -48,6 +48,8 @@ import {
   type AdminUserResponse,
   type DecimalString,
   BotLanguage,
+  BotTextKind,
+  type AdminBotTextRendered,
 } from '@binarius/shared';
 
 // Backend answers for the read pages (#107, #108, #330, #109, #110, #341, #342) and the token
@@ -550,4 +552,11 @@ export const SAMPLE_BOT_TEXT: AdminBotTextView = {
   fragments: [
     { placeholder: 'connectButton', key: 'connectButton', source: 'Жми', overridden: true },
   ],
+};
+
+// A preview of SAMPLE_BOT_TEXT as the backend renders it (#657): Telegram HTML that
+// telegramHtmlProblems accepts, with the expandable quote the preview styles.
+export const SAMPLE_RENDERED: AdminBotTextRendered = {
+  kind: BotTextKind.Html,
+  telegramHtml: 'Привет, <b>друг</b>\n\n<blockquote expandable>Жми</blockquote>',
 };
