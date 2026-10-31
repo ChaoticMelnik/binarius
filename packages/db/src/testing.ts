@@ -86,10 +86,11 @@ export async function createTempDatabase(
   });
   const url = withDatabase(baseUrl, name);
   const pool = new Pool({ connectionString: url });
+  const closed = socketsClosed(pool);
   try {
     await migrate(pool);
   } catch (error) {
-    await pool.end();
+    await endPool(pool, closed);
     await withAdmin(baseUrl, (admin) => dropDatabase(admin, name));
     throw error;
   }
@@ -98,10 +99,36 @@ export async function createTempDatabase(
     pool,
     db: createDb(pool),
     drop: async () => {
-      await pool.end();
+      await endPool(pool, closed);
       await withAdmin(baseUrl, (admin) => dropDatabase(admin, name));
     },
   };
+}
+
+// pool.end() settles once the last Terminate is written, before the server has read it; DROP
+// DATABASE ... WITH (FORCE) would then kill that backend, and its FATAL 57P01 reaches the pool as an
+// unhandled 'error' (#262, #895). 'remove' fires from client.end()'s callback, on the socket's close.
+function socketsClosed(pool: Pool): () => Promise<void> {
+  let open = 0;
+  let drained: (() => void) | undefined;
+  pool.on('connect', () => {
+    open += 1;
+  });
+  pool.on('remove', () => {
+    open -= 1;
+    if (open === 0) drained?.();
+  });
+  return () =>
+    open === 0
+      ? Promise.resolve()
+      : new Promise<void>((resolve) => {
+          drained = resolve;
+        });
+}
+
+async function endPool(pool: Pool, closed: () => Promise<void>): Promise<void> {
+  await pool.end();
+  await closed();
 }
 
 async function withAdmin<T>(baseUrl: string, run: (admin: Pool) => Promise<T>): Promise<T> {
