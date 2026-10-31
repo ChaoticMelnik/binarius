@@ -92,8 +92,10 @@ bonus-rule new-version deposit_bonus --kind deposit_bonus --params '{"tokensPerU
 
 **The deposit rule.** No `deposit_bonus` version exists until the owner creates one with
 `new-version` above. Activate it only after #386 (the deposit credit) is in; the authenticity
-(#142) is the URL secret ([postbacks.md](postbacks.md) → Authenticity). Before #386 nothing reads
-it.
+(#142) is the URL secret ([postbacks.md](postbacks.md) → Authenticity). Before #386 nothing credits
+under it; the demo-to-real chain (#880, [mailing.md](mailing.md#the-demo-to-real-chain-880)) prints
+the terms of the version in force in its pushes, so a version activated before #386 promises
+tokens that nothing credits yet.
 
 ## Migration 0059 and the deploy
 

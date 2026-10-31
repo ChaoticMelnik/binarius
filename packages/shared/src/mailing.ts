@@ -1,4 +1,5 @@
 import * as z from 'zod';
+import { BonusRuleKind, bonusRuleParamsSchemas } from './bonus';
 import { decimalStringSchema } from './money';
 import { createTradeIntentRequestSchema } from './trading';
 
@@ -21,6 +22,9 @@ export const NotificationKind = {
   WeeklySummary: 'weekly_summary',
   TokensOut2d: 'tokens_out_2d',
   HelpLinks: 'help_links',
+  DemoToReal1h: 'demo_to_real_1h',
+  DemoToReal24h: 'demo_to_real_24h',
+  DemoToReal72h: 'demo_to_real_72h',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -125,6 +129,27 @@ export type WeeklySummaryPayload = z.infer<typeof weeklySummaryPayloadSchema>;
 // account was connected, once per user; the links come from the backend's env.
 export const HELP_LINKS_AFTER_MS = 2 * 3_600_000;
 
+// The demo-to-real chain (#880, docs/mailing.md → The demo-to-real chain; manager 2026-10-31):
+// hours after the user's DEMO_TO_REAL_SESSIONS-th stopped demo session, while no deposit of theirs
+// is recorded. In order: a step is sent only until the next one is due, as FIRST_SESSION_CHAIN.
+export const DEMO_TO_REAL_SESSIONS = 3;
+export const DEMO_TO_REAL_CHAIN = [
+  { kind: NotificationKind.DemoToReal1h, afterHours: 1 },
+  { kind: NotificationKind.DemoToReal24h, afterHours: 24 },
+  { kind: NotificationKind.DemoToReal72h, afterHours: 72 },
+] as const satisfies readonly { kind: NotificationKind; afterHours: number }[];
+
+// The chain's payload, the user's facts as the planning saw them: the stopped demo sessions, the
+// settled demo trades and their summed profit as text (rule 2), and the params of the active
+// deposit_bonus version, null when none is active.
+export const demoToRealPayloadSchema = z.object({
+  sessions: tradeCountSchema,
+  ...settledScoreShape,
+  profit: decimalStringSchema,
+  bonus: bonusRuleParamsSchemas[BonusRuleKind.DepositBonus].nullable(),
+});
+export type DemoToRealPayload = z.infer<typeof demoToRealPayloadSchema>;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
 // immediate kinds (referral_rewarded, the low-token nudges, real_mode_by_deposit and
 // weekly_summary, 0) are not in it: the link about the planner's tick concerns only a kind that
@@ -136,4 +161,5 @@ export const MAILING_MIN_OFFSET_MS = Math.min(
   SESSION_IDLE_AFTER_MS,
   TOKENS_OUT_REPEAT_AFTER_MS,
   HELP_LINKS_AFTER_MS,
+  ...DEMO_TO_REAL_CHAIN.map((step) => step.afterHours * 3_600_000),
 );

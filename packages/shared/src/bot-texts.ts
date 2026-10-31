@@ -2035,6 +2035,80 @@ export const BOT_TEXT_CATALOG = {
     'Общая кнопка рассылок: ссылка на контакт менеджера (#879, #880); шлёт только backend.',
     '💬 Написать менеджеру',
   ),
+  // The demo-to-real chain (#880, docs/mailing.md → The demo-to-real chain): after the third demo
+  // session without a deposit. The step's intro, an empty line, the user's own demo facts, the
+  // bonus line of the active deposit_bonus version (none without one), the risk and the cashier's
+  // button (demo-to-real-text.ts). The 1 h step is a photo's caption, so every line fits one. No
+  // age, no deadline, no claim about the user beyond the facts (owner's limits on the texts).
+  demoToRealIntro1h: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: начало подписи баннера через час после третьей демо-сессии, если пополнений не было.',
+    `🎓 <b>На демо ты освоился</b>
+
+Следующий этап — реальный счёт.`,
+    caption,
+  ),
+  demoToRealIntro24h: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: начало напоминания через сутки после третьей демо-сессии, если пополнений не было.',
+    `💳 <b>Реальный счёт: напоминание</b>
+
+Демо-сессии позади, следующий шаг — пополнение счёта.`,
+    caption,
+  ),
+  demoToRealIntro72h: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: начало напоминания через трое суток после третьей демо-сессии, если пополнений не было; последнее в цепочке.',
+    `📌 <b>Ещё раз о реальном счёте</b>
+
+Пополнение — в кассе по кнопке ниже.`,
+    caption,
+  ),
+  demoToRealFacts: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: демо-итог пользователя — число демо-сессий, сделки и их результат в $ со знаком (минус тоже показывается).',
+    '📊 Твоё демо: {sessions}, {result}, результат {profit}.',
+    { ...caption, vars: ['sessions', 'result', 'profit'] },
+  ),
+  demoToRealBonus: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: условия бонуса за пополнение из действующей версии правила deposit_bonus; без действующей версии строки нет.',
+    '🎁 Токены за пополнение: {tokensPerUsd} за каждый $1 при сумме от {minAmountUsd}, не больше {maxTokens} за одно пополнение.',
+    { ...caption, vars: ['tokensPerUsd', 'minAmountUsd', 'maxTokens'] },
+  ),
+  demoToRealBonusAnyAmount: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: условия бонуса за пополнение, когда в правиле deposit_bonus нет минимальной суммы.',
+    '🎁 Токены за пополнение: {tokensPerUsd} за каждый $1, не больше {maxTokens} за одно пополнение.',
+    { ...caption, vars: ['tokensPerUsd', 'maxTokens'] },
+  ),
+  demoToRealRisk: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: строка о риске перехода к реальным деньгам; есть в каждом шаге.',
+    '⚠️ Реальные деньги — реальный риск: сделки могут закрываться в минус, внесённую сумму можно потерять.',
+    caption,
+  ),
+  demoToRealDeposit: html(
+    g.Mailing,
+    'Цепочка «демо → реал»: строка о кнопке кассы, последняя в сообщении.',
+    '👇 «{depositButton}» — пополнить счёт в кассе.',
+    { ...caption, fragments: { depositButton: 'depositButton' } },
+  ),
+  demoSessionOne: plain(
+    g.Mailing,
+    'Цепочка «демо → реал»: слово после числа 1, 21, 31… («1 демо-сессия»).',
+    'демо-сессия',
+  ),
+  demoSessionFew: plain(
+    g.Mailing,
+    'Цепочка «демо → реал»: слово после числа 2–4, 22–24… («3 демо-сессии»).',
+    'демо-сессии',
+  ),
+  demoSessionMany: plain(
+    g.Mailing,
+    'Цепочка «демо → реал»: слово после остальных чисел («5 демо-сессий», «11 демо-сессий»).',
+    'демо-сессий',
+  ),
 
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(

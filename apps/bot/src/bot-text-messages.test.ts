@@ -55,11 +55,15 @@ import {
   H1_CLOSENESS_MAX_PCT,
   joinHtmlLines,
   helpLinksCaption,
+  createBotTexts,
+  demoToRealText,
+  type BotLanguage as BotLanguageCode,
+  type DemoToRealIntroKey,
 } from '@binarius/shared';
 import { botTextSourcesWith } from '@binarius/shared/testing';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
 import { pairWaitingText, waitingText } from './demo';
-import { runWithLanguage } from './language';
+import { currentLanguage, runWithLanguage } from './language';
 import { DEMO_DURATIONS_SEC, type DemoDurationSec } from './demo-catalog';
 import {
   brokerBalance,
@@ -83,7 +87,7 @@ import {
   sessionStatusText,
   sessionStopReplyText,
   sessionTexts as notices,
-  setBotTextSources,
+  setBotTextSources as setBotSources,
   settingsText,
   stakePickerText,
   statusCard,
@@ -101,6 +105,22 @@ import {
 // The descriptions in packages/shared/src/bot-text-messages.ts against the bot's real assembly:
 // each message at its widest inputs is exactly as long as the estimate says (M1), and reads
 // exactly the keys the estimate reads (M2).
+
+// The sources the bot reads now, kept here too, so a message assembled in packages/shared over the
+// catalog's own views (demoToReal, #880: the backend's, outside the bot's facades) reads them.
+let liveSources: Readonly<Record<BotLanguageCode, BotTextSource<BotTextKey>>> =
+  BOT_TEXT_DEFAULT_SOURCES;
+const setBotTextSources = (sources: typeof liveSources): void => {
+  liveSources = sources;
+  setBotSources(sources);
+};
+const liveTexts = () => {
+  const language = currentLanguage();
+  return {
+    ...createBotTexts({ sourceOf: (key) => liveSources[language].sourceOf(key) }),
+    language,
+  };
+};
 
 const W = BOT_TEXT_WIDTHS;
 const x = (width: number) => 'x'.repeat(width);
@@ -520,6 +540,33 @@ const REAL: Record<string, () => TelegramHtml[]> = {
             },
             { channel, reviews, manager },
           ),
+        ),
+      ),
+    ),
+  // the demo-to-real chain (#880, demo-to-real-text.ts): each step's intro, with no bonus, a bonus
+  // with a minimum and one without, at int4 counts (a count(*)::int) and the widest decimals
+  demoToReal: () =>
+    (
+      ['demoToRealIntro1h', 'demoToRealIntro24h', 'demoToRealIntro72h'] as DemoToRealIntroKey[]
+    ).flatMap((intro) =>
+      [null, STAKE, d('0')].flatMap((minAmountUsd) =>
+        // each plural form of the trades
+        [INT4_MAX, 1, 2].map((settled) =>
+          demoToRealText(liveTexts(), {
+            intro,
+            facts: {
+              sessions: 10 ** W.sessionsCount - 1,
+              settled,
+              won: INT4_MAX,
+              lost: INT4_MAX,
+              tied: INT4_MAX,
+              profit: USD,
+            },
+            bonus:
+              minAmountUsd === null
+                ? null
+                : { tokensPerUsd: STAKE, minAmountUsd, maxTokens: STAKE },
+          }),
         ),
       ),
     ),

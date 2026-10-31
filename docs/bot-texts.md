@@ -66,7 +66,10 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   #576: `referralRewarded` and its button's label `inviteMoreButton`, a label of the backend's
   message only, so here and not in `buttons`; #879: the help push's caption keys `helpLinksTitle`,
   `helpLinksChannel`, `helpLinksReviews`, `helpLinksManager` and its labels `helpChannelButton`,
-  `helpReviewsButton`, `managerButton`), so the bot's `TEXTS` leaves the group out. `deposit`
+  `helpReviewsButton`, `managerButton`; #880: the demo-to-real chain's `demoToRealIntro1h`,
+  `demoToRealIntro24h`, `demoToRealIntro72h`, `demoToRealFacts`, `demoToRealBonus`,
+  `demoToRealBonusAnyAmount`, `demoToRealRisk`, `demoToRealDeposit` and the words
+  `demoSessionOne/Few/Many`), so the bot's `TEXTS` leaves the group out. `deposit`
   holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
   `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus
@@ -312,11 +315,14 @@ compile.
 | `paymentDate` | a Stars payment's `paid_at`, Unix seconds (#118, /paysupport) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 | `sessionEnd` | the session's `ended_at`, Unix seconds (#538, the promo card) | `formatPaymentDate`: `dd.mm.yyyy hh:mm`, Moscow time | — |
 | `checks` | the scanner's checks a minute of the wait's caption, `scanned × 60` (#859) | `formatCount` | — |
+| `tokensPerUsd`, `maxTokens` | the `deposit_bonus` version's params in the demo-to-real chain's payload (#880) | `formatTokensRate`: grouped, no trailing zeros | — |
+| `minAmountUsd` | the same version's minimum deposit (#880) | `formatStake`: every fraction digit, so a cut minimum never names a sum that earns nothing | — |
 
 The rest (`amount`, `count`, `symbol`, `subject`, `line`, `trades`, `cycle`, `step`, `openPrice`,
 `closePrice`, `noSignalCandles`, `candleSec`, and the wait's scanner lines `pairs`, `quotes`, `moves`,
 `closest`, `pct` of #859 — `scan-summary.ts` builds them from `GET /trading/signals`' summary, the
-pair word by the language's plural rule, `scanPairOne/Few/Many` — …) are a line's value the
+pair word by the language's plural rule, `scanPairOne/Few/Many` — the demo-to-real chain's
+`sessions` of #880, the count with `demoSessionOne/Few/Many`, …) are a line's value the
 caller has already put into words from the catalog and its data, printed as is; their description
 names what they hold.
 
@@ -635,7 +641,11 @@ step the wait draws, `demoLaunch` and `demoCycleStake`, captions of 1024 under t
 since #859; the session's waiting message, `sessionWaiting` — its header and the session pair's
 scan lines, the backend's caption under the scanner's animation, #860; the help push's caption,
 `helpLinks` — its title and a line per link the env sets, the backend's caption under its banner,
-built by `helpLinksCaption` in `packages/shared/src/help-links-text.ts`, #879), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+built by `helpLinksCaption` in `packages/shared/src/help-links-text.ts`, #879; the demo-to-real
+chain's step, `demoToReal` — the intro of each step, the facts, the bonus line in either form or
+none, the risk and the button, built by `demoToRealText` in
+`packages/shared/src/demo-to-real-text.ts`, a caption of 1024 for all three steps since the 1 h
+one is the banner's, #880), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
@@ -653,6 +663,8 @@ backend answers with at most `USER_ACCOUNT_LIST_LIMIT` (10) links. The rest are 
 assumptions in `BOT_TEXT_WIDTHS`: a broker's address ≤ 254, a pair label ≤ 64
 (`PAIR_LABEL_MAX_LENGTH`: the symbol without « OTC», cut to 64, #631), a session's counters
 ≤ 999, the analysis numbers (the closed candles an indicator holds and needs, `required`, ≤ 5
-digits as `candles`), a bot's username ≤ 32 (Telegram's rule). A value past one of them lengthens a message by a few characters,
+digits as `candles`), a bot's username ≤ 32 (Telegram's rule), a user's stopped demo sessions
+≤ 9 999 (`sessionsCount`, #880; the chain's trade counts are a `count(*)::int`, measured at
+int4). A value past one of them lengthens a message by a few characters,
 and Telegram refuses the message only if that crosses its limit. A plain label is measured as
 written, markup and entities included: it is escaped and shown literally.

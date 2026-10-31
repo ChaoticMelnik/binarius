@@ -7,6 +7,8 @@ import {
   cycleDoorCallbackData,
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  demoToRealPayloadSchema,
+  demoToRealText,
   helpLinksCaption,
   keyboardOf,
   MENU_CALLBACK_DATA,
@@ -22,10 +24,12 @@ import {
   type BotKeyboard,
   type BotLanguage,
   type BotStaticHtmlKey,
+  type DemoToRealIntroKey,
   type TelegramHtml,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
 import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/texts';
+import { demoToRealKeyboard } from './demo-to-real';
 import { helpLinksConfigured, helpLinksKeyboard, type HelpLinks } from './help-links';
 
 type Payload = Record<string, unknown>;
@@ -40,9 +44,9 @@ export interface MailingContext {
   language: BotLanguage;
 }
 
-// The pictures a mailing sends (#879): the engine holds each one's file and file_id
+// The pictures a mailing sends (#879, #880): the engine holds each one's file and file_id
 // (MailingEngineDeps.photos), so a message names its picture only.
-export type MailingPhoto = 'help_banner';
+export type MailingPhoto = 'help_banner' | 'demo_to_real_banner';
 
 // A mailing with a picture: its caption carries the text (ClientPush.sendMailingPhoto).
 export interface MailingPhotoMessage {
@@ -216,6 +220,25 @@ function helpLinks(_payload: Payload, context: MailingContext): MailingPhotoMess
   };
 }
 
+// The demo-to-real chain (#880, docs/mailing.md → The demo-to-real chain): the user's facts and the
+// bonus terms from the payload, the planning's; the 1 h step is the banner with the text as its
+// caption, the later ones text. A payload that does not parse, or no cashier, throws (`mailing not
+// built`).
+const demoToRealStep =
+  (intro: DemoToRealIntroKey, photo: boolean) =>
+  (payload: Payload, context: MailingContext): MailingMessage => {
+    const { bonus, ...facts } = demoToRealPayloadSchema.parse(payload);
+    const { language } = context;
+    const reply_markup = demoToRealKeyboard(context);
+    const text = demoToRealText(
+      { html: clientTextsOf(language), plain: clientLabelsOf(language), language },
+      { intro, facts, bonus },
+    );
+    return photo
+      ? { photo: 'demo_to_real_banner', caption: text, reply_markup }
+      : { text, reply_markup };
+  };
+
 // What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
 // text override reaches it. One entry per kind: a kind added to NotificationKind without a message
 // does not compile.
@@ -234,6 +257,9 @@ const MAILING_MESSAGES = {
   [NotificationKind.WeeklySummary]: weeklySummary,
   [NotificationKind.TokensOut2d]: tokensOutStill,
   [NotificationKind.HelpLinks]: helpLinks,
+  [NotificationKind.DemoToReal1h]: demoToRealStep('demoToRealIntro1h', true),
+  [NotificationKind.DemoToReal24h]: demoToRealStep('demoToRealIntro24h', false),
+  [NotificationKind.DemoToReal72h]: demoToRealStep('demoToRealIntro72h', false),
 } as const satisfies Record<
   NotificationKind,
   (payload: Payload, context: MailingContext) => MailingMessage

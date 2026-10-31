@@ -136,7 +136,7 @@ Four places read package files at run time: the bot's pictures and fonts, `web`'
 stylesheet and fonts, `packages/db`'s migrations folder (the startup schema check reads its journal
 inside the backend's and the worker's bundles), and since #860 the backend's session wait, the
 scanner's animation of `packages/shared/assets` (since #879 also the help push's banner there,
-`help-banner.png`). In a bundle every module shares the
+`help-banner.png`, and since #880 the demo-to-real chain's, `demo-to-real-banner.png`). In a bundle every module shares the
 bundle's `import.meta.url`, so `new URL('./assets/x.jpg', import.meta.url)` would point into
 `apps/<app>/dist/`. They find the package's root instead:
 
@@ -150,7 +150,7 @@ returns the real path either way. The package lists `"./package.json": "./packag
 `exports` (bot, web, db, shared), or Node refuses the subpath. The bot's form is `botFile()` in
 `apps/bot/src/package-root.ts` (`sharedFile()` beside it for `packages/shared/assets`, the wait's
 media, #859; the backend's `sharedFile()` in `apps/backend/src/package-root.ts` for
-`trading/scan-media.ts`, #860, and `mailing/help-links.ts`, #879), which also checks each file for read access when its module is
+`trading/scan-media.ts`, #860, `mailing/help-links.ts`, #879, and `mailing/demo-to-real.ts`, #880), which also checks each file for read access when its module is
 imported, so a wrong path stops the process at start, not at the first card; `web` reads its files
 at import already. The helper is not in `packages/shared`: that package compiles without Node's
 types (`types: []`, #6). A new file read at run time takes the same form: a unit test from `src/`

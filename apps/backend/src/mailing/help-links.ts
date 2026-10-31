@@ -1,5 +1,6 @@
 import {
   ButtonRole,
+  DEMO_TO_REAL_CHAIN,
   keyboardOf,
   NotificationKind,
   urlButton,
@@ -24,13 +25,23 @@ export const HELP_BANNER_PATH = sharedFile('assets', 'help-banner.png');
 export const helpLinksConfigured = ({ channelUrl, reviewsUrl, managerUrl }: HelpLinks): boolean =>
   channelUrl !== undefined || reviewsUrl !== undefined || managerUrl !== undefined;
 
+const DEMO_TO_REAL_KINDS: readonly NotificationKind[] = DEMO_TO_REAL_CHAIN.map((step) => step.kind);
+
 // The kinds this process plans and claims: without a single link the help push has nothing to
-// say, so it is neither planned nor taken, and a job planned before the links were removed waits
-// for them (docs/mailing.md → The help push).
-export const enabledKinds = (links: HelpLinks): NotificationKind[] =>
-  Object.values(NotificationKind).filter(
-    (kind) => kind !== NotificationKind.HelpLinks || helpLinksConfigured(links),
-  );
+// say, and without the cashier (cashierUrlOf, https only) the demo-to-real chain (#880) has no
+// button to lead to, so neither is planned nor taken, and a job planned before waits for them
+// (docs/mailing.md → The help push, The demo-to-real chain).
+export const enabledKinds = ({
+  helpLinks,
+  cashierUrl,
+}: {
+  helpLinks: HelpLinks;
+  cashierUrl: string | undefined;
+}): NotificationKind[] =>
+  Object.values(NotificationKind).filter((kind) => {
+    if (kind === NotificationKind.HelpLinks) return helpLinksConfigured(helpLinks);
+    return !DEMO_TO_REAL_KINDS.includes(kind) || cashierUrl !== undefined;
+  });
 
 type ButtonContext = Pick<MailingContext, 'helpLinks' | 'language'>;
 

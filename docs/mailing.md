@@ -5,7 +5,7 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries seven scenarios: the **first-session chain**, three reminders that lead a user who
+Today it carries eight scenarios: the **first-session chain**, three reminders that lead a user who
 connected an account but has not started a trading session into the demo, the **analysis
 reminder** (#484), one reminder after an analysis card nobody acted on, the **referral reward
 notification** (#576), one message to an inviter per reward, the **low-token nudge** (#123),
@@ -13,8 +13,10 @@ one push when the balance falls to a share of the user's starter pack, and the *
 notification** (#686), one message per deposit that switched the user to real, the one
 *important* kind, and **retention** (#124), four pushes that bring back a user who stopped: after
 three days without activity, a day after the last session, a weekly summary of the demo trades,
-and a second word two days after the tokens ran out, and the **help push** (#879), one picture
-with the links to the bot's channel, its reviews and the manager, 2 hours after the connect.
+and a second word two days after the tokens ran out, the **help push** (#879), one picture
+with the links to the bot's channel, its reviews and the manager, 2 hours after the connect, and
+the **demo-to-real chain** (#880), three pushes toward a first deposit after the third demo
+session.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts apps/backend/src/trading/signal-routes.test.ts   # no database or Redis
@@ -32,7 +34,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `realModeByDepositPayloadSchema` (#686), `INACTIVE_AFTER_MS`, `INACTIVE_REPEAT_DAYS`,
   `SESSION_IDLE_AFTER_MS`, `WEEKLY_SUMMARY_HOUR_UTC`, `TOKENS_OUT_REPEAT_AFTER_MS`,
   `sessionIdlePayloadSchema` and `weeklySummaryPayloadSchema` (#124), `HELP_LINKS_AFTER_MS` (#879),
-  and `MAILING_MIN_OFFSET_MS`, the earliest offset among the kinds that wait.
+  `DEMO_TO_REAL_SESSIONS`, `DEMO_TO_REAL_CHAIN` and `demoToRealPayloadSchema` (#880), and
+  `MAILING_MIN_OFFSET_MS`, the earliest offset among the kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
   (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
@@ -58,7 +61,9 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
 - `apps/backend/src/mailing/help-links.ts` — the help push's links (`HelpLinks`, from the env),
   `enabledKinds`, the keyboard and `managerButton`, the mailing kinds' shared «💬 Написать
   менеджеру» (#879, #880); `apps/backend/src/mailing/photo-media.ts` — `createPhotoMedia`, a
-  picture's file and its `file_id` (Rule 58).
+  picture's file and its `file_id` (Rule 58); `apps/backend/src/mailing/demo-to-real.ts` — the
+  chain's banner path and keyboard (#880), its text `demoToRealText` in
+  `packages/shared/src/demo-to-real-text.ts`.
 - `apps/backend/src/mailing/engine.ts` — the two loops, the pacer, the failure policy and
   `wakePlan()` (#686, The planner → The wake); its
   `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, its `helpLinks` the env's and its `photos` one
@@ -127,6 +132,8 @@ deposit as `predates`, so no switch precedes it anyway. The four retention kinds
 sessions, weeks and sent `tokens_out` jobs after the deploy count, so the deploy sends no wave over
 the whole base, and the first weekly summary goes out on the first Monday after it. The help push's
 row is seeded by `0089_help_links_seed.sql` (#879): only accounts connected after its deploy get it.
+The demo-to-real chain's three rows are seeded by `0091_demo_to_real_seed.sql` in one statement
+(#880): only users whose third demo session ends after its deploy get the chain.
 
 ## The analysis reminder (#484)
 
@@ -422,6 +429,12 @@ Monday 00:00–10:00 UTC plans nothing (`weeklyTimely`), so it never summarises 
 
 ### Accepted risks
 
+- The demo-to-real chain (#880): the scenarios are independent, so a user with three sessions and
+  no deposit can get `session_idle_24h` and the chain's 24 h step the same day, and the help push
+  too (`full`; `reduced` keeps one a day, the earliest `scheduled_at` first); the facts and the
+  bonus terms are the planning's, so a `reduced` user's step sent up to a day later may be a
+  session or a rule version behind; any `deposit_events` row of the user ends the chain, a
+  `failed` or `ignored` one included; a session stopped with no trade counts as one of the three.
 - The activity is an approximation (above).
 - Planner load: each kind is one `INSERT … SELECT` per 60 s over all users with correlated
   subqueries (`trade_intents_user_id_idx`, `notification_jobs_user_id_idx`); `inactive_3d`'s also
@@ -503,6 +516,67 @@ Tests: `mailing-ops.db.test.ts` HL1–HL11 (its CUT is HL10), `engine.db.test.ts
 `packages/shared/src/help-links-text.test.ts` HT1–HT3, `tooling/help-banner.test.ts` HB1–HB3, the
 pins in `timing.test.ts`.
 
+## The demo-to-real chain (#880)
+
+| Kind               | Sent                            | Message (`mailing` group)                                     | Buttons                                                        |
+| ------------------ | ------------------------------- | ------------------------------------------------------------- | -------------------------------------------------------------- |
+| `demo_to_real_1h`  | 1 h after the 3rd demo session  | the banner; `demoToRealIntro1h` and the common lines, caption | «💳 Пополнить» (the cashier), «💬 Написать менеджеру» under it |
+| `demo_to_real_24h` | 24 h after the 3rd demo session | `demoToRealIntro24h` and the common lines                     | the same                                                       |
+| `demo_to_real_72h` | 72 h after the 3rd demo session | `demoToRealIntro72h` and the common lines; the last step      | the same                                                       |
+
+After the demo, the next stage is a real account: the user's own demo facts, the terms of the
+deposit bonus when one is in force, the risk, and the cashier.
+
+- **The fact** is the end (`ended_at`) of the user's `DEMO_TO_REAL_SESSIONS`-th (3, the manager's
+  answer of 2026-10-31) stopped demo session on any of their accounts, oldest end first. A fixed
+  point: a fourth session moves nothing, and the offsets and the cutoff count from it. A real
+  session does not count; with fewer than three there is no fact.
+- **It applies** while the user is not blocked by the admin, has an active account, has no
+  `deposit_events` row at all (any status; an unattributed one counts once activation attaches it)
+  and trading is open (Rule 22). The trading mode is not read. An ordinary kind (Delivery rules):
+  `off` and the bot block cancel its pending job, `reduced` holds it for the window.
+- **One step at a time, one chain per user.** The keys are the constant `demo_to_real:1h`, `…:24h`
+  and `…:72h`; a step is stale once the next one is due (cancelled at the claim, as the
+  first-session chain's), so after an outage the user gets the latest one; a canceled job is not
+  planned again. The last step has no end.
+- **The payload** is the planning's (`demoToRealPayloadSchema`): `sessions` (the stopped demo
+  sessions), `settled`/`won`/`lost`/`tied` of every settled demo trade of the user, single and
+  session ones, `profit` their summed profit as text (Rule 2), and `bonus`, the `params` of the
+  `deposit_bonus` version in force (`activeRuleWhere(DEPOSIT_BONUS_RULE_CODE)`, the predicate
+  `resolveActiveRule` uses; one of another kind under the code is no bonus), or `null`.
+- **The text** (`demoToRealText`, shared, described as `demoToReal` in `BOT_TEXT_MESSAGES`): the
+  step's intro, an empty line, `demoToRealFacts` («3 демо-сессии, 12 сделок — 6 в плюс, 6 в минус,
+  результат -$1.50»: the result with its sign, a loss as a minus), the bonus line
+  (`demoToRealBonus`, or `demoToRealBonusAnyAmount` when `minAmountUsd` is zero; none without a
+  version in force), `demoToRealRisk` and `demoToRealDeposit`. No age, no deadline and no claim
+  about the user beyond the payload (the owner's limits; `messages.test.ts` DM7). A broker's promo
+  code is not in it: none was given (a configuration of its own when it is).
+- **Timing.** 1 h, 24 h and 72 h (the manager's answer of 2026-10-31), in `DEMO_TO_REAL_CHAIN`;
+  they count in `MAILING_MIN_OFFSET_MS`, and `timing.test.ts` pins `MAILING_PLAN_TICK_MS` under the
+  first.
+- **The cashier.** The buttons are «💳 Пополнить», the cashier's Mini App (`cashierUrlOf`), and
+  `managerButton` under it when `HELP_MANAGER_URL` is set. Without https in `WEB_PUBLIC_URL` there
+  is no cashier: the engine leaves the three kinds out of `kinds` (neither planned nor claimed),
+  and a message built without one throws (`mailing not built`).
+- **The banner** of the 1 h step is `packages/shared/assets/demo-to-real-banner.png`, rendered from
+  `demo-to-real-banner.svg` by `node tooling/demo-to-real-banner.ts`, wordless; sent as the help
+  banner is (`createPhotoMedia`, The help push → The banner).
+
+What becomes of a job of this kind:
+
+| Outcome                                                                 | The job                                                                    |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| the claim: applies, the next step not due                               | `sent` with `outcome_unknown`, then the sender's table                     |
+| the claim: a deposit, blocked, no active account, trading off, or stale | `canceled` in the same statement; its key stays taken, never planned again |
+| the claim: no cashier (the kinds are not in `kinds`)                    | left `pending`, neither claimed nor canceled                               |
+| the planner: bot blocked or notifications `off`                         | not created yet; planned on the first tick after they are back             |
+| the planner: a third session before `plans_from`                        | never created                                                              |
+
+Tests: `mailing-ops.db.test.ts` DR1–DR12 (its CUT is DR9), `engine.db.test.ts` E-DR1–E-DR3,
+`messages.test.ts` DM1–DM8, `help-links.test.ts` HK5,
+`packages/shared/src/demo-to-real-text.test.ts` DT1–DT5, `bot-text-format.test.ts` F-rate,
+`tooling/demo-to-real-banner.test.ts` DB1–DB3, the pin in `timing.test.ts`.
+
 ## The planner
 
 Once at `start()` (#874, Rule 65: it reads only the database) and then every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
@@ -515,12 +589,13 @@ scenario applies — one job per row of the kind's `facts` (`cross join lateral`
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
 `tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`; `inactive_3d:<epoch>`,
-`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`) makes it idempotent: a second run, a second backend process or a restart
+`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`; `demo_to_real:1h`, `…:24h`, `…:72h`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 
 The planner reads facts; no trading or linking path writes a mailing. It plans only the kinds the
-process sends (`kinds`, The help push → The links); the claim takes the same list.
+process sends (`kinds`: The help push → The links, The demo-to-real chain → The cashier); the
+claim takes the same list.
 
 **The wake (#686).** `wakePlan()` runs a pass now, or one more right after the pass in flight; wakes
 during a pass merge into one more pass (a counter reset before the pass's first statement, so a
@@ -634,7 +709,8 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
 6. A kind with a picture (#879): its `MailingPhoto` literal in `messages.ts` and its
    `createPhotoMedia` in the engine's `photos` (`Record<MailingPhoto, PhotoMedia>`: a picture
    without one does not compile). A kind the env can switch off: its condition in `enabledKinds`
-   (`help-links.ts`), so it is neither planned nor claimed while off.
+   (`help-links.ts`; the help push without a link, the demo-to-real chain without the cashier,
+   #880), so it is neither planned nor claimed while off.
 
 ## Accepted risks
 

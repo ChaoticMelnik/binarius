@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { BotLanguage, ButtonRole, NotificationKind, urlButton } from '@binarius/shared';
+import {
+  BotLanguage,
+  ButtonRole,
+  DEMO_TO_REAL_CHAIN,
+  NotificationKind,
+  urlButton,
+} from '@binarius/shared';
 import { clientLabelsOf } from '../auth/texts';
 import {
   enabledKinds,
@@ -10,6 +16,7 @@ import {
 } from './help-links';
 
 const MANAGER = 'https://t.me/binarius_manager';
+const CASHIER_URL = 'https://web.example/cashier';
 const NONE: HelpLinks = { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined };
 const ONE_EACH: HelpLinks[] = [
   { ...NONE, channelUrl: 'https://t.me/binarius_news' },
@@ -48,7 +55,23 @@ describe('the help push links', () => {
 
   it('HK4 the process leaves the help push out of its kinds without a link, and keeps every kind with one', () => {
     const all = Object.values(NotificationKind);
-    expect(enabledKinds(NONE)).toEqual(all.filter((kind) => kind !== NotificationKind.HelpLinks));
-    for (const links of ONE_EACH) expect(enabledKinds(links)).toEqual(all);
+    expect(enabledKinds({ helpLinks: NONE, cashierUrl: CASHIER_URL })).toEqual(
+      all.filter((kind) => kind !== NotificationKind.HelpLinks),
+    );
+    for (const links of ONE_EACH) {
+      expect(enabledKinds({ helpLinks: links, cashierUrl: CASHIER_URL })).toEqual(all);
+    }
+  });
+
+  // #880 (docs/mailing.md → The demo-to-real chain)
+  it('HK5 the process leaves the demo-to-real chain out of its kinds without the cashier', () => {
+    const chain: NotificationKind[] = DEMO_TO_REAL_CHAIN.map((step) => step.kind);
+    const all = Object.values(NotificationKind);
+    expect(enabledKinds({ helpLinks: ONE_EACH[0]!, cashierUrl: undefined })).toEqual(
+      all.filter((kind) => !chain.includes(kind)),
+    );
+    expect(enabledKinds({ helpLinks: NONE, cashierUrl: undefined })).toEqual(
+      all.filter((kind) => !chain.includes(kind) && kind !== NotificationKind.HelpLinks),
+    );
   });
 });

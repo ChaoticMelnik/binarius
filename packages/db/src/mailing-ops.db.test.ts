@@ -2,8 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, inArray, ne, sql, type SQL } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  BonusRuleKind,
   BotLanguage,
   BrokerAccountStatus,
+  DEMO_TO_REAL_CHAIN,
+  DEMO_TO_REAL_SESSIONS,
+  DepositEventStatus,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   HELP_LINKS_AFTER_MS,
@@ -39,6 +43,7 @@ import {
   type TempDatabase,
 } from './testing';
 import {
+  bonusRules,
   brokerAccounts,
   brokerBalanceSnapshots,
   BrokerTradeStatus,
@@ -65,6 +70,7 @@ import {
 } from './mailing-scenarios';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { createTradeIntent } from './trade-intent-ops';
+import { DEPOSIT_BONUS_RULE_CODE } from './bonus-rule-ops';
 import { markTelegramBlocked, markTelegramReachable, setNotificationLevel } from './delivery-ops';
 import { setLastAnalysis, setTradingMode } from './user-ops';
 import { grantReferralReward, lockReferralInviter } from './referral-reward-ops';
@@ -2964,5 +2970,316 @@ describe('the help push (#879)', () => {
     expect((await kindJobsOf(canceled.userId, KIND)).map((job) => job.status)).toEqual([
       NotificationJobStatus.Canceled,
     ]);
+  });
+});
+
+describe('the demo-to-real chain (#880)', () => {
+  retentionSetup();
+  const [DR_1H, DR_24H, DR_72H] = DEMO_TO_REAL_CHAIN;
+  const KINDS: NotificationKind[] = DEMO_TO_REAL_CHAIN.map((step) => step.kind);
+  let bonusVersion = 100;
+
+  // the user's chain jobs, in scheduled order
+  const chainJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => KINDS.includes(job.kind));
+
+  // A demo user whose DEMO_TO_REAL_SESSIONS-th stopped demo session ended `thirdEnded` minutes ago,
+  // the earlier ones 20 and 10 minutes before it; `sessions` more or fewer, on `accountId`.
+  async function demoUser(
+    thirdEnded: number,
+    {
+      sessions = DEMO_TO_REAL_SESSIONS,
+      tradingMode,
+    }: { sessions?: number; tradingMode?: TradeMode } = {},
+  ) {
+    const user = await retained({ tradingMode });
+    const ended: Date[] = [];
+    for (let i = 0; i < sessions; i++) {
+      const at = thirdEnded + (DEMO_TO_REAL_SESSIONS - 1 - i) * 10;
+      const session = await stoppedSession(user.accountId, { started: at + 5, ended: at });
+      ended.push(session.endedAt!);
+    }
+    return { ...user, thirdEndedAt: ended[DEMO_TO_REAL_SESSIONS - 1] };
+  }
+
+  const deposit = async (
+    user: Retained,
+    { attributed = true, status }: { attributed?: boolean; status?: DepositEventStatus } = {},
+  ) => {
+    const [account] = await tmp.db
+      .select({ brokerUserId: brokerAccounts.brokerUserId })
+      .from(brokerAccounts)
+      .where(eq(brokerAccounts.id, user.accountId));
+    await tmp.db.insert(depositEvents).values({
+      userId: attributed ? user.userId : null,
+      brokerAccountId: attributed ? user.accountId : null,
+      source: PostbackSource.Binodex,
+      brokerUserId: account!.brokerUserId,
+      paymentId: `dr-pay-${randomUUID()}`,
+      amount: '10' as DecimalString,
+      ...(status === undefined ? {} : { status }),
+    });
+  };
+
+  const depositBonus = async (patch: {
+    isActive?: boolean;
+    kind?: BonusRuleKind;
+    validTo?: SQL;
+    params?: Record<string, unknown>;
+  }) => {
+    await tmp.db.insert(bonusRules).values({
+      code: DEPOSIT_BONUS_RULE_CODE,
+      version: ++bonusVersion,
+      kind: patch.kind ?? BonusRuleKind.DepositBonus,
+      isActive: patch.isActive ?? true,
+      params: patch.params ?? DR_BONUS,
+      ...(patch.validTo === undefined ? {} : { validTo: patch.validTo }),
+    });
+  };
+  const DR_BONUS = { tokensPerUsd: '0.5', minAmountUsd: '10', maxTokens: '500' };
+  const switchOffBonuses = () =>
+    tmp.db
+      .update(bonusRules)
+      .set({ isActive: false })
+      .where(eq(bonusRules.code, DEPOSIT_BONUS_RULE_CODE));
+
+  const NO_TRADES = { sessions: 3, settled: 0, won: 0, lost: 0, tied: 0, profit: '0', bonus: null };
+
+  it('DR1 plans the 1 h step an hour after the third demo session, with the facts, and nothing before', async () => {
+    const due = await demoUser(hours(1) + 1);
+    const early = await demoUser(hours(1) - 1);
+    await planMailingJobs(tmp.db);
+
+    const jobs = await chainJobsOf(due.userId);
+    expect(jobs.map((job) => [job.kind, job.status, job.dedupeKey, job.payload])).toEqual([
+      [DR_1H.kind, NotificationJobStatus.Pending, 'demo_to_real:1h', NO_TRADES],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.thirdEndedAt!.getTime() + 3_600_000);
+    expect(await chainJobsOf(early.userId)).toEqual([]);
+  });
+
+  it('DR2 plans nothing with two stopped demo sessions, a real third one or a third still running', async () => {
+    const two = await demoUser(hours(1) + 1, { sessions: 2 });
+    const realThird = await demoUser(hours(1) + 30, { sessions: 2 });
+    await stoppedSession(realThird.accountId, {
+      started: hours(1) + 5,
+      ended: hours(1) + 1,
+      mode: TradeMode.Real,
+    });
+    const running = await demoUser(hours(1) + 30, { sessions: 2 });
+    await seedTradingSession(tmp.db, running.accountId);
+    await planMailingJobs(tmp.db);
+    for (const user of [two, realThird, running]) {
+      expect(await chainJobsOf(user.userId)).toEqual([]);
+    }
+  });
+
+  it('DR3 counts from the third session: a fourth one moves nothing, and the facts count all four', async () => {
+    const user = await demoUser(hours(1) + 30);
+    await stoppedSession(user.accountId, { started: 10, ended: 5 });
+    await planMailingJobs(tmp.db);
+    const jobs = await chainJobsOf(user.userId);
+    expect(jobs.map((job) => [job.kind, (job.payload as { sessions: number }).sessions])).toEqual([
+      [DR_1H.kind, 4],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(user.thirdEndedAt!.getTime() + 3_600_000);
+  });
+
+  it('DR4 plans nothing after a deposit of any status, cancels at the claim once one is recorded, and ignores an unattributed one', async () => {
+    const paid = await demoUser(hours(1) + 1);
+    await deposit(paid, { status: DepositEventStatus.Ignored });
+    const later = await demoUser(hours(1) + 1);
+    const unattributed = await demoUser(hours(1) + 1);
+    await deposit(unattributed, { attributed: false });
+    await planMailingJobs(tmp.db);
+    expect(await chainJobsOf(paid.userId)).toEqual([]);
+    expect(await chainJobsOf(unattributed.userId)).toHaveLength(1);
+
+    const [job] = await chainJobsOf(later.userId);
+    await deposit(later);
+    expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('DR5 a step is stale once the next is due: only the latest is planned, and a pending earlier one is canceled', async () => {
+    const at25h = await demoUser(hours(25));
+    const at73h = await demoUser(hours(73));
+    await planMailingJobs(tmp.db);
+    expect((await chainJobsOf(at25h.userId)).map((job) => job.kind)).toEqual([DR_24H.kind]);
+    expect((await chainJobsOf(at73h.userId)).map((job) => job.kind)).toEqual([DR_72H.kind]);
+
+    const stale = await demoUser(hours(25));
+    const job = await insertJob(stale.userId, DR_1H.kind, 'demo_to_real:1h', {
+      status: NotificationJobStatus.Pending,
+    });
+    expect(await claimOnly(job.id)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('DR6a plans nothing for a user blocked by the admin, and cancels at the claim once blocked', async () => {
+    const block = (userId: string) =>
+      tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, userId));
+    const never = await demoUser(hours(1) + 1);
+    await block(never.userId);
+    const later = await demoUser(hours(1) + 1);
+    await planMailingJobs(tmp.db);
+    expect(await chainJobsOf(never.userId)).toEqual([]);
+    const [job] = await chainJobsOf(later.userId);
+    await block(later.userId);
+    expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('DR6b plans nothing without an active account, and cancels at the claim once it is revoked', async () => {
+    const revoke = (accountId: string) =>
+      tmp.db
+        .update(brokerAccounts)
+        .set({ status: BrokerAccountStatus.Revoked })
+        .where(eq(brokerAccounts.id, accountId));
+    const never = await demoUser(hours(1) + 1);
+    await revoke(never.accountId);
+    const later = await demoUser(hours(1) + 1);
+    await planMailingJobs(tmp.db);
+    expect(await chainJobsOf(never.userId)).toEqual([]);
+    const [job] = await chainJobsOf(later.userId);
+    await revoke(later.accountId);
+    expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('DR6c plans nothing while trading is switched off, and cancels at the claim', async () => {
+    const never = await demoUser(hours(1) + 1);
+    await closeTradingSwitch(tmp.db);
+    try {
+      await planMailingJobs(tmp.db);
+    } finally {
+      await openTrading();
+    }
+    expect(await chainJobsOf(never.userId)).toEqual([]);
+
+    await planMailingJobs(tmp.db);
+    const [job] = await chainJobsOf(never.userId);
+    await closeTradingSwitch(tmp.db);
+    try {
+      expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+    } finally {
+      await openTrading();
+    }
+  });
+
+  it('DR7 the bonus is the active deposit_bonus version’s params; inactive, expired or of another kind is none', async () => {
+    const bonusOf = async (setUp: () => Promise<unknown>) => {
+      const user = await demoUser(hours(1) + 1);
+      await setUp();
+      try {
+        await planMailingJobs(tmp.db);
+      } finally {
+        await switchOffBonuses();
+      }
+      const [job] = await chainJobsOf(user.userId);
+      return (job!.payload as { bonus: unknown }).bonus;
+    };
+    expect(await bonusOf(() => depositBonus({}))).toEqual(DR_BONUS);
+    expect(await bonusOf(() => depositBonus({ isActive: false }))).toBeNull();
+    expect(
+      await bonusOf(() => depositBonus({ validTo: sql`now() - interval '1 minute'` })),
+    ).toBeNull();
+    expect(
+      await bonusOf(() =>
+        depositBonus({ kind: BonusRuleKind.LinkBonus, params: { tokens: '100' } }),
+      ),
+    ).toBeNull();
+    expect(await bonusOf(async () => {})).toBeNull();
+  });
+
+  it('DR8 plans for a user in real mode as well: the chain is about the deposit, not the mode', async () => {
+    const user = await demoUser(hours(1) + 1, { tradingMode: TradeMode.Real });
+    await planMailingJobs(tmp.db);
+    expect((await chainJobsOf(user.userId)).map((job) => job.kind)).toEqual([DR_1H.kind]);
+  });
+
+  it('DR9 CUT plans nothing for a third session that ended before plans_from, even with a fourth after', async () => {
+    await plansFromMinutesAgo(hours(1) + 30, DR_1H.kind);
+    try {
+      const before = await demoUser(hours(1) + 40);
+      await stoppedSession(before.accountId, { started: hours(1) + 10, ended: hours(1) + 5 });
+      const after = await demoUser(hours(1) + 20);
+      await planMailingJobs(tmp.db);
+      expect(await chainJobsOf(before.userId)).toEqual([]);
+      expect(await chainJobsOf(after.userId)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('DR10a is an ordinary kind under reduced: another mailing inside the window holds the step', async () => {
+    const user = await demoUser(hours(1) + 1);
+    await planMailingJobs(tmp.db);
+    const [job] = await chainJobsOf(user.userId);
+    await setNotificationLevel(tmp.db, user.telegramUserId, NotificationLevel.Reduced);
+    await insertJob(user.userId, NotificationKind.AnalysisUnused, 'analysis_unused:dr', {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(1),
+    });
+    expect((await claimOnly(job!.id)).job).toBeUndefined();
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Pending);
+  });
+
+  it('DR10b off cancels the pending step and plans nothing', async () => {
+    const user = await demoUser(hours(1) + 1);
+    const never = await demoUser(hours(1) + 1);
+    await setNotificationLevel(tmp.db, never.telegramUserId, NotificationLevel.Off);
+    await planMailingJobs(tmp.db);
+    expect(await chainJobsOf(never.userId)).toEqual([]);
+    const [job] = await chainJobsOf(user.userId);
+    await setNotificationLevel(tmp.db, user.telegramUserId, NotificationLevel.Off);
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('DR10c a user who blocked the bot gets nothing, and the pending step is canceled', async () => {
+    const user = await demoUser(hours(1) + 1);
+    const never = await demoUser(hours(1) + 1);
+    await markTelegramBlocked(tmp.db, never.telegramUserId);
+    await planMailingJobs(tmp.db);
+    expect(await chainJobsOf(never.userId)).toEqual([]);
+    const [job] = await chainJobsOf(user.userId);
+    await markTelegramBlocked(tmp.db, user.telegramUserId);
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('DR11 one chain per user: sessions of a second account count, and a canceled step is not planned again', async () => {
+    const user = await demoUser(hours(1) + 30, { sessions: 2 });
+    const second = await seedBrokerAccount(tmp.db, user.userId);
+    await stoppedSession(second, { started: hours(1) + 5, ended: hours(1) + 1 });
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    const jobs = await chainJobsOf(user.userId);
+    expect(jobs.map((job) => [job.kind, job.dedupeKey])).toEqual([[DR_1H.kind, 'demo_to_real:1h']]);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.id, jobs[0]!.id));
+    expect((await planMailingJobs(tmp.db))[DR_1H.kind]).toBe(0);
+  });
+
+  it('DR12 sums the user’s settled demo trades, single and session ones, to the last digit', async () => {
+    const user = await demoUser(hours(1) + 1);
+    const [session] = await tmp.db
+      .select({ id: tradingSessions.id })
+      .from(tradingSessions)
+      .where(eq(tradingSessions.brokerAccountId, user.accountId))
+      .limit(1);
+    await trade(user, { createdAt: sql`now()`, sessionId: session!.id, profit: '-1.7515' });
+    await trade(user, { createdAt: sql`now()`, profit: '0.25' });
+    await trade(user, { createdAt: sql`now()`, profit: '0' });
+    await trade(user, { createdAt: sql`now()`, profit: '5', mode: TradeMode.Real });
+    await trade(user, { createdAt: sql`now()`, status: TradeIntentStatus.Rejected });
+    await planMailingJobs(tmp.db);
+    const [job] = await chainJobsOf(user.userId);
+    expect(job!.payload).toEqual({
+      sessions: 3,
+      settled: 3,
+      won: 1,
+      lost: 1,
+      tied: 1,
+      profit: '-1.50150000',
+      bonus: null,
+    });
   });
 });

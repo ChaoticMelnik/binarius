@@ -46,6 +46,14 @@ export function formatStake(amount: string): string {
 
 export const formatCount = (count: string): string => groupDigits(count);
 
+// A deposit_bonus rule's rate or cap (#880): an unsigned numeric(20,8) in tokens, the fraction
+// without its trailing zeros. '500.00000000' → '500', '0.50000000' → '0.5', '1500' → '1 500'
+export function formatTokensRate(amount: string): string {
+  const [whole = '0', fraction = ''] = amount.split('.');
+  const digits = fraction.replace(/0+$/, '');
+  return digits === '' ? groupDigits(whole) : `${groupDigits(whole)}.${digits}`;
+}
+
 // A price is not money: a broker's double, printed with the pair's digits. A value outside the sane
 // range is printed at the nearest bound rather than failing the message.
 export const formatPrice = (value: number, digits: number): string =>

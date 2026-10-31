@@ -38,6 +38,7 @@ import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { secretDigest, secretKeyId } from './auth/internal';
 import { createMailingEngine } from './mailing/engine';
+import { DEMO_TO_REAL_BANNER_PATH } from './mailing/demo-to-real';
 import { HELP_BANNER_PATH } from './mailing/help-links';
 import { createPhotoMedia } from './mailing/photo-media';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
@@ -383,7 +384,7 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
-// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879); started with the other loops after
+// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879, #880); started with the other loops after
 // listen(), stopped in phase 1
 const mailing = createMailingEngine({
   db,
@@ -393,6 +394,11 @@ const mailing = createMailingEngine({
   helpLinks: env.helpLinks,
   photos: {
     help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger: app.log }),
+    demo_to_real_banner: createPhotoMedia({
+      path: DEMO_TO_REAL_BANNER_PATH,
+      name: 'demo-to-real banner',
+      logger: app.log,
+    }),
   },
 });
 

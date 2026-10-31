@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   BotLanguage,
+  DEMO_TO_REAL_CHAIN,
+  demoToRealText,
   FIRST_SESSION_CHAIN,
   helpLinksCaption,
   NotificationKind,
@@ -290,6 +292,23 @@ describe('the real-mode message after a deposit', () => {
   );
 });
 
+// #880: the chain's payload as the planner writes it, and a deposit_bonus version's params
+const DEMO_TO_REAL_PAYLOAD = {
+  sessions: 3,
+  settled: 12,
+  won: 6,
+  lost: 6,
+  tied: 0,
+  profit: '-1.50000000',
+  bonus: null,
+};
+const DEMO_TO_REAL_BONUS = {
+  tokensPerUsd: '0.50000000',
+  minAmountUsd: '10.00000000',
+  maxTokens: '500.00000000',
+};
+const CHAIN_KINDS: NotificationKind[] = DEMO_TO_REAL_CHAIN.map((step) => step.kind);
+
 // an age in digits or in words, which a late push must not name (docs/mailing.md → Late planning)
 const AGES = [
   /\d\s*(мин|час|дн|сут|недел|мес)/u,
@@ -419,6 +438,9 @@ describe('the mailings in English (#633)', () => {
     [NotificationKind.WeeklySummary]: score,
     [NotificationKind.TokensOut2d]: {},
     [NotificationKind.HelpLinks]: {},
+    [NotificationKind.DemoToReal1h]: DEMO_TO_REAL_PAYLOAD,
+    [NotificationKind.DemoToReal24h]: DEMO_TO_REAL_PAYLOAD,
+    [NotificationKind.DemoToReal72h]: { ...DEMO_TO_REAL_PAYLOAD, bonus: DEMO_TO_REAL_BONUS },
   };
   const contexts = Object.values(TradeMode).flatMap((tradingMode) =>
     [CASHIER_URL, undefined].map((cashierUrl): MailingContext => ({
@@ -431,6 +453,8 @@ describe('the mailings in English (#633)', () => {
 
   it.each(Object.values(NotificationKind))('M-lang %s has no Russian word', (kind) => {
     for (const context of contexts) {
+      // the chain has no message without the cashier (DM5)
+      if (context.cashierUrl === undefined && CHAIN_KINDS.includes(kind)) continue;
       const message = anyMessage(kind, PAYLOADS[kind], context);
       const labels = buttonsOf(message).map((button) => button.text);
       expect(labels.length).toBeGreaterThan(0);
@@ -536,5 +560,155 @@ describe('the help push message', () => {
         withLinks({ channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined }),
       ),
     ).toThrow('the help push has no link');
+  });
+});
+
+// #880 (docs/mailing.md → The demo-to-real chain)
+describe('the demo-to-real chain messages', () => {
+  const [STEP_1H, STEP_24H, STEP_72H] = DEMO_TO_REAL_CHAIN;
+  const deposit = { text: RU_LABELS.depositButton, web_app: { url: CASHIER_URL } };
+  const manager = { text: RU_LABELS.managerButton, url: HELP_LINKS.managerUrl };
+  const photoOf = (payload: Record<string, unknown> = DEMO_TO_REAL_PAYLOAD, context = DEMO) => {
+    const message = anyMessage(STEP_1H!.kind, payload, context);
+    if (!('photo' in message)) throw new Error('the 1 h step sends a photo');
+    return message;
+  };
+  const linesOf = (kind: NotificationKind, payload: Record<string, unknown>, context = DEMO) =>
+    textOf(anyMessage(kind, payload, context)).value.split('\n');
+
+  it('DM1 the 1 h step is the banner with the text as its caption, the cashier and the manager on green rows', () => {
+    const message = photoOf();
+    expect(message.photo).toBe('demo_to_real_banner');
+    expect(message.caption).toStrictEqual(
+      demoToRealText(
+        { html: RU_TEXTS, plain: RU_LABELS, language: BotLanguage.Ru },
+        {
+          intro: 'demoToRealIntro1h',
+          facts: {
+            sessions: 3,
+            settled: 12,
+            won: 6,
+            lost: 6,
+            tied: 0,
+            profit: decimalStringSchema.parse('-1.50000000'),
+          },
+          bonus: null,
+        },
+      ),
+    );
+    expect(inlineRows({ ...message })).toStrictEqual([[deposit], [manager]]);
+    expect(stylesOf(message)).toEqual([['success'], ['success']]);
+  });
+
+  it('DM2 the demo result is printed with its sign, a loss as a minus', () => {
+    expect(linesOf(STEP_1H!.kind, DEMO_TO_REAL_PAYLOAD)[4]).toBe(
+      '📊 Твоё демо: 3 демо-сессии, 12 сделок — 6 в плюс, 6 в минус, результат -$1.50.',
+    );
+    expect(linesOf(STEP_24H!.kind, { ...DEMO_TO_REAL_PAYLOAD, profit: '2.00000000' })[4]).toContain(
+      'результат +$2.00.',
+    );
+  });
+
+  it('DM3 the bonus line is the payload’s rule params, and a minimum of zero has no «from»', () => {
+    expect(linesOf(STEP_72H!.kind, { ...DEMO_TO_REAL_PAYLOAD, bonus: DEMO_TO_REAL_BONUS })[5]).toBe(
+      '🎁 Токены за пополнение: 0.5 за каждый $1 при сумме от $10.00, не больше 500 за одно пополнение.',
+    );
+    expect(
+      linesOf(STEP_72H!.kind, {
+        ...DEMO_TO_REAL_PAYLOAD,
+        bonus: { ...DEMO_TO_REAL_BONUS, minAmountUsd: '0.00000000' },
+      })[5],
+    ).toBe('🎁 Токены за пополнение: 0.5 за каждый $1, не больше 500 за одно пополнение.');
+    expect(linesOf(STEP_72H!.kind, DEMO_TO_REAL_PAYLOAD).join('\n')).not.toContain('🎁');
+  });
+
+  it('DM4 without the manager’s contact the cashier is the one button', () => {
+    const context = { ...DEMO, helpLinks: { ...HELP_LINKS, managerUrl: undefined } };
+    for (const step of DEMO_TO_REAL_CHAIN) {
+      expect(inlineRows({ ...anyMessage(step.kind, DEMO_TO_REAL_PAYLOAD, context) })).toStrictEqual(
+        [[deposit]],
+      );
+    }
+  });
+
+  it('DM5 throws without the cashier, which the sender settles as not built', () => {
+    for (const step of DEMO_TO_REAL_CHAIN) {
+      expect(() =>
+        anyMessage(step.kind, DEMO_TO_REAL_PAYLOAD, { ...DEMO, cashierUrl: undefined }),
+      ).toThrow('the demo-to-real chain has no cashier');
+    }
+  });
+
+  it('DM6 the 24 h and 72 h steps are text with their own intro and a keyboard the role rules accept', () => {
+    for (const [step, title] of [
+      [STEP_24H!, '💳 <b>Реальный счёт: напоминание</b>'],
+      [STEP_72H!, '📌 <b>Ещё раз о реальном счёте</b>'],
+    ] as const) {
+      const message = mailingMessage(step.kind, DEMO_TO_REAL_PAYLOAD, DEMO);
+      expect(message.text.value.split('\n')[0]).toBe(title);
+      expect(inlineRows({ ...message })).toStrictEqual([[deposit], [manager]]);
+    }
+    for (const step of DEMO_TO_REAL_CHAIN) {
+      for (const language of Object.values(BotLanguage)) {
+        const message = anyMessage(step.kind, DEMO_TO_REAL_PAYLOAD, { ...DEMO, language });
+        expect(botKeyboardProblems(message.reply_markup)).toEqual([]);
+      }
+    }
+  });
+
+  // the owner's limits on the texts (#880): no age, no deadline, no claim about the user, a risk line
+  it('DM7 names no age or deadline, claims nothing about the user, and has the risk line, in either language', () => {
+    const URGENCY = [
+      'успе',
+      'осталось',
+      'не будет ждать',
+      'сегодня',
+      'последн',
+      'hurry',
+      'last chance',
+      'expires',
+    ];
+    const CLAIMS = [
+      'калибровк',
+      'топ',
+      'прогресс',
+      'готов зарабатывать',
+      'гарант',
+      'прибыл',
+      'точност',
+      'вероятност',
+      'profit',
+      'guarantee',
+      'calibrat',
+    ];
+    for (const step of DEMO_TO_REAL_CHAIN) {
+      for (const language of Object.values(BotLanguage)) {
+        for (const bonus of [null, DEMO_TO_REAL_BONUS]) {
+          const lines = linesOf(
+            step.kind,
+            { ...DEMO_TO_REAL_PAYLOAD, bonus },
+            { ...DEMO, language },
+          );
+          const text = lines.join('\n').toLowerCase();
+          for (const word of [...URGENCY, ...CLAIMS])
+            expect([word, text.includes(word)]).toEqual([word, false]);
+          // «top 5 %», not «top up»
+          expect(text).not.toMatch(/\btop \d/u);
+          expect(namesAnAge(text)).toBe(false);
+          expect(lines.at(-2)).toBe(clientTextsOf(language).demoToRealRisk.value);
+          expect(text).toContain('-$1.50');
+        }
+      }
+    }
+  });
+
+  it.each([
+    {},
+    { ...DEMO_TO_REAL_PAYLOAD, profit: -1.5 },
+    { ...DEMO_TO_REAL_PAYLOAD, sessions: '3' },
+    { ...DEMO_TO_REAL_PAYLOAD, bonus: { ...DEMO_TO_REAL_BONUS, extra: '1' } },
+    { ...DEMO_TO_REAL_PAYLOAD, bonus: { ...DEMO_TO_REAL_BONUS, maxTokens: 500 } },
+  ])('DM8 throws on payload %j, which the sender settles as not built', (payload) => {
+    expect(() => anyMessage(STEP_1H!.kind, payload, DEMO)).toThrow();
   });
 });
