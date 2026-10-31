@@ -78,7 +78,7 @@ and how a backup is checked and restored is in [docs/backups.md](docs/backups.md
 
 ```bash
 pnpm install             # install all workspace dependencies
-pnpm check               # the one check command: what CI runs, and what "green" means
+pnpm check               # the one check command: what CI runs (as parallel jobs), and what "green" means
 pnpm typecheck           # tsc -b across the project-reference graph
 pnpm lint                # eslint .
 pnpm test                # vitest run — needs a migrated Postgres, see Database below
@@ -100,7 +100,11 @@ tooling/audit-gaps.sh   # manager nights and merged PRs no audits.md entry recor
 the point: `tsc -b --clean` deletes each project's outputs for its current sources (the output of
 a source that no longer exists stays behind), so the tests run before anything is built again;
 and `tooling/manifest-targets.test.ts` checks that every manifest entry point names a file in the
-tree, never an ignored build output. The other scripts are for running one step on its own.
+tree, never an ignored build output. The other scripts are for running one step on its own. CI
+runs the same coverage as parallel jobs (`.github/workflows/ci.yml`, #877): `pnpm typecheck`,
+`pnpm lint`, the `unit` project and the `integration` project in two shards, each from a fresh
+checkout (no `dist/`, as after the local `--clean`), and one job named `ci` that is green only when
+all of them and the compose job are.
 
 `node tooling/rules-for.ts <files>` prints the Architecture Rules whose text names the given paths
 (in backticks, inside a command or in the prose) and, for a file under `apps/` or `packages/`, the
@@ -134,7 +138,10 @@ Under `--watch`, edits to `src/` restart the affected app; edits to a `package.j
 backend (`3000`) and `web` (`3001`: the admin pages and the Mini App login pages) are published
 on `127.0.0.1` only.
 The four apps and `migrate` are built from this one Dockerfile into one image, tagged
-`<project>-app` (`binarius-app` in a checkout named `binarius`). `backup` (profile `backup`, off
+`<project>-app` (`binarius-app` in a checkout named `binarius`): `compose.yaml` builds its `dev`
+stage, the production pair its `prod` stage, and a bare `docker build .` the `prod` one too
+([docs/deploy.md → The build](docs/deploy.md#the-build)). `.dockerignore` keeps the docs, the
+tests and the host's `dist/` out of it. `backup` (profile `backup`, off
 unless enabled) has its own image `<project>-backup` from `tooling/backup`.
 
 Replacing the trading worker of a running stack without a gap in job processing:
@@ -145,8 +152,9 @@ so building the worker rebuilds the migrations too.
 
 Production runs the same `compose.yaml` with the override `compose.prod.yaml`: each app is one
 `node apps/<app>/dist/index.js` process on the bundle `pnpm build` (`tooling/build.ts`) writes into
-the image — no pnpm, no `tsx watch` — every service's log rotates at 10m x 3, and postgres and
-redis get a restart policy. The server selects it with
+the image — no pnpm, no `tsx watch` — every service's log rotates at 10m x 3, postgres and
+redis get a restart policy, and the image is the Dockerfile's `prod` stage: `dependencies` only,
+`tsx` among them, the sources and the bundles. The server selects it with
 `COMPOSE_FILE=compose.yaml:compose.prod.yaml` in its `.env`; locally it is
 `docker compose -f compose.yaml -f compose.prod.yaml …`, and the CI compose job sets the same
 `COMPOSE_FILE` in its environment. HTTPS is Caddy on the host
