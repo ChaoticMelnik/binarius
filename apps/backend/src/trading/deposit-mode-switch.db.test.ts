@@ -33,6 +33,7 @@ import { captureApi, callsTo, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { createMailingEngine, type MailingEngine } from '../mailing/engine';
+import { DEMO_TO_REAL_BANNER_PATH } from '../mailing/demo-to-real';
 import { HELP_BANNER_PATH } from '../mailing/help-links';
 import { createPhotoMedia } from '../mailing/photo-media';
 import { createDepositModeSwitcher } from './deposit-mode-switch';
@@ -79,6 +80,11 @@ function setup({
     helpLinks: { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined },
     photos: {
       help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger }),
+      demo_to_real_banner: createPhotoMedia({
+        path: DEMO_TO_REAL_BANNER_PATH,
+        name: 'demo-to-real banner',
+        logger,
+      }),
     },
     ...(plan === undefined ? {} : { plan }),
   });

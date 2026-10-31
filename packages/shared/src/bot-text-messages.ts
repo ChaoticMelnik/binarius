@@ -106,6 +106,10 @@ export const BOT_TEXT_WIDTHS = {
   // and their checks a minute, formatCount of 9 999 × 60
   scanCount: 4,
   scanChecks: '599 940'.length,
+  // a user's stopped demo sessions (#880), printed as is: assumed under 10 000 (stated)
+  sessionsCount: 4,
+  // formatTokensRate over an unsigned numeric(20,8): 999 999 999 999.99999999
+  decimal: 24,
 } as const;
 
 export interface BotTextMeasure {
@@ -156,6 +160,18 @@ const result = (m: BotTextMeasure) =>
   m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany') +
   DASH +
   score(m);
+// result's form over int4 counts (#880): «2147483647 сделок — 2147483647 в плюс, …»
+const INT4_DIGITS = String(INT4_MAX).length;
+const demoResult = (m: BotTextMeasure) =>
+  INT4_DIGITS +
+  1 +
+  m.longest('sessionTradeOne', 'sessionTradeFew', 'sessionTradeMany') +
+  DASH +
+  m.length('sessionWon', { count: INT4_DIGITS }) +
+  ', '.length +
+  m.length('sessionLost', { count: INT4_DIGITS }) +
+  ', '.length +
+  m.length('sessionTied', { count: INT4_DIGITS });
 // `${word} — ATR14 0.041% · 8.4 шага котировки` (analysis.ts → featureLines)
 const volatility = (m: BotTextMeasure, word: number) =>
   word + DASH + indicator(w.atrPct + '%'.length) + SEPARATOR + m.length('analysisAtrTicks');
@@ -271,6 +287,13 @@ export const BOT_TEXT_VAR_DEFAULT_WIDTHS: Readonly<Record<BotTextVarName, BotTex
   closest: () =>
     SCAN_CLOSEST_SHOWN * (w.symbol + CLOSENESS_TAIL) + (SCAN_CLOSEST_SHOWN - 1) * SEPARATOR,
   pct: () => w.closenessPct,
+  // «3 демо-сессии» (#880, demo-to-real-text.ts)
+  sessions: (m) =>
+    w.sessionsCount + 1 + m.longest('demoSessionOne', 'demoSessionFew', 'demoSessionMany'),
+  // a deposit_bonus version's params (#880): formatTokensRate, formatStake
+  tokensPerUsd: () => w.decimal,
+  minAmountUsd: () => w.stake,
+  maxTokens: () => w.decimal,
 };
 
 const tradeNoticeWidths: Partial<Record<BotTextVarName, BotTextWidth>> = {
@@ -285,6 +308,8 @@ export const BOT_TEXT_VAR_WIDTHS: Readonly<
   codeSent: { email: () => w.email },
   codeSentUnknown: { email: () => w.email },
   cardEmail: { email: () => w.email },
+  // the demo-to-real chain's result (#880): every settled demo trade of the user, a count(*)::int
+  demoToRealFacts: { result: demoResult },
   statusReal: { amount: () => w.usd },
   statusDemo: { amount: () => w.usd },
   analysisMomentum: {
@@ -942,6 +967,24 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       oneOf([], ['\n\n', k('helpLinksChannel')]),
       oneOf([], ['\n', k('helpLinksReviews')]),
       oneOf([], ['\n', k('helpLinksManager')]),
+    ],
+  },
+  // the demo-to-real chain (#880, demo-to-real-text.ts → demoToRealText): the step's intro, the
+  // facts, the bonus line when a deposit_bonus version is active, the risk and the button; the 1 h
+  // step is a photo's caption, so the stricter limit holds for all three
+  {
+    id: 'demoToReal',
+    title: 'Цепочка «демо → реал»: сообщение шага',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [
+      anyOf('demoToRealIntro1h', 'demoToRealIntro24h', 'demoToRealIntro72h'),
+      '\n\n',
+      k('demoToRealFacts'),
+      oneOf([], ['\n', k('demoToRealBonus')], ['\n', k('demoToRealBonusAnyAmount')]),
+      '\n',
+      k('demoToRealRisk'),
+      '\n',
+      k('demoToRealDeposit'),
     ],
   },
 ];

@@ -1,4 +1,4 @@
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { asc, eq, sql, type SQL } from 'drizzle-orm';
 import {
   AuditAction,
   AuditActorType,
@@ -52,6 +52,18 @@ export class InvalidBonusRule extends Error {
   }
 }
 
+// The deposit rule's code (#386 credits under it; #880's chain prints its params).
+export const DEPOSIT_BONUS_RULE_CODE = 'deposit_bonus';
+
+// The version of a code that is in force now, by the database clock: active and inside its
+// validity window. One predicate for the grants (resolveActiveRule) and the mailing that prints a
+// rule's terms (mailing-scenarios.ts, #880); bonus_rules_active_code_idx keeps it to one row.
+export const activeRuleWhere = (code: string): SQL =>
+  sql`(${bonusRules.code} = ${code}
+    and ${bonusRules.isActive}
+    and (${bonusRules.validFrom} is null or ${bonusRules.validFrom} <= now())
+    and (${bonusRules.validTo} is null or ${bonusRules.validTo} > now()))`;
+
 // The one active version of a code valid now, by the database clock; undefined when none is.
 export async function resolveActiveRule(
   executor: DbExecutor,
@@ -66,14 +78,7 @@ export async function resolveActiveRule(
       params: bonusRules.params,
     })
     .from(bonusRules)
-    .where(
-      and(
-        eq(bonusRules.code, code),
-        eq(bonusRules.isActive, true),
-        sql`(${bonusRules.validFrom} is null or ${bonusRules.validFrom} <= now())`,
-        sql`(${bonusRules.validTo} is null or ${bonusRules.validTo} > now())`,
-      ),
-    );
+    .where(activeRuleWhere(code));
   if (row === undefined) return undefined;
   const params = parseBonusRuleParams(row.kind, row.params);
   if (params === undefined) throw new InvalidBonusRule(code);

@@ -1,9 +1,11 @@
-import { eq, sql, type SQL } from 'drizzle-orm';
+import { eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { HttpError, InputFile } from 'grammy';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   BotLanguage,
+  DEMO_TO_REAL_CHAIN,
+  demoToRealText,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   logOptions,
@@ -43,6 +45,7 @@ import { createClientPush } from '../auth/client-push';
 import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
 import { createMailingEngine, type MailingConfig } from './engine';
+import { DEMO_TO_REAL_BANNER_PATH } from './demo-to-real';
 import { HELP_BANNER_PATH, type HelpLinks } from './help-links';
 import { createPhotoMedia } from './photo-media';
 
@@ -64,6 +67,8 @@ beforeAll(async () => {
   await tmp.db.update(notificationKinds).set({ plansFrom: sql`now() - interval '200 hours'` });
   // but the help push (#879) only in its own cases: the others do not depend on its links
   await helpPushFrom(sql`now() + interval '1 year'`);
+  // and the demo-to-real chain (#880) only in its own cases, for the same reason
+  await demoChainFrom(sql`now() + interval '1 year'`);
 });
 
 const helpPushFrom = (at: SQL) =>
@@ -71,6 +76,16 @@ const helpPushFrom = (at: SQL) =>
     .update(notificationKinds)
     .set({ plansFrom: at })
     .where(eq(notificationKinds.kind, NotificationKind.HelpLinks));
+const demoChainFrom = (at: SQL) =>
+  tmp.db
+    .update(notificationKinds)
+    .set({ plansFrom: at })
+    .where(
+      inArray(
+        notificationKinds.kind,
+        DEMO_TO_REAL_CHAIN.map((step) => step.kind),
+      ),
+    );
 afterAll(() => tmp.drop());
 
 // each case starts with no job waiting, so a claim can only take the case's own
@@ -124,6 +139,8 @@ function engine(
   clock: { now: number } | 'default' = { now: 0 },
   sleep: (ms: number) => Promise<void> = async () => {},
   helpLinks: HelpLinks = NO_HELP_LINKS,
+  // an object, so a case can pass an undefined cashier (a default parameter would replace it)
+  { cashierUrl }: { cashierUrl: string | undefined } = { cashierUrl: CASHIER_URL },
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
@@ -134,10 +151,15 @@ function engine(
     push,
     logger,
     config,
-    cashierUrl: CASHIER_URL,
+    cashierUrl,
     helpLinks,
     photos: {
       help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger }),
+      demo_to_real_banner: createPhotoMedia({
+        path: DEMO_TO_REAL_BANNER_PATH,
+        name: 'demo-to-real banner',
+        logger,
+      }),
     },
     ...(clock === 'default' ? {} : { now: () => clock.now }),
     sleep,
@@ -1102,6 +1124,123 @@ describe('the help push through the engine', () => {
     expect(logs().filter((line) => line.msg === 'mailing photo not remembered')).toMatchObject([
       { level: WARN, reason: 'no_file_id', media: 'help banner' },
       { level: WARN, reason: 'no_file_id', media: 'help banner' },
+    ]);
+    await mailing.stop();
+  });
+});
+
+// #880 (docs/mailing.md → The demo-to-real chain)
+describe('the demo-to-real chain through the engine', () => {
+  const LINKS: HelpLinks = { ...NO_HELP_LINKS, managerUrl: 'https://t.me/binarius_manager' };
+  const [STEP_1H, STEP_24H] = DEMO_TO_REAL_CHAIN;
+  // no starter pack, so neither the first-session chain nor the help push: the user's one job is
+  // the chain's step; the third of three stopped demo sessions ended `minutes` ago
+  const demoUser = async (minutes: number) => {
+    const user = await seedUser(tmp.db);
+    const accountId = await seedBrokerAccount(tmp.db, user.userId);
+    for (const before of [20, 10, 0]) {
+      await tmp.db.insert(tradingSessions).values({
+        brokerAccountId: accountId,
+        mode: TradeMode.Demo,
+        settings: sessionSettings({ durationSec: 5 }),
+        status: TradingSessionStatus.Stopped,
+        stopReason: TradingSessionStopReason.Completed,
+        startedAt: sql`now() - make_interval(mins => ${minutes + before + 5})`,
+        endedAt: sql`now() - make_interval(mins => ${minutes + before})`,
+      });
+    }
+    return user;
+  };
+  const chainEngine = (cashierUrl: string | undefined = CASHIER_URL) =>
+    engine({}, { now: 0 }, async () => {}, LINKS, { cashierUrl });
+  const photosTo = (calls: ReturnType<typeof captureApi>['calls'], telegramUserId: string) =>
+    callsTo(calls, 'sendPhoto').filter((call) => call.payload.chat_id === telegramUserId);
+  const chainJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => job.kind.startsWith('demo_to_real_'));
+  const textOf = (intro: 'demoToRealIntro1h' | 'demoToRealIntro24h') =>
+    demoToRealText(
+      { html: RU_TEXTS, plain: RU_LABELS, language: BotLanguage.Ru },
+      {
+        intro,
+        facts: { sessions: 3, settled: 0, won: 0, lost: 0, tied: 0, profit: '0' as DecimalString },
+        bonus: null,
+      },
+    ).value;
+  const ROWS = [
+    [{ text: RU_LABELS.depositButton, web_app: { url: CASHIER_URL } }],
+    [{ text: RU_LABELS.managerButton, url: LINKS.managerUrl }],
+  ];
+  const BANNER = { message_id: 9, photo: [{ file_id: 'dr-small' }, { file_id: 'dr-banner-id' }] };
+
+  beforeAll(() => demoChainFrom(sql`now() - interval '200 hours'`));
+  afterAll(() => demoChainFrom(sql`now() + interval '1 year'`));
+
+  it('E-DR1 sends the 1 h step as the banner with the facts and the cashier and manager rows, then by the file_id', async () => {
+    const first = await demoUser(STEP_1H!.afterHours * 60 + 1);
+    const second = await demoUser(STEP_1H!.afterHours * 60 + 1);
+    const { mailing, captured } = chainEngine();
+    captured.answers.set('sendPhoto', () => BANNER);
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const [upload] = photosTo(captured.calls, first.telegramUserId);
+    expect(upload!.payload.photo).toBeInstanceOf(InputFile);
+    expect(upload!.payload.caption).toBe(textOf('demoToRealIntro1h'));
+    expect(upload!.payload.caption).toContain(
+      '3 демо-сессии, 0 сделок — 0 в плюс, 0 в минус, результат $0.00.',
+    );
+    expect(upload!.payload.parse_mode).toBe('HTML');
+    expect(inlineRows(upload!.payload)).toEqual(ROWS);
+    expect(photosTo(captured.calls, second.telegramUserId)[0]!.payload.photo).toBe('dr-banner-id');
+    for (const user of [first, second]) {
+      expect(await chainJobsOf(user.userId)).toMatchObject([
+        { kind: STEP_1H!.kind, status: NotificationJobStatus.Sent, lastError: null },
+      ]);
+    }
+    await mailing.stop();
+  });
+
+  it('E-DR2 sends the 24 h step as text with the same rows, no photo', async () => {
+    const user = await demoUser(STEP_24H!.afterHours * 60 + 1);
+    const { mailing, captured } = chainEngine();
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    // session_idle_24h of the same session is due as well (an independent scenario)
+    const sends = sendsTo(captured.calls, user.telegramUserId).filter(
+      (call) => pushedText(call.payload) === textOf('demoToRealIntro24h'),
+    );
+    expect(sends).toHaveLength(1);
+    expect(inlineRows(sends[0]!.payload)).toEqual(ROWS);
+    expect(photosTo(captured.calls, user.telegramUserId)).toEqual([]);
+    expect(await chainJobsOf(user.userId)).toMatchObject([
+      { kind: STEP_24H!.kind, status: NotificationJobStatus.Sent, lastError: null },
+    ]);
+    await mailing.stop();
+  });
+
+  it('E-DR3 without the cashier the chain is neither planned nor claimed: a job of it waits', async () => {
+    const user = await demoUser(STEP_1H!.afterHours * 60 + 1);
+    const { mailing, captured } = engine({}, { now: 0 }, async () => {}, LINKS, {
+      cashierUrl: undefined,
+    });
+    await mailing.planTick();
+    expect(await chainJobsOf(user.userId)).toEqual([]);
+
+    const [row] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId: user.userId,
+        kind: STEP_1H!.kind,
+        dedupeKey: 'demo_to_real:1h',
+        scheduledAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: notificationJobs.id });
+    await mailing.sendTick();
+    expect(callsTo(captured.calls, 'sendPhoto')).toEqual([]);
+    expect(sendsTo(captured.calls, user.telegramUserId)).toEqual([]);
+    expect(await chainJobsOf(user.userId)).toMatchObject([
+      { id: row!.id, status: NotificationJobStatus.Pending, attempts: 0 },
     ]);
     await mailing.stop();
   });

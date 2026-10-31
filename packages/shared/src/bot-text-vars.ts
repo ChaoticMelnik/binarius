@@ -4,6 +4,7 @@ import {
   formatPaymentDate,
   formatSignedUsd,
   formatStake,
+  formatTokensRate,
   formatUsd,
 } from './bot-text-format';
 import type { BotTextVariable } from './bot-text-template';
@@ -230,6 +231,23 @@ export const BOT_TEXT_VARS = {
     description: 'Порог баланса напоминания о токенах',
     sample: '50',
     format: (count: string) => formatCount(count),
+  }),
+  sessions: shown('Число демо-сессий пользователя со словом', '3 демо-сессии'),
+  tokensPerUsd: variable({
+    description: 'Токенов за каждый $1 пополнения, из действующего правила бонуса за пополнение',
+    sample: '0.5',
+    format: (amount: DecimalString) => formatTokensRate(amount),
+  }),
+  minAmountUsd: variable({
+    description: 'Минимальная сумма пополнения для бонуса, из действующего правила',
+    sample: formatStake('10'),
+    // every fraction digit, as a stake: a cut minimum would name a sum that earns nothing
+    format: (amount: DecimalString) => formatStake(amount),
+  }),
+  maxTokens: variable({
+    description: 'Не больше стольких токенов за одно пополнение, из действующего правила',
+    sample: '500',
+    format: (amount: DecimalString) => formatTokensRate(amount),
   }),
 } as const;
 

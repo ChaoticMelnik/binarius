@@ -53,8 +53,10 @@ export interface MailingEngineDeps {
   push: Pick<ClientPush, 'sendMailing' | 'sendMailingPhoto'>;
   logger: FastifyBaseLogger;
   config?: Partial<MailingConfig>;
-  // the cashier's Mini App URL for the low-token nudges' «💳 Пополнить» (#123): cashierUrlOf of
-  // WEB_PUBLIC_URL, undefined without https. Required, so no caller leaves it out by accident.
+  // the cashier's Mini App URL for the low-token nudges' «💳 Пополнить» (#123) and the
+  // demo-to-real chain's (#880): cashierUrlOf of WEB_PUBLIC_URL, undefined without https, when the
+  // chain is neither planned nor claimed (enabledKinds). Required, so no caller leaves it out by
+  // accident.
   cashierUrl: string | undefined;
   // the help push's links (#879, docs/mailing.md → The help push): without one the kind is neither
   // planned nor claimed (enabledKinds). Required, as cashierUrl.
@@ -143,7 +145,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   let sendTimer: NodeJS.Timeout | undefined;
   const plan = deps.plan ?? planMailingJobs;
   // a constant of the process: the env is read once at start
-  const kinds = enabledKinds(deps.helpLinks);
+  const kinds = enabledKinds({ helpLinks: deps.helpLinks, cashierUrl: deps.cashierUrl });
   let planWoken = 0;
 
   async function runPlanTick(): Promise<void> {

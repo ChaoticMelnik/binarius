@@ -2,7 +2,11 @@ import { sql, type Column, type SQL } from 'drizzle-orm';
 import {
   ANALYSIS_UNUSED_AFTER_MS,
   ANALYSIS_UNUSED_UNTIL_MS,
+  BonusRuleKind,
   BrokerAccountStatus,
+  DEMO_TO_REAL_CHAIN,
+  DEMO_TO_REAL_SESSIONS,
+  demoToRealPayloadSchema,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
   HELP_LINKS_AFTER_MS,
@@ -24,7 +28,9 @@ import {
   WEEKLY_SUMMARY_HOUR_UTC,
   weeklySummaryPayloadSchema,
 } from '@binarius/shared';
+import { activeRuleWhere, DEPOSIT_BONUS_RULE_CODE } from './bonus-rule-ops';
 import { literal } from './schema/columns';
+import { bonusRules } from './schema/bonus-rules';
 import { brokerAccounts } from './schema/broker-accounts';
 import { brokerBalanceSnapshots } from './schema/broker-balance-snapshots';
 import { brokerTrades } from './schema/broker-trades';
@@ -262,11 +268,13 @@ const newestSessionFrom = sql`from ${tradingSessions}
   limit 1`;
 
 // The settled trades of a scope and their split by the sign of the profit, as the session's own
-// view counts them (trading-session-ops.ts → the session's counts). Counts only, no money (rule 2).
+// view counts them (trading-session-ops.ts → the session's counts), and the profits' sum, numeric
+// (rule 2): a payload takes the columns it names, so a scenario without money reads no sum.
 const settledScore = (scope: SQL) => sql`(select count(*)::int as settled,
     count(*) filter (where ${brokerTrades.profit} > 0)::int as won,
     count(*) filter (where ${brokerTrades.profit} < 0)::int as lost,
-    count(*) filter (where ${brokerTrades.profit} = 0)::int as tied
+    count(*) filter (where ${brokerTrades.profit} = 0)::int as tied,
+    coalesce(sum(${brokerTrades.profit}), 0) as profit
   from ${tradeIntents}
   left join ${brokerTrades} on ${brokerTrades.intentId} = ${tradeIntents.id}
   where ${scope}
@@ -390,6 +398,73 @@ const specificHolds = sql`(exists (select 1 from ${notificationJobs} specific
   or ${comingSpecific(NotificationKind.SessionIdle24h, sessionIdle24h)}
   or ${comingSpecific(NotificationKind.TokensOut2d, tokensOut2d)})`;
 
+// ---- The demo-to-real chain (#880, docs/mailing.md → The demo-to-real chain) ------------------
+
+// The user's stopped demo sessions on any of their accounts (status stopped exactly when ended_at
+// is set, trading_sessions_ended_at_pair_check).
+const stoppedDemoSessionsFrom = sql`from ${tradingSessions}
+  join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
+  where ${brokerAccounts.userId} = ${users.id}
+    and ${tradingSessions.mode} = ${literal(TradeMode.Demo)}
+    and ${tradingSessions.status} = ${literal(TradingSessionStatus.Stopped)}`;
+
+// The end of the user's n-th stopped demo session, oldest end first; NULL with fewer. A fixed
+// point: later sessions do not move it, so the offsets and the cutoff count from it.
+const nthDemoSessionEndedAt = (n: number) => sql`(select ${tradingSessions.endedAt}
+  ${stoppedDemoSessionsFrom}
+  order by ${tradingSessions.endedAt} asc, ${tradingSessions.id} asc
+  offset ${sql.raw(String(n - 1))} limit 1)`;
+const demoToRealAt = nthDemoSessionEndedAt(DEMO_TO_REAL_SESSIONS);
+
+// The params of the deposit_bonus version in force, NULL when none is. A version of another kind
+// under the code is no bonus here (the grant refuses it as InvalidBonusRule).
+const activeDepositBonusParams = sql`(select ${bonusRules.params} from ${bonusRules}
+  where ${activeRuleWhere(DEPOSIT_BONUS_RULE_CODE)}
+    and ${bonusRules.kind} = ${literal(BonusRuleKind.DepositBonus)})`;
+
+// the payload's keys as its schema names them, so the message's parse and this SQL cannot drift
+const DEMO_TO_REAL_KEY = demoToRealPayloadSchema.keyof().enum;
+
+// The user's facts as the planning sees them: the stopped demo sessions, the settled demo trades
+// of every account (single and session ones, as the weekly summary counts them) with their summed
+// profit as text (rule 2), and the bonus terms.
+const demoToRealPayload = sql`(select jsonb_build_object(
+    ${literal(DEMO_TO_REAL_KEY.sessions)}, (select count(*)::int ${stoppedDemoSessionsFrom}),
+    ${scorePayload('score')},
+    ${literal(DEMO_TO_REAL_KEY.profit)}, score.profit::text,
+    ${literal(DEMO_TO_REAL_KEY.bonus)}, ${activeDepositBonusParams})
+  from ${settledScore(sql`${tradeIntents.userId} = ${users.id}
+    and ${tradeIntents.mode} = ${literal(TradeMode.Demo)}`)} score)`;
+
+// The user is not blocked by the admin, has an active account and no deposit at all (a
+// deposit_events row of any status attributed to them), and trading is open (rule 22). The
+// trading mode is not read: the chain is about the deposit.
+const demoToRealApplies = sql`(${users.status} = ${literal(UserStatus.Active)}
+  and exists (select 1 from ${brokerAccounts}
+    where ${brokerAccounts.userId} = ${users.id}
+      and ${brokerAccounts.status} = ${literal(BrokerAccountStatus.Active)})
+  and not exists (select 1 from ${depositEvents} where ${depositEvents.userId} = ${users.id})
+  and ${tradingOpenSql})`;
+
+// One chain per user (constant keys); a step is stale once the next one is due, as
+// firstSessionStep's.
+const demoToRealStep = (kind: NotificationKind): MailingScenario => {
+  const index = DEMO_TO_REAL_CHAIN.findIndex((step) => step.kind === kind);
+  const step = DEMO_TO_REAL_CHAIN[index];
+  if (step === undefined) throw new Error(`${kind} is not a step of DEMO_TO_REAL_CHAIN`);
+  const next = DEMO_TO_REAL_CHAIN[index + 1];
+  return oneFact({
+    factAt: demoToRealAt,
+    afterMs: step.afterHours * 3_600_000,
+    dedupeKey: sql`${`demo_to_real:${String(step.afterHours)}h`}`,
+    payload: demoToRealPayload,
+    stillApplies:
+      next === undefined
+        ? demoToRealApplies
+        : sql`(${demoToRealApplies} and ${demoToRealAt} + make_interval(hours => ${next.afterHours}) > now())`,
+  });
+};
+
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
   [NotificationKind.FirstSession1h]: firstSessionStep(NotificationKind.FirstSession1h),
@@ -472,6 +547,9 @@ export const MAILING_SCENARIOS = {
         where ${brokerAccounts.userId} = ${users.id}
           and ${brokerAccounts.status} = ${literal(BrokerAccountStatus.Active)}))`,
   }),
+  [NotificationKind.DemoToReal1h]: demoToRealStep(NotificationKind.DemoToReal1h),
+  [NotificationKind.DemoToReal24h]: demoToRealStep(NotificationKind.DemoToReal24h),
+  [NotificationKind.DemoToReal72h]: demoToRealStep(NotificationKind.DemoToReal72h),
 } as const satisfies Record<NotificationKind, MailingScenario>;
 
 // The important kinds (MailingScenario.important), from the scenarios alone.

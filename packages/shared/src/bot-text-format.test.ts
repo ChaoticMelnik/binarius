@@ -5,6 +5,7 @@ import {
   formatPrice,
   formatSignedUsd,
   formatStake,
+  formatTokensRate,
   formatUsd,
 } from './bot-text-format';
 
@@ -73,6 +74,17 @@ describe('formatStake', () => {
     ['999999999999.99999999', '$999 999 999 999.99999999'],
   ])('prints %s as %s, keeping every fraction digit', (amount, printed) => {
     expect(formatStake(amount)).toBe(spaced(printed));
+  });
+});
+
+describe('formatTokensRate (#880)', () => {
+  it.each([
+    ['500.00000000', '500'],
+    ['0.50000000', '0.5'],
+    ['1500', '1 500'],
+    ['999999999999.99999999', '999 999 999 999.99999999'],
+  ])('F-rate prints %s as %s, without the trailing zeros', (amount, printed) => {
+    expect(formatTokensRate(amount)).toBe(spaced(printed));
   });
 });
 

@@ -85,7 +85,10 @@ describe('wakePlan (#686)', () => {
       logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
       cashierUrl: undefined,
       helpLinks: { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined },
-      photos: { help_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} } },
+      photos: {
+        help_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} },
+        demo_to_real_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} },
+      },
       plan,
     });
     const open = async (index: number) => {

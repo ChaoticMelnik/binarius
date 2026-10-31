@@ -28,6 +28,7 @@ import {
   SESSION_SUMMARY_FALLBACK_MS,
   TOKEN_NUDGE_AFTER_MS,
   HELP_LINKS_AFTER_MS,
+  DEMO_TO_REAL_CHAIN,
   STARS_PRECHECKOUT_BUDGET_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
@@ -619,6 +620,10 @@ describe('broker balance timing', () => {
     expect(TOKEN_NUDGE_AFTER_MS).toBe(0);
     // #879: the help push waits its offset, planned within a tick of it
     expect(MAILING_PLAN_TICK_MS).toBeLessThan(HELP_LINKS_AFTER_MS);
+    // #880: so does every step of the demo-to-real chain
+    expect(MAILING_PLAN_TICK_MS).toBeLessThan(
+      Math.min(...DEMO_TO_REAL_CHAIN.map((step) => step.afterHours * 3_600_000)),
+    );
     expect(MAILING_MIN_OFFSET_MS).toBeGreaterThan(0);
     expect(MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBe(65_000);
     // #464: the session notices share the bot's rate with the mailings

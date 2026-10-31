@@ -511,6 +511,26 @@ Where to learn more about the bot — the buttons below.`,
   helpChannelButton: '📣 Channel',
   helpReviewsButton: '⭐ Reviews',
   managerButton: '💬 Message the manager',
+  demoToRealIntro1h: `🎓 <b>You've got the hang of the demo</b>
+
+The next stage is a real account.`,
+  demoToRealIntro24h: `💳 <b>A real account: a reminder</b>
+
+The demo sessions are behind you; the next step is a deposit.`,
+  demoToRealIntro72h: `📌 <b>Once more about the real account</b>
+
+The deposit is in the cashier, the button below.`,
+  demoToRealFacts: '📊 Your demo: {sessions}, {result}, net {profit}.',
+  demoToRealBonus:
+    '🎁 Tokens for a deposit: {tokensPerUsd} per $1 from {minAmountUsd}, at most {maxTokens} per deposit.',
+  demoToRealBonusAnyAmount:
+    '🎁 Tokens for a deposit: {tokensPerUsd} per $1, at most {maxTokens} per deposit.',
+  demoToRealRisk:
+    '⚠️ Real money is real risk: trades can close at a loss, and the deposited amount can be lost.',
+  demoToRealDeposit: '👇 “{depositButton}” — top up the account in the cashier.',
+  demoSessionOne: 'demo session',
+  demoSessionFew: 'demo sessions',
+  demoSessionMany: 'demo sessions',
 
   // ---- buttons -------------------------------------------------------------------------------
   confirmButton: '✅ Confirm: {email}',
