@@ -674,13 +674,14 @@ describe('the session tracker', () => {
     const NOT_FOUND = () =>
       new BackendError(BackendErrorCode.HttpStatus, { status: 404, reason: SESSION_NOT_FOUND });
 
-    it('P1 the first poll records the message and reads its view; the next one only reads', async () => {
+    // #911: the session's first message waits for the record, so the first poll goes at once
+    it('P1 the first poll, at once, records the message and reads its view; the next one only reads', async () => {
       const { tracker, readSession, recordSessionMessage, request, target } = setup({
         script: [trading, stoppedClosed],
       });
       const { edits, edit } = target();
       tracker.track(request({ record: true, edit }));
-      await vi.advanceTimersByTimeAsync(FIRST);
+      await vi.advanceTimersByTimeAsync(0);
       expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), MESSAGE_ID]]);
       expect(readSession).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(POLL);
@@ -694,7 +695,7 @@ describe('the session tracker', () => {
         script: [FAILURE(), FAILURE(), trading],
       });
       tracker.track(request({ record: true }));
-      await vi.advanceTimersByTimeAsync(FIRST + POLL * 3);
+      await vi.advanceTimersByTimeAsync(POLL * 3);
       expect(recordSessionMessage).toHaveBeenCalledTimes(3);
       expect(readSession).toHaveBeenCalledTimes(1);
       expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
@@ -732,6 +733,22 @@ describe('the session tracker', () => {
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
       expect(readSession).not.toHaveBeenCalled();
       expect(tracker.size()).toBe(0);
+    });
+
+    it('P8 a pressed entry records at once; a recovered one is not read before FIRST', async () => {
+      const { tracker, readSession, recordSessionMessage, request } = setup({
+        script: [SESSION_VIEW],
+      });
+      tracker.track(request({ record: true }));
+      tracker.track(
+        request({ sessionId: '00000000-0000-4000-8000-000000000201', view: null, record: false }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(FIRST - 1);
+      expect(readSession).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(readSession).toHaveBeenCalledTimes(1);
     });
 
     // a recovered session past the deadline: the first poll draws the final text, at most once
@@ -1031,14 +1048,15 @@ describe('the session tracker', () => {
       expect(readSession).toHaveBeenCalledTimes(5);
     });
 
-    it('W2 a pressed entry tracked after recovered ones polls at FIRST, not after the slots', async () => {
-      const { tracker, recordSessionMessage, request } = setup({ script: [stoppedOpen] });
+    it('W2 a pressed entry tracked after recovered ones polls at once, not after the slots (#911)', async () => {
+      const { tracker, readSession, recordSessionMessage, request } = setup({
+        script: [stoppedOpen],
+      });
       for (let i = 0; i < 3; i += 1) tracker.track(request(recovered(i)));
       tracker.track(request({ sessionId: idOf(9), record: true }));
-      await vi.advanceTimersByTimeAsync(FIRST - 1);
-      expect(recordSessionMessage).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(0);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
+      expect(readSession).not.toHaveBeenCalled();
     });
 
     it('W3 the slots carry over between calls, and an idle pacer adds no wait', async () => {
@@ -1058,15 +1076,15 @@ describe('the session tracker', () => {
       expect(readsOf(readSession, idOf(3))).toBe(1);
     });
 
-    it('W4 a press on a recovered entry waiting for its slot polls at FIRST, and the slot polls nothing', async () => {
+    it('W4 a press on a recovered entry waiting for its slot polls at once, and the slot polls nothing', async () => {
       const { tracker, readSession, recordSessionMessage, request } = setup({
         script: [stoppedOpen],
       });
       for (let i = 0; i < 3; i += 1) tracker.track(request(recovered(i)));
       tracker.track(request({ sessionId: idOf(2), record: true }));
-      await vi.advanceTimersByTimeAsync(FIRST);
+      await vi.advanceTimersByTimeAsync(0);
       expect(recordSessionMessage).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(3 * GAP);
+      await vi.advanceTimersByTimeAsync(FIRST + 3 * GAP);
       expect(readSession).toHaveBeenCalledTimes(2);
       expect(readsOf(readSession, idOf(2))).toBe(0);
     });

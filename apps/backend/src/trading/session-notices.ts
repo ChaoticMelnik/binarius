@@ -7,6 +7,7 @@ import {
   errorLogFields,
   fileRefusal,
   safeParseTradingSessionSettings,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   TRACKED_SESSIONS_MAX,
   TradingSessionStatus,
@@ -116,6 +117,11 @@ import { finishedViewNeedsBalance, refreshFinishedBalance } from './session-view
 // pass begins with the message it yielded at, so a trade's message waits for no more than the
 // edit in flight and no message is skipped. Which caption each message shows is memory only: a
 // restart costs one edit per message, answered «not modified».
+// The session's first message waits for the bot's card (#911, docs → The first message waits for
+// the card): both claims refuse while the card is not recorded and firstNoticeGraceMs has not
+// passed since started_at; the list's firstNoticeHoldMs hint ends the trade's or the open block's
+// turn before the pace and the claim, and wakes the session at the hold's end as a cooling chat's
+// is woken. The status-message route wakes the session once it recorded the card.
 
 export interface SessionNoticeConfig {
   tickMs: number;
@@ -135,6 +141,8 @@ export interface SessionNoticeConfig {
   captionEditsPerPass: number;
   // the captions shown kept at most (#860)
   captionMemo: number;
+  // the first message's hold without the bot's recorded card, from started_at (#911)
+  firstNoticeGraceMs: number;
 }
 
 const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
@@ -149,6 +157,7 @@ const DEFAULT_SESSION_NOTICE_CONFIG: SessionNoticeConfig = {
   captionMs: SESSION_WAIT_CAPTION_MS,
   captionEditsPerPass: SESSION_WAIT_CAPTION_EDITS_PER_PASS,
   captionMemo: TRACKED_SESSIONS_MAX,
+  firstNoticeGraceMs: SESSION_FIRST_NOTICE_GRACE_MS,
 };
 
 export interface SessionNoticeSenderDeps {
@@ -278,8 +287,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
   let lastCoolingFiredAt = -Infinity;
   let coolingUntil: number | undefined;
   // the woken tick's scope (#870): the sessions woken since the last tick, or all of them (a
-  // payload that is no session id, more than `scan` ids), and the sessions skipped for a cooling
-  // chat, which its timer wakes; hints only, the lists' predicates decide
+  // payload that is no session id, more than `scan` ids), and the sessions deferred - a cooling
+  // chat's gap or the first message's hold (#911) - which its timer wakes; hints only, the lists'
+  // predicates decide
   const wokenSessions = new Set<string>();
   let wokenAll = false;
   const coolingSessions = new Set<string>();
@@ -306,13 +316,28 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     }
   };
 
+  // the tick's sessions whose first message is held (#911), for its debug line
+  let held = 0;
+
   const chatOf = (telegramUserId: bigint) => String(telegramUserId);
-  const cooling = (session: Pick<PendingSessionNotice, 'sessionId' | 'telegramUserId'>) => {
-    const until = chatNextAt.get(chatOf(session.telegramUserId)) ?? -Infinity;
-    if (now() >= until) return false;
+  // wakes the session at `until`, by the timer armed after the tick
+  const deferUntil = (session: Pick<PendingSessionNotice, 'sessionId'>, until: number) => {
     coolingUntil = Math.min(coolingUntil ?? Infinity, until);
     // one past `scan` is enough: the timer's wakes then make a whole tick
     if (coolingSessions.size <= config.scan) coolingSessions.add(session.sessionId);
+  };
+  const cooling = (session: Pick<PendingSessionNotice, 'sessionId' | 'telegramUserId'>) => {
+    const until = chatNextAt.get(chatOf(session.telegramUserId)) ?? -Infinity;
+    if (now() >= until) return false;
+    deferUntil(session, until);
+    return true;
+  };
+  // the list's hint that the first message is held (#911): nothing is claimed, the session is
+  // woken at the hold's end; the claims decide
+  const firstNoticeHeld = (session: PendingSessionNotice) => {
+    if (session.firstNoticeHoldMs <= 0) return false;
+    held += 1;
+    deferUntil(session, now() + session.firstNoticeHoldMs);
     return true;
   };
   // after every send or edit to the chat, delivered or not
@@ -349,13 +374,18 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     claimed: number,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, claimed };
+    if (firstNoticeHeld(session)) return 'skip';
     if (!session.telegramBlocked) {
       if (cooling(session)) return 'skip';
       await pace();
     }
     // after the pace, so a stop during its sleep claims nothing more
     if (stopped) return 'skip';
-    const claim = await claimSessionTradeNotice(db, { sessionId: session.sessionId, claimed });
+    const claim = await claimSessionTradeNotice(db, {
+      sessionId: session.sessionId,
+      claimed,
+      graceMs: config.firstNoticeGraceMs,
+    });
     // another sender took it, or the cursor moved: the session is read again next tick
     if (claim === undefined) return 'skip';
     // nothing can be delivered (Rule 19): the trade counts as sent
@@ -391,6 +421,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     intentId: string,
   ): Promise<Step> {
     const fields = { sessionId: session.sessionId, intentId };
+    if (firstNoticeHeld(session)) return 'skip';
     if (!session.telegramBlocked) {
       if (cooling(session)) return 'skip';
       await pace();
@@ -400,6 +431,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       sessionId: session.sessionId,
       intentId,
       settled: session.settled,
+      graceMs: config.firstNoticeGraceMs,
     });
     if (claim === undefined) return 'skip';
     session.openNoticeIntentId = intentId;
@@ -1060,6 +1092,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     wokenAll = false;
     scoped = only !== undefined;
     coolingUntil = undefined;
+    held = 0;
     const sessions = only?.length ?? 'all';
     if (now() < pausedUntil) {
       logger.debug({ woken, sessions, paused: true }, 'session notice tick');
@@ -1073,7 +1106,12 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     prune(chatNextAt);
     prune(heldUntil);
     const exclude = [...heldUntil.keys()];
-    const pending = await listPendingSessionNotices(db, { limit: config.scan, exclude, only });
+    const pending = await listPendingSessionNotices(db, {
+      limit: config.scan,
+      exclude,
+      only,
+      graceMs: config.firstNoticeGraceMs,
+    });
     for (const session of pending) {
       if (stopped) return;
       let step: Step;
@@ -1115,7 +1153,7 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
       if (step === 'pause') return;
     }
     logger.debug(
-      { pending: pending.length, fallback: fallback.length, woken, sessions },
+      { pending: pending.length, fallback: fallback.length, woken, sessions, held },
       'session notice tick',
     );
   }
@@ -1141,8 +1179,9 @@ export function createSessionNoticeSender(deps: SessionNoticeSenderDeps): Sessio
     );
   }
 
-  // a wake at the end of a skipped chat's gap; an end at or before the last firing is not armed
-  // again, so a timer that fired early cannot loop - the interval's tick serves it
+  // a wake at the end of a deferred session's wait - a cooling chat's gap or the first message's
+  // hold (#911); an end at or before the last firing is not armed again, so a timer that fired
+  // early cannot loop - the interval's tick serves it
   function armCooling(at: number) {
     if (stopped || at <= lastCoolingFiredAt) return;
     if (coolingTimer !== undefined && coolingAt <= at) return;

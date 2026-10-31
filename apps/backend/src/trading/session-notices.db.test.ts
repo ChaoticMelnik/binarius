@@ -27,6 +27,7 @@ import {
   type TradingSessionSettings,
   SessionStakeStrategy,
   BOT_TEXT_DEFAULT_SOURCES,
+  SESSION_FIRST_NOTICE_GRACE_MS,
 } from '@binarius/shared';
 import { closedTradeFor, openTradeFor, until, botTextSourcesWith } from '@binarius/shared/testing';
 import { createH1Detector } from '@binarius/signal';
@@ -38,6 +39,7 @@ import {
   markIntentAccepted,
   markTelegramReachable,
   SESSION_NOTICE_CHANNEL,
+  forgetSessionStatusMessage,
   recordSessionCycleMessage,
   recordSessionStatusMessage,
   recordSignalDecision,
@@ -327,8 +329,9 @@ function sender(
     sleep: async () => {},
     ...patch,
     // the gap per chat (#660) off, as the pace is with a sleep that does nothing; the G-tests
-    // turn it on
-    config: { chatGapMs: 0, ...patch.config },
+    // turn it on. The first message's hold (#911) off: the cases seed sessions without a card and
+    // expect their messages at once; the H-tests turn it on
+    config: { chatGapMs: 0, firstNoticeGraceMs: 0, ...patch.config },
   });
   senders.push(notices);
   const logs = () => lines.map((line) => JSON.parse(line) as Record<string, unknown>);
@@ -2391,7 +2394,11 @@ describe('the waiting message (#536)', () => {
     run.captured.answers.set('sendMessage', async (payload) => {
       if (first && inlineButtons(payload).length === 0) {
         first = false;
-        await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 1 });
+        await claimSessionTradeNotice(tmp.db, {
+          sessionId: target.session.id,
+          claimed: 1,
+          graceMs: 0,
+        });
       }
       return answer(payload);
     });
@@ -2736,7 +2743,11 @@ describe('the waiting message (#536)', () => {
       await noSignal(target);
       await settled(target, '4.6');
       // what the backend before #536 left: the trade claimed and sent in a cycle message
-      await claimSessionTradeNotice(tmp.db, { sessionId: target.session.id, claimed: 0 });
+      await claimSessionTradeNotice(tmp.db, {
+        sessionId: target.session.id,
+        claimed: 0,
+        graceMs: 0,
+      });
       await recordSessionCycleMessage(tmp.db, {
         sessionId: target.session.id,
         cursor: 1,
@@ -4260,6 +4271,166 @@ describe('the wake (#723)', () => {
     await whole;
     expect(ticks().map((line) => line.sessions)).toEqual([1, 'all']);
     expect(openSendsTo(captured.calls, other)).toHaveLength(1);
+  });
+
+  // #911: the session's first message waits for the bot's card; the cases wake their sessions by
+  // id (no listener), so each tick reads its session alone
+  describe('the first message waits for the card (#911)', () => {
+    const GRACE = SESSION_FIRST_NOTICE_GRACE_MS;
+    const held = { firstNoticeGraceMs: GRACE };
+    const CARD = 30;
+    // the route's record: the card's id, then the sender woken for the session
+    const card = async (target: Target, notices: SessionNoticeSender) => {
+      expect(
+        await recordSessionStatusMessage(tmp.db, {
+          id: target.session.id,
+          telegramUserId: target.seed.telegramUserId,
+          messageId: CARD,
+        }),
+      ).toBe(true);
+      notices.wake(target.session.id);
+    };
+    // started_at this long ago by the database's clock
+    const startedAgo = (target: Target, ms: number) =>
+      tmp.db
+        .update(tradingSessions)
+        .set({ startedAt: sql`now() - make_interval(secs => ${ms / 1000})` })
+        .where(eq(tradingSessions.id, target.session.id));
+
+    // a grace past the wait's ceiling: the block can come only by the record's wake
+    it("H1 the open block waits for the card: nothing on a woken tick, sent on the record's wake", async () => {
+      const target = await seedSession();
+      await opened(target);
+      const { notices, captured, ticks } = await wakeful({ firstNoticeGraceMs: 10 * GRACE }, false);
+      notices.wake(target.session.id);
+      await until('the held tick', () => ticks().length === 1);
+      expect(ticks()[0]).toMatchObject({ sessions: 1, pending: 1, held: 1 });
+      expect(captured.calls).toEqual([]);
+      await card(target, notices);
+      await until('the open block', () => openSendsTo(captured.calls, target).length === 1);
+      // a tick's line follows its calls
+      await until('the line of the woken tick', () => ticks().length === 2);
+      expect(ticks()[1]).toMatchObject({ sessions: 1, held: 0 });
+    });
+
+    it("H2 without the card the open block goes at the grace's end, by the deferred session's timer", async () => {
+      const target = await seedSession();
+      await opened(target);
+      await startedAgo(target, GRACE - 1_500);
+      const { notices, captured, ticks } = await wakeful(held, false);
+      notices.wake(target.session.id);
+      await until('the held tick', () => ticks().length === 1);
+      expect(ticks()[0]).toMatchObject({ held: 1 });
+      expect(captured.calls).toEqual([]);
+      await until('the open block', () => openSendsTo(captured.calls, target).length === 1);
+      await until('the line of the timer tick', () => ticks().length === 2);
+      expect(ticks()[1]).toMatchObject({ woken: 1, sessions: 1, held: 0 });
+      expect((await rowOf(target)).statusMessageId).toBeNull();
+    });
+
+    it('H3 a trade settled before the card: its result is the first message, after the record', async () => {
+      const target = await seedSession();
+      await settled(target, '-5');
+      const { notices, captured, ticks } = await wakeful(held, false);
+      notices.wake(target.session.id);
+      await until('the held tick', () => ticks().length === 1);
+      expect(ticks()[0]).toMatchObject({ held: 1 });
+      expect((await rowOf(target)).notifiedTrades).toBe(0);
+      await card(target, notices);
+      await until('the result', () => sendsTo(captured.calls, target).length === 1);
+      expect(pushedText(sendsTo(captured.calls, target)[0]!.payload)).not.toContain(OPEN_MARK);
+      expect((await rowOf(target)).notifiedTrades).toBe(1);
+    });
+
+    it('H4 after the first message the next open block goes at once, without the card', async () => {
+      const target = await seedSession();
+      await settled(target, '-5');
+      await startedAgo(target, GRACE + 5_000);
+      const { notices, captured, ticks } = await wakeful(held, false);
+      notices.wake(target.session.id);
+      await until('the result', () => sendsTo(captured.calls, target).length === 1);
+      await startedAgo(target, 0);
+      await opened(target);
+      notices.wake(target.session.id);
+      await until('the open block', () => openSendsTo(captured.calls, target).length === 1);
+      await until('the line of the second tick', () => ticks().length === 2);
+      expect(ticks().map((line) => line.held)).toEqual([0, 0]);
+      expect((await rowOf(target)).statusMessageId).toBeNull();
+    });
+
+    it("H5 a user who blocked the bot: the trade counts as sent only at the grace's end, with no call", async () => {
+      const target = await seedSession();
+      await settled(target, '-5');
+      await startedAgo(target, GRACE - 1_500);
+      await tmp.db
+        .update(users)
+        .set({ telegramBlockedAt: sql`now()` })
+        .where(eq(users.id, target.seed.userId));
+      const { notices, captured, ticks } = await wakeful(held, false);
+      notices.wake(target.session.id);
+      await until('the held tick', () => ticks().length === 1);
+      expect(ticks()[0]).toMatchObject({ held: 1 });
+      expect((await rowOf(target)).notifiedTrades).toBe(0);
+      await until('the trade counted', async () => (await rowOf(target)).notifiedTrades === 1);
+      expect(captured.calls).toEqual([]);
+    });
+
+    it('H6 the grace is the config: with none the open block goes at once', async () => {
+      const target = await seedSession();
+      await opened(target);
+      const { notices, captured, ticks } = await wakeful({ firstNoticeGraceMs: 0 }, false);
+      notices.wake(target.session.id);
+      await until('the open block', () => openSendsTo(captured.calls, target).length === 1);
+      await until('the line of the woken tick', () => ticks().length === 1);
+      expect(ticks()[0]).toMatchObject({ held: 0 });
+    });
+
+    // the list's hint is the sender's shortcut; the claim decides: a card lost between the list
+    // and the claim (during the pace) holds the block
+    it('H7 the claim decides: a card lost after the list holds the open block', async () => {
+      const first = await seedSession();
+      await opened(first);
+      const target = await seedSession();
+      await opened(target);
+      for (const each of [first, target]) {
+        await recordSessionStatusMessage(tmp.db, {
+          id: each.session.id,
+          telegramUserId: each.seed.telegramUserId,
+          messageId: CARD,
+        });
+      }
+      let loseCard = false;
+      const built = sender(
+        {
+          now: () => performance.now(),
+          // the pace's wait, between the list and the claim, loses the card instead of sleeping
+          sleep: async () => {
+            if (!loseCard) return;
+            loseCard = false;
+            await forgetSessionStatusMessage(tmp.db, {
+              id: target.session.id,
+              telegramUserId: target.seed.telegramUserId,
+              messageId: CARD,
+            });
+          },
+          // one send a second: the target's step, a woken tick after the first's, takes a wait
+          config: { ...held, perSecond: 1 },
+        },
+        undefined,
+        'debug',
+      );
+      made.push({ notices: built.notices });
+      const ticks = () => built.logs().filter((line) => line.msg === 'session notice tick');
+      built.notices.wake(first.session.id);
+      await until('the first block', () => openSendsTo(built.captured.calls, first).length === 1);
+      loseCard = true;
+      built.notices.wake(target.session.id);
+      await until('the paced tick', () => ticks().length === 2);
+      expect(loseCard).toBe(false);
+      expect(ticks()[1]).toMatchObject({ sessions: 1, held: 0 });
+      expect(openSendsTo(built.captured.calls, target)).toEqual([]);
+      expect((await rowOf(target)).openNoticeIntentId).toBeNull();
+    });
   });
 });
 

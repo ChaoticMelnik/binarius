@@ -206,6 +206,8 @@ export async function startE2eBackend(deps: {
       // the trade log as in production (#666)
       decisions: { record: (input) => recordSignalDecision(db, input) },
       h1Driver,
+      // the sender is built after the app, as in production (#911)
+      notices: { wake: (sessionId) => sessionNotices.wake(sessionId) },
     },
     signal: {
       feed: signalFeed,

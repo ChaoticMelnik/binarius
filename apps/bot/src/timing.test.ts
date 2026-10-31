@@ -13,6 +13,7 @@ import {
   TradeMode,
   TradeIntentErrorCode,
   SESSION_MAX_DURATION_MS,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   TRADING_ACCESS_BUDGET_MS,
   TRADING_SESSION_START_BUDGET_MS,
@@ -177,6 +178,7 @@ import {
   SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
   SIGNALS_LIST_TTL_MS,
   signalWaitBoundsHold,
+  sessionFirstNoticeBoundsHold,
 } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
@@ -4109,6 +4111,19 @@ describe("the wait for a signal's bounds (#664)", () => {
   it('the chain fails on a stop window of SHUTDOWN_BUDGET_MS', () => {
     expect(signalWaitBoundsHold({ shutdownBudgetMs: 50_000 })).toBe(false);
     expect(signalWaitBoundsHold({ shutdownBudgetMs: 41_999 })).toBe(true);
+  });
+
+  // #911: the card is in the chat before the first message's hold ends, even with no record
+  it('G1 the start and one sendPhoto fit inside the first message grace', () => {
+    expect(SESSION_FIRST_NOTICE_GRACE_MS).toBe(15_000);
+    expect(TRADING_SESSION_START_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS).toBe(12_000);
+    expect(sessionFirstNoticeBoundsHold()).toBe(true);
+  });
+
+  it('G2 the chain fails on a grace no longer than the start and one sendPhoto', () => {
+    const fill = TRADING_SESSION_START_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS;
+    expect(sessionFirstNoticeBoundsHold({ graceMs: fill })).toBe(false);
+    expect(sessionFirstNoticeBoundsHold({ graceMs: fill + 1 })).toBe(true);
   });
 
   it('the chain fails on a poll offset outside the second or before its clock close, a poll past the served age, a TTL under a poll or a bound past 48 h', () => {

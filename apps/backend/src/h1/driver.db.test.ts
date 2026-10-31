@@ -561,7 +561,7 @@ describe('the H1 driver as a regular session on the database (#775)', () => {
       const t = Math.floor(Date.now() / 1000) * 1000 - 300_000;
       series.feed(t, Array<number>(301).fill(1.1));
       const waiting = async () =>
-        (await listPendingSessionNotices(tmp.db, { limit: 100, exclude: [] })).find(
+        (await listPendingSessionNotices(tmp.db, { limit: 100, exclude: [], graceMs: 0 })).find(
           (row) => row.sessionId === session.id,
         );
       await until('the waiting row', async () => (await waiting())?.waitingDue === true);

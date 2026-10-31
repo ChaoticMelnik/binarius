@@ -97,6 +97,7 @@ export const unusedSessionDeps = (): TradingSessionRoutesDeps => ({
     },
   },
   h1Driver: undefined,
+  notices: undefined,
 });
 
 // an H1 driver port for the start route (#796): answers `reading` and records every call

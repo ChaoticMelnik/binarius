@@ -634,6 +634,13 @@ export const safeParseTradingSessionRefusal = (input: unknown) =>
 // backend's notice tick come before it.
 export const SESSION_SUMMARY_FALLBACK_MS = 1_800_000;
 
+// The first message's hold (#911, docs/bot-session.md → The first message waits for the card): a
+// session without the bot's recorded card and without a message of the backend's yet gets its
+// first trade message or open block only once the card is recorded or this long after started_at,
+// so the card stands above the cycle message. Both processes pin it: the bot's start and one
+// sendPhoto fit inside it, and the backend's notice tick comes before its end.
+export const SESSION_FIRST_NOTICE_GRACE_MS = 15_000;
+
 // POST /trading/sessions/:id/summary (#318, #537): the finished session's summary, claimed at most
 // once.
 // The request body is stopTradingSessionRequestSchema's. Its own code, not a TradingSessionErrorCode:
@@ -676,9 +683,10 @@ export const safeParseSessionSummaryRefusal = (input: unknown) =>
   sessionSummaryRefusalSchema.safeParse(input);
 
 // POST /trading/sessions/:id/status-message (#567, docs/bot-session.md → Recovery after a
-// restart): the bot's first poll of a status message records its id, the newest id wins (#587:
-// message ids grow within a chat, so a relaunch's message replaces the first one); the answer is
-// the view GET /trading/sessions/:id gives.
+// restart): the bot's first poll of a status message, at once after its send (#911), records its
+// id, the newest id wins (#587: message ids grow within a chat, so a relaunch's message replaces
+// the first one); the answer is the view GET /trading/sessions/:id gives. A write wakes the
+// session notices' sender: the session's first message waits for it (#911).
 export const SESSION_STATUS_MESSAGE_SUFFIX = '/status-message';
 
 export const recordSessionStatusMessageRequestSchema = z.strictObject({

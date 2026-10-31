@@ -25,8 +25,9 @@ import { sessionStatusText, TEXTS } from './texts';
 // /trading/sessions/:id and edits the message when its drawing changes: its text (the session's
 // stop, #536) or its picture (the signal's direction turns, #568, by editMessageMedia) - then sends
 // the session's summary in one message (#318, #537). In-process memory,
-// like the intent tracker; the first poll of a message records its id with the backend (#567), so
-// after a restart the bot's resumer (session-resume.ts) tracks the session again on it, the
+// like the intent tracker; the first poll of a message records its id with the backend (#567), at
+// once after its send, as the session's first message waits for the record (#911), so after a
+// restart the bot's resumer (session-resume.ts) tracks the session again on it, the
 // recovered entries' first polls paced in slots and a message drawn in this process remembered.
 
 // The answer GET /trading/sessions/:id gives for an id that is missing or not this user's.
@@ -73,7 +74,7 @@ export const sessionEditMethod = (
 export interface SessionTrackRequest {
   sessionId: string;
   telegramUserId: string;
-  // the status message the edits go to (#567: its first poll records it with the backend)
+  // the status message the edits go to (#567: its first poll, at once, records it with the backend)
   messageId: number;
   // the pair's label as the catalog gave it at the press, or null
   label: PairLabel | null;
@@ -85,8 +86,8 @@ export interface SessionTrackRequest {
   // when the entry's deadline starts, epoch ms: the session's started_at for a recovered one;
   // now() by default
   startedAt?: number;
-  // the first poll records messageId with the backend (#567) and reads the view from that answer;
-  // false when the backend has it already (a recovered session)
+  // the first poll, at once (#911), records messageId with the backend (#567) and reads the view
+  // from that answer; false when the backend has it already (a recovered session)
   record: boolean;
   // draws the drawing on the session message, without a keyboard (#536), or under the menu alone
   // once the session is gone (#350)
@@ -100,9 +101,10 @@ export interface SessionTrackRequest {
 export interface SessionTracker {
   // An id already tracked moves to the new message: the next change is drawn there and the old
   // message is not edited again, but for an attempt already in flight, which keeps the target it
-  // started with. The deadline keeps counting from the first track. An entry with a view polls
-  // first after firstPollMs; one with no view (a recovered session) takes the next slot of
-  // resumeGapMs, no sooner than firstPollMs. A no-op after stop().
+  // started with. The deadline keeps counting from the first track. An entry with a view to record
+  // (a press) polls at once, the poll being the record (#911); one with a view and nothing to
+  // record polls first after firstPollMs; one with no view (a recovered session) takes the next
+  // slot of resumeGapMs, no sooner than firstPollMs. A no-op after stop().
   track(request: SessionTrackRequest): void;
   // clears every timer, refuses new entries, and waits for the attempts in flight
   stop(): Promise<void>;
@@ -401,7 +403,7 @@ export function createSessionTracker({
         editFailures: 0,
       };
       entries.set(request.sessionId, entry);
-      arm(entry, request.view === null ? resumeSlot() : firstPollMs);
+      arm(entry, request.view === null ? resumeSlot() : request.record ? 0 : firstPollMs);
     },
     async stop() {
       stopping = true;

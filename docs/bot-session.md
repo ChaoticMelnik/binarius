@@ -177,12 +177,17 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
         refused → sendMessage of the same text, and the launch screen is then not deleted
   bot → deleteMessage of the pressed launch screen when the datum carries :l; refused as can't be
         deleted → editMessageReplyMarkup without a keyboard (#418)
-  tracker: after 3 s → POST /trading/sessions/<id>/status-message { telegramUserId, messageId }
-           (#567: records the message, the newest one wins (#587), and answers the view),
+  tracker: at once after the message is sent (#911) → POST /trading/sessions/<id>/status-message
+           { telegramUserId, messageId }
+           (#567: records the message, the newest one wins (#587), wakes the backend's sender
+           for the session (#911), and answers the view),
            then every 10 s → GET /trading/sessions/<id>?telegramUserId=<id>
            → editMessageMedia of that message (the picture and its caption, #568), or
            editMessageText without a direction, without a keyboard, when its drawing changes:
            when the session stops (#536) or its signal's direction turns (#568)
+  backend's sender, the session's first message - a trade's or the open trade's block - only once
+        the message is recorded or SESSION_FIRST_NOTICE_GRACE_MS after started_at (#911,
+        [The first message waits for the card](#the-first-message-waits-for-the-card-911))
   backend's sender, its next tick once the message is recorded and the session's latest decision
         is no_signal (#536, #722):
         sendAnimation (#860): the scanner's radar, its caption «🔎 Ждём сигнал для следующей
@@ -681,7 +686,10 @@ One entry per session id, in process memory, like the intent tracker
   are `resumeGapMs` apart (`SESSION_RESUME_GAP_MS`, 250 ms), none sooner than `firstPollMs` from
   the `track()`, and they carry over from one call to the next, so two passes in a row are paced
   together. A slot is an ordinary timer: `stop()` clears it like any other. An entry with a view
-  (a press) polls after `firstPollMs` as before. When an entry ends, the tracker remembers what it
+  to record (a press) polls at once: its first poll is the record (#911), which the backend's
+  first message of the session waits for
+  ([The first message waits for the card](#the-first-message-waits-for-the-card-911)); one with a
+  view and nothing to record polls after `firstPollMs`. When an entry ends, the tracker remembers what it
   last drew on its message (its drawing's key), bounded by `SESSION_TRACKER_MAX_ENTRIES`, the oldest going
   first; an entry that ends on a lost message leaves no memory. A recovered entry of the same
   message starts from that drawing, so its first poll edits only when the drawing changed — another
@@ -693,8 +701,8 @@ One entry per session id, in process memory, like the intent tracker
 ### Recovery after a restart (#567)
 
 - **The record.** Every entry made by a press (the start, an old status message's «⏹», #536)
-  carries its message's id (`track({ …, record: true })`); its first poll is
-  `recordSessionMessage(id, telegramUserId, messageId)` —
+  carries its message's id (`track({ …, record: true })`); its first poll, at once after the send
+  (#911), is `recordSessionMessage(id, telegramUserId, messageId)` —
   `POST /trading/sessions/:id/status-message` with `{ telegramUserId, messageId }`
   — in place of the GET, one backend call as before, and its answer is the same view. The backend
   keeps `trading_sessions.status_message_id`: **the newest id wins** (#587: the CAS writes when the
@@ -707,7 +715,9 @@ One entry per session id, in process memory, like the intent tracker
   (5xx, transport) is asked again on the next poll, with
   the same body; 404 ends the entry as a read's would. The recorded id is also what the backend's
   waiting message waits for (#536): the first one goes under the session message only once it is
-  recorded.
+  recorded; and the session's first trade message or open block waits for it too, or for
+  `SESSION_FIRST_NOTICE_GRACE_MS` (#911): a record that wrote wakes the backend's sender for the
+  session.
 - **The list.** `GET /trading/sessions/tracked` returns the sessions with a recorded message and the
   summary step open (`summary_sent_at` NULL; a finished session with nothing to send has it closed
   with its final mark, #537), oldest first, at most `TRACKED_SESSIONS_MAX` (2 000) —
@@ -745,8 +755,8 @@ One entry per session id, in process memory, like the intent tracker
   message not forgotten` and is not retried: the next pass tracks the session again, its edit is
   refused again, and the report goes again.
 - **Not recovered:** a session with no recorded message — started before #567 and never pressed, a
-  restart within the 3 s before the first poll, the CLI's — and a list longer than the ceiling,
-  whose newest rows wait.
+  restart between the message's send and its record, the CLI's — and a list longer than the
+  ceiling, whose newest rows wait.
 
 ## Timing
 
@@ -778,7 +788,9 @@ One entry per session id, in process memory, like the intent tracker
   unset channel are 1 / 1. `HANDLER_CALLS.sessionShared` = 0 / 0: a log line.
 - All stay at or below the longest path (`demoAnalysis` and, since #418, `sessionStart`, 47 s —
   [bot-demo-trade.md](bot-demo-trade.md#timing)), inside the shutdown budget. `timing.test.ts` runs every terminal branch of the nine.
-- `SESSION_TRACK_FIRST_POLL_MS` = 3 s, `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
+- `SESSION_TRACK_FIRST_POLL_MS` = 3 s — since #911 the floor of the recovered entries' slots and
+  the first poll of an entry with a view and nothing to record; a pressed entry's first poll, the
+  record, goes at once — `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
   `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 4 × 8 s + 5 s = 47 s (#537): an attempt's read and edit, then
   the summary's claim and `sendPhoto`, on a 429 the wait (`SESSION_SUMMARY_RETRY_WAIT_MS`, 5 s) and
@@ -801,6 +813,15 @@ One entry per session id, in process memory, like the intent tracker
   read and the stop wait on one balance GET for a finished session, #337), first poll < poll < deadline, `SESSION_MAX_DURATION_MS <
   SESSION_TRACK_DEADLINE_MS` (imported, so checked), drain < `SHUTDOWN_BUDGET_MS`,
   `SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS` and the recovery's pace above (#567).
+- `SESSION_FIRST_NOTICE_GRACE_MS` = 15 s (`packages/shared`, #911): the hold of the session's
+  first message without a recorded card
+  ([The first message waits for the card](#the-first-message-waits-for-the-card-911)). The bot's
+  chain checks `TRADING_SESSION_START_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
+  SESSION_FIRST_NOTICE_GRACE_MS` (4 s + 8 s = 12 s < 15 s, `sessionFirstNoticeBoundsHold`):
+  `started_at` is written inside the start route, whose rest is within its budget, and one
+  `sendPhoto` within the API timeout puts the card in the chat before the grace ends even with no
+  record. The record itself is no handler's call: it is the tracker's first poll, a timer, so
+  `HANDLER_CALLS.sessionStart` is unchanged.
 
 ## Logs
 
@@ -1010,7 +1031,9 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   sender's wake (#723): within about half a second of the commit — the floor between woken ticks
   (≤ 250 ms) plus the pacing — or, when the chat got a message less than
   `SESSION_NOTICE_CHAT_GAP_MS` ago, at the end of that gap; the tick every `SESSION_NOTICE_TICK_MS`
-  (3 s) is the safety net for a lost wake. A trade costs two calls to its chat; the final mark on
+  (3 s) is the safety net for a lost wake. The session's first message waits for the bot's card
+  ([The first message waits for the card](#the-first-message-waits-for-the-card-911)). A trade
+  costs two calls to its chat; the final mark on
   the tick after the last of them (the last settle wakes it); the bot's summary on its tracker's
   next poll (≤ 10 s).
 - **An H1 session** (#775, [h1.md → The session message](h1.md#the-session-message)): messaged as
@@ -1021,6 +1044,42 @@ ended the wait ([The waiting message](#the-waiting-message-536)). A press is the
   nothing: the trades and the open blocks are claimed without a call, and both marks are set by one CAS without reading
   the view — no balance GET for a user nothing can reach (#620, #537, D5′). The notification level
   does not apply: trade results are outside it (Rule 19).
+
+### The first message waits for the card (#911)
+
+The bot sends the session's card (its status message) only after the start's 201, while the
+backend hands the session to the H1 driver before that answer: on a shown signal the driver opens
+step 1 at once, and the sender's open block could reach Telegram before the bot's `sendPhoto` -
+the cycle message above the card. So the claim that would create the session's first message of
+the backend's waits for the card:
+
+- **The predicate** (`firstNoticeHeldSql`, `packages/db/src/session-notice-ops.ts`): a session
+  with no anchor - `status_message_id` NULL, `notified_trades` = 0 and `cycle_message_id` NULL
+  (`sessionAnchoredSql`, the waiting message's anchor too) - and `started_at` later than `now() -
+  SESSION_FIRST_NOTICE_GRACE_MS` by the database's clock is held. Both `claimSessionTradeNotice`
+  and `claimSessionOpenNotice` refuse while it holds; the CAS decides, in the same UPDATE. A
+  session with an anchor - the card recorded, a claimed trade, a recorded cycle message - is never
+  held: a relaunch (409 → a new card) and a recovered session wait for nothing.
+  `open_notice_intent_id` is no anchor: a claimed block whose send's outcome is unknown proves no
+  message in the chat.
+- **The grace** (`SESSION_FIRST_NOTICE_GRACE_MS` = 15 s, `packages/shared`): a session whose card
+  is not recorded - the CLI's `h1 session start`, a card lost or refused in transport (risk 64), a
+  bot restart between the send and the record - gets its first message once the grace from
+  `started_at` has passed. With `H1_EXPIRY_SEC` = 5 its first trade then shows at once as its
+  result, with no open block (risk 121).
+- **The hint and the timer.** The list carries `firstNoticeHoldMs`, what is left of the hold by
+  the database's clock (0 when not held). A trade's or an open block's step with a hint above 0
+  ends the session's turn before the pace and the claim (`'skip'`) and defers the session to the
+  hold's end by the same timer a cooling chat's step arms (#870): the woken tick by its id comes
+  then with no interval tick. The tick's `debug` line counts these sessions (`held`).
+- **The wake by the record.** `POST /trading/sessions/:id/status-message` wakes the sender for the
+  session (`wake(id)`) when its CAS wrote - an in-process call, not a NOTIFY on
+  `session_notices`, whose other listener, the H1 driver, reads a notification as «a trade of
+  mine closed». The bot records the card at once after its send ([The tracker](#the-tracker)), so
+  the open block normally follows the card by a few hundred ms.
+- Nothing else waits: an edit of the cycle message, a later cycle and the waiting message have an
+  anchor already; the fallback summary comes after the final mark, which waits for every trade's
+  message.
 
 ### The fallback
 
@@ -1065,7 +1124,9 @@ own claim's mark to the microsecond, after a send Telegram certainly did not del
 0072 set `summary_sent_at = final_notice_sent_at` on every row with the first mark and without the
 second: their text summary went before the deploy. Every trade is claimed by a CAS UPDATE before
 the Telegram call (`claimSessionTradeNotice`, `claimSessionFinalNotice` in
-`packages/db/src/session-notice-ops.ts`): at most once, the mailing engine's rule. The migration's backfill (0050) set every existing session's cursor at its settled
+`packages/db/src/session-notice-ops.ts`): at most once, the mailing engine's rule; the claim of the
+session's first message also waits for the recorded card or the grace (#911, [The first message
+waits for the card](#the-first-message-waits-for-the-card-911)). The migration's backfill (0050) set every existing session's cursor at its settled
 trades and marked every stopped session, so nothing settled before the deploy is sent. A session
 stopped before that deploy with a trade still on manual review was marked too: when an operator
 settles the trade later, neither its message nor a summary goes out — the mark keeps the session
@@ -1141,6 +1202,7 @@ message.
 | the message cannot be built (a bug) | a trade stays claimed; the fallback summary is built before its claim | `error`; a trade: the cursor has moved, the session waits for the next tick; the fallback summary: the step is closed (`session summary not built`), the row leaves the list |
 | a statement throws (`session notices failed for a session`) | what was claimed stays claimed; nothing else | `error` with `holdMs`; the session is held out of both lists for `SESSION_NOTICE_HOLD_MS` (60 s, in memory, #660), then tried again; a restart tries it at once ([risk 84](#accepted-risks)) |
 | the chat is cooling (#660): a send or an edit went to it less than `SESSION_NOTICE_CHAT_GAP_MS` ago — a trade's step, the open block, the waiting message or the fallback summary of a reachable user | nothing claimed, no pace taken | the session's turn ends; the step goes on a later tick (the gap is no longer than the tick), or sooner: the tick arms a timer that wakes the sender at the end of the earliest such gap (#723) |
+| the first message while the card is not recorded (#911): the list's `firstNoticeHoldMs` above 0 — a trade's step or the open block, a blocked user's too | nothing claimed, no pace taken | the session's turn ends; the tick arms a timer that wakes the session at the hold's end, and the card's record wakes it sooner ([The first message waits for the card](#the-first-message-waits-for-the-card-911)); a hint gone stale is a claim the CAS refuses: the turn ends the same way |
 | the fallback summary's view needs the balance and no refresh was started for it (#870) | nothing claimed, no pace taken; `refreshFinishedBalance` started, not waited for | the session's turn ends; a later tick reads the view again |
 | the fallback summary: its refresh still in flight | nothing claimed | the turn ends; the next tick looks again — the refresh is normally over by the tick after next (`TRADING_ACCESS_REFRESH_BUDGET_MS <= SESSION_NOTICE_TICK_MS`) |
 | the fallback summary: its refresh answered while the view was read | nothing claimed | the turn ends; the next tick sends it with the snapshot the refresh wrote |
@@ -1220,7 +1282,9 @@ reconciliation give one). Every writer goes through it: the processor's accept, 
 the catch-up's settle, the reconciliation, the operator's CLI. Other transitions (`rejected`,
 `manual_review`) and a session's stop do not wake: the tick serves them. The backend's listener
 holds one client of the pool for the whole run (the pool's default 10 leave 9 to the routes and
-the loops) and calls `wake(sessionId)` with the payload. The woken tick reads both lists by `only`
+the loops) and calls `wake(sessionId)` with the payload. A third source is in process: the
+status-message route calls `wake(id)` once its CAS recorded a card (#911, [The first message waits
+for the card](#the-first-message-waits-for-the-card-911)). The woken tick reads both lists by `only`
 (#870, Rule 62) — the sessions woken since the last tick, at most `SESSION_NOTICE_SCAN`, by
 `id in (…)` and the filter's aggregate each (the planner's index for it is not pinned: on 200 rows
 it took `trading_sessions_notice_pending_idx`, on the pilot's volume `trading_sessions_pkey` is
@@ -1230,13 +1294,15 @@ after it has nothing to read (`sessions: 0`, no read). A payload that is not a s
 (`UUID_PATTERN`, Rule 17: the listener's `''` without a payload, a foreign `NOTIFY`), a `wake()`
 without an id, or more than `SESSION_NOTICE_SCAN` sessions woken between two ticks make the woken
 tick whole, as before #870 ([risk 120](#accepted-risks)); the interval's tick that comes during a
-woken tick runs whole right after it. What no notification names — a stop, a `no_signal` row, a
-relaunch's status message, another session's finish — waits for the interval's tick
+woken tick runs whole right after it. What no notification names — a stop, a `no_signal` row,
+another session's finish — waits for the interval's tick (a relaunch's status message wakes its
+session by the route since #911)
 ([risk 118](#accepted-risks)). `wake()`: a tick now, or one more right after the tick in flight,
 never sooner than `SESSION_NOTICE_WAKE_GAP_MS` (250 ms) after the start of the last tick; calls
 before that tick merge into it (`woken` in its `debug` line, and `sessions`: the count read by id,
-or `all`). A step skipped because its chat was cooling records its session and arms one timer for
-the earliest end of those gaps, which wakes those sessions by id then; a 429's pause makes a woken
+or `all`). A step skipped because its chat was cooling, or because its first message is held
+(#911), records its session and arms one timer for the earliest end of those gaps and holds,
+which wakes those sessions by id then; a 429's pause makes a woken
 tick empty, and the interval's tick after the pause serves its sessions. A lost connection is
 logged and listened again after `SESSION_NOTICE_LISTEN_RETRY_MS` (1 000 ms); a notification sent
 meanwhile, or while the backend restarts, is lost and the tick serves it. The links of the chain
@@ -1388,8 +1454,10 @@ predicates in `session-notice-ops.ts` alone decide:
 - **due**: the session is active and waits for a signal, no live waiting message, its slot is not
   the session's latest message (`is distinct from`), the session has a message to stand under — the
   bot's recorded status message (#567), a claimed trade (`notified_trades > 0`: a trade's message
-  goes only after the session message, recorded or not) or the cycle message of an open trade's
-  block (`cycle_message_id`, #722) — and the user has not blocked the bot;
+  goes only after the recorded session message, or past `SESSION_FIRST_NOTICE_GRACE_MS` without
+  one, #911) or the cycle message of an open trade's block (`cycle_message_id`, #722) — one
+  fragment, `sessionAnchoredSql`, which the first message's hold reads too — and the user has not
+  blocked the bot;
 - **stale**: a live waiting message, and the session stopped, or — the user reachable
   (`telegram_blocked_at is null`, #587: a blocked user's running session keeps the id unlisted
   until the user is reachable again) — a newer message of the session left its slot behind or the
@@ -1607,8 +1675,9 @@ edit: the method field (`sendMessage`, `editMessageText`) tells them apart.
 - `session notices paused: Telegram asked to wait` (`warn`, `pauseMs`)
 - `session notice tick` (`debug`, #723) at the end of a tick: `pending`, `fallback` (the lists'
   lengths), `woken` (the `wake()` calls it served) and `sessions` (#870: the sessions a woken tick
-  read by id, or `all` for a whole tick); `{ woken, sessions, paused: true }` for a tick the pause
-  left empty, `{ woken, sessions: 0 }` for a woken tick whose sessions the interval's tick took
+  read by id, or `all` for a whole tick), `held` (#911: the sessions whose first message waits
+  for the card); `{ woken, sessions, paused: true }` for a tick the pause left empty,
+  `{ woken, sessions: 0 }` for a woken tick whose sessions the interval's tick took
 - `session summary balance refresh failed` (`warn`, #870, `sessionId` and the error's name and
   code): the fallback summary's refresh rejected; the summary goes with the stored snapshot
 - the listener's (#723): `session notice listener listening` (`info`, `channel`); `session notice
@@ -1938,7 +2007,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     this process's last landed edit of it.
 41. **Sessions started before #567** have no recorded message: after a restart they are not
     recovered until a press of an old status message's «⏹» records one (#536: «🔄 Обновить» no
-    longer does). Likewise a restart in the 3 s before a new session message's first poll.
+    longer does). Likewise a restart between a new session message's send and its record (#911:
+    the record is the first poll, at once).
     Falsifiable: a card missing for a session started before the deploy and finished after a
     restart of the bot.
 42. **The list's ceiling** (#567): with more than `TRACKED_SESSIONS_MAX` (2 000) open sessions the
@@ -1978,9 +2048,10 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     recovered entry's first poll later than `firstPollMs + its position × SESSION_RESUME_GAP_MS`
     with a sound clock.
 
-49. **The waiting message comes 3–6 s after the session message** (#536): the tracker's first poll
-    records the message after 3 s, and the sender's tick is 3 s. Falsifiable: a waiting message
-    later than 10 s after the session message with the backend and the bot running.
+49. **The waiting message comes within a tick of the record** (#536, #911): the tracker's first
+    poll records the message at once after its send, the record wakes the sender for the session,
+    and the sender's tick (3 s) is the safety net. Falsifiable: a waiting message later than 10 s
+    after the session message with the backend and the bot running.
 50. **An orphan waiting message** (#536): a send whose outcome is unknown (5xx, a timeout) leaves
     its slot claimed and no id; the next one comes only after the session's next new message
     (cycle or status), and a delivered one is deleted by no one. Its «⏹» works (the stop or 409 → the reply drawn in its
@@ -2025,8 +2096,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     `SESSION_MAX_DURATION_MS` after the deploy. Falsifiable: an old status message edited, or left
     without buttons, while its session runs.
 56. **A session whose message id is not recorded gets no card after a bot restart** (#536): one
-    started before #567 and never pressed, one started from the CLI, a bot restart in the 3 s
-    before the first poll, a session message reported lost. No button records it any more, and
+    started before #567 and never pressed, one started from the CLI, a bot restart between the
+    message's send and its record, a session message reported lost. No button records it any more, and
     neither «⏹» under the waiting message nor `/stop` starts tracking: no card and no end line on
     its message; the backend's fallback text summary (#537, the result and the balance) and the
     reply to «⏹» come all the same. None from before #567 is left at the deploy (#567 runs on the pilot since 2026-10-16,
@@ -2065,8 +2136,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
     risk 46): up to ~420 uploads of ~280 KB for one stuck entry until its deadline. Falsifiable:
     `trading session message not edited` with 400 for one session on consecutive polls.
 64. **A transport failure of `sendPhoto` at the start is a `sendMessage` failure of before** (#568):
-    thrown, the session runs without a session message (risk 56). Falsifiable: `update handler
-    failed` with `sendPhoto` at a start.
+    thrown, the session runs without a session message (risk 56), and its first message waits the
+    whole grace (#911, risk 121). Falsifiable: `update handler failed` with `sendPhoto` at a start.
 65. **The first successful media edit of each direction in a process uploads the file** (#568,
     240–280 KB); the rest go by its `file_id`. An answer «message is not modified» brings no
     `file_id`, so the next edit of that direction uploads again: after a restart the uploads per
@@ -2340,6 +2411,21 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 120. **More than `SESSION_NOTICE_SCAN` woken sessions is a whole tick** (#870): a storm of
     notifications between two ticks, or a payload that is no session id, reads both lists whole,
     as every wake did before #870. Falsifiable: `sessions: 'all'` in most woken ticks' lines.
+121. **A session without a card waits the grace** (#911): the CLI's `h1 session start`, a card
+    lost or refused in transport (risk 64), a bot restart between the `sendPhoto` and the record -
+    the session's first message comes no sooner than `SESSION_FIRST_NOTICE_GRACE_MS` (15 s) after
+    `started_at`; with `H1_EXPIRY_SEC` = 5 its first trade then shows at once as its result, with no
+    open block. A user who blocked the bot waits the same for the mark «counted» (nothing is sent):
+    one predicate, no join of `users`. Falsifiable: an open block (`<pre>⏳`) of a session with
+    `status_message_id` NULL sooner than 15 s after its `started_at`.
+122. **The hold's end by two clocks** (#911): what is left of the hold comes from the database's
+    clock, the sender's timer runs on its monotonic clock; a timer that fires a few ms early costs
+    one refused claim and one more timer, a late one nothing (the claim goes then). Falsifiable:
+    two `session notice tick` lines with `held: 1` for one session and a woken tick between them.
+123. **A refused photo whose refusal and text both took their timeouts** (#911): 4 s + 8 s + 8 s =
+    20 s > 15 s - the card can come after the grace and so below the first message, the race of
+    before #911. A refusal (400) comes in ms; the chain pins one call. Falsifiable: `the session
+    photo was refused` more than 7 s after the start's answer.
 
 ## Running it locally
 

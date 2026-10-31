@@ -192,8 +192,9 @@ export interface BackendClient {
   readSessionShare(id: string, telegramUserId: string): Promise<SessionShare>;
   // every active session of the user, stopped (#122); empty when there was none
   stopSessions(telegramUserId: string): Promise<TradingSessionView[]>;
-  // the first poll of a status message (#567): records its id, the newest one wins (#587), and
-  // answers the view readSession does; scoped by the owner like readSession
+  // the first poll of a status message (#567), at once after its send (#911): records its id, the
+  // newest one wins (#587), and answers the view readSession does; scoped by the owner like
+  // readSession
   recordSessionMessage(
     id: string,
     telegramUserId: string,

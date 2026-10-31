@@ -13,6 +13,7 @@ import {
   TradeIntentStatus,
   TradingSessionStatus,
   TradingSessionStopReason,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   buildH1SessionSettings,
   decimalStringSchema,
   type DecimalString,
@@ -196,14 +197,17 @@ const stop = (
   session: { id: string },
   reason: TradingSessionStopReason = TradingSessionStopReason.Completed,
 ) => stopTradingSession(tmp.db, { id: session.id, reason });
-const claim = (session: { id: string }, claimed: number) =>
-  claimSessionTradeNotice(tmp.db, { sessionId: session.id, claimed });
+// The first message's hold (#911) is off in every case but its own: they seed sessions without a
+// card and claim at once. GRACE is SESSION_FIRST_NOTICE_GRACE_MS, the production default.
+const GRACE = SESSION_FIRST_NOTICE_GRACE_MS;
+const claim = (session: { id: string }, claimed: number, graceMs = 0) =>
+  claimSessionTradeNotice(tmp.db, { sessionId: session.id, claimed, graceMs });
 const finalClaim = (session: { id: string }, closeSummary = false) =>
   claimSessionFinalNotice(tmp.db, { sessionId: session.id, closeSummary });
 const rowOf = async (session: { id: string }) =>
   (await tmp.db.select().from(tradingSessions).where(eq(tradingSessions.id, session.id)))[0]!;
-const pendingOf = async (session: { id: string }) =>
-  (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [] })).find(
+const pendingOf = async (session: { id: string }, graceMs = 0) =>
+  (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [], graceMs })).find(
     (row) => row.sessionId === session.id,
   );
 
@@ -353,7 +357,7 @@ describe('the cycle message (#551)', () => {
 
 describe("the open trade's block (#700)", () => {
   const openClaim = (session: { id: string }, intentId: string, settled: number) =>
-    claimSessionOpenNotice(tmp.db, { sessionId: session.id, intentId, settled });
+    claimSessionOpenNotice(tmp.db, { sessionId: session.id, intentId, settled, graceMs: 0 });
   const openRelease = (session: { id: string }, intentId: string) =>
     releaseSessionOpenNotice(tmp.db, { sessionId: session.id, intentId });
   const markOf = async (session: { id: string }) => (await rowOf(session)).openNoticeIntentId;
@@ -862,7 +866,7 @@ describe('listPendingSessionNotices', () => {
     const other = await seedSession();
     await settled(other, '-5');
     const ids = async (exclude: readonly string[]) =>
-      (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude })).map(
+      (await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude, graceMs: 0 })).map(
         (row) => row.sessionId,
       );
     expect(await ids([])).toEqual(expect.arrayContaining([held.session.id, other.session.id]));
@@ -877,7 +881,7 @@ describe('listPendingSessionNotices', () => {
     const other = await seedSession();
     await settled(other, '-5');
     const list = (only: readonly string[], exclude: readonly string[] = []) =>
-      listPendingSessionNotices(tmp.db, { limit: 10_000, exclude, only });
+      listPendingSessionNotices(tmp.db, { limit: 10_000, exclude, only, graceMs: 0 });
     expect(await list([named.session.id])).toEqual([await pendingOf(named.session)]);
     expect(await list([])).toEqual([]);
     expect(
@@ -888,8 +892,8 @@ describe('listPendingSessionNotices', () => {
   });
 
   it('N7 lists the oldest first and stops at its limit', async () => {
-    const all = await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [] });
-    const firstTwo = await listPendingSessionNotices(tmp.db, { limit: 2, exclude: [] });
+    const all = await listPendingSessionNotices(tmp.db, { limit: 10_000, exclude: [], graceMs: 0 });
+    const firstTwo = await listPendingSessionNotices(tmp.db, { limit: 2, exclude: [], graceMs: 0 });
     expect(firstTwo).toEqual(all.slice(0, 2));
   });
 });
@@ -1560,7 +1564,7 @@ describe('the list reads the latest decision once a row (#870)', () => {
         }),
       );
     }
-    const query = pendingSessionNoticesQuery(tmp.db, { limit: SCAN, exclude: [] });
+    const query = pendingSessionNoticesQuery(tmp.db, { limit: SCAN, exclude: [], graceMs: GRACE });
     const text = query.toSQL().sql;
     expect(text.match(/from "signal_decisions"/g)).toHaveLength(1);
     expect(text.match(/left join lateral/g)).toHaveLength(1);
@@ -1638,5 +1642,128 @@ describe('migration 0050 (the backfill)', () => {
     );
     expect(await pendingOf(review.session)).toBeUndefined();
     expect(await claim(review.session, 1)).toBeUndefined();
+  });
+});
+
+// #911: the claim that creates the session's first message waits for the bot's card, or the grace
+describe('the first message waits for the card (#911)', () => {
+  const openClaim = (session: { id: string }, intentId: string, settled: number) =>
+    claimSessionOpenNotice(tmp.db, { sessionId: session.id, intentId, settled, graceMs: GRACE });
+  const card = (target: Awaited<ReturnType<typeof seedSession>>, messageId = 30) =>
+    recordSessionStatusMessage(tmp.db, {
+      id: target.session.id,
+      telegramUserId: target.seed.telegramUserId,
+      messageId,
+    });
+  // started_at moved by the database's clock: past the grace, or back to now
+  const startedAt = (session: { id: string }, at: 'past' | 'now') =>
+    tmp.db
+      .update(tradingSessions)
+      .set({
+        startedAt:
+          at === 'past' ? sql`now() - make_interval(secs => ${GRACE / 1000 + 5})` : sql`now()`,
+      })
+      .where(eq(tradingSessions.id, session.id));
+  const settleOpen = ({ intent, open }: Awaited<ReturnType<typeof opened>>) =>
+    tmp.db.transaction((tx) =>
+      settleIntent(tx, {
+        id: intent.id,
+        from: TradeIntentStatus.Accepted,
+        trade: closedTradeFor(open, { profit: '-5' as DecimalString, closePrice: 9.5 }),
+      }),
+    );
+
+  it("N60 a trade's first message: refused without the card inside the grace, claimed once the card is recorded or the grace passed", async () => {
+    const target = await seedSession();
+    await settled(target, '4.6');
+    expect(await claim(target.session, 0, GRACE)).toBeUndefined();
+    expect((await rowOf(target.session)).notifiedTrades).toBe(0);
+    expect(await card(target)).toBe(true);
+    expect(await claim(target.session, 0, GRACE)).toBeDefined();
+
+    const late = await seedSession();
+    await settled(late, '-5');
+    await startedAt(late.session, 'past');
+    expect(await claim(late.session, 0, GRACE)).toBeDefined();
+  });
+
+  it("N61 the open trade's block: refused without the card inside the grace, claimed once the card is recorded or the grace passed, and after a sent message", async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeUndefined();
+    expect((await rowOf(target.session)).openNoticeIntentId).toBeNull();
+    await card(target);
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeDefined();
+
+    const late = await seedSession();
+    const lateTrade = await opened(late);
+    await startedAt(late.session, 'past');
+    expect(await openClaim(late.session, lateTrade.intent.id, 0)).toBeDefined();
+
+    const second = await seedSession();
+    await settled(second, '-5');
+    await startedAt(second.session, 'past');
+    expect(await claim(second.session, 0, GRACE)).toBeDefined();
+    await startedAt(second.session, 'now');
+    const next = await opened(second);
+    expect(await openClaim(second.session, next.intent.id, 1)).toBeDefined();
+  });
+
+  it('N62 a claimed trade is the anchor: the next trade goes at once without the card', async () => {
+    const target = await seedSession();
+    await settled(target, '-5');
+    await startedAt(target.session, 'past');
+    expect(await claim(target.session, 0, GRACE)).toBeDefined();
+    await startedAt(target.session, 'now');
+    await settled(target, '-5');
+    expect(await claim(target.session, 1, GRACE)).toBeDefined();
+  });
+
+  it("N63 a recorded cycle message is the anchor: the open block's result goes at once without the card", async () => {
+    const target = await seedSession();
+    const trade = await opened(target);
+    await startedAt(target.session, 'past');
+    expect(await openClaim(target.session, trade.intent.id, 0)).toBeDefined();
+    expect(
+      await recordSessionCycleMessage(tmp.db, {
+        sessionId: target.session.id,
+        cursor: 0,
+        openIntentId: trade.intent.id,
+        messageId: 50,
+        from: 0,
+      }),
+    ).toBe(true);
+    await startedAt(target.session, 'now');
+    await settleOpen(trade);
+    const row = await rowOf(target.session);
+    expect([row.notifiedTrades, row.statusMessageId]).toEqual([0, null]);
+    expect(await claim(target.session, 0, GRACE)).toBeDefined();
+  });
+
+  it("N64 the list's hint: what is left of the hold, 0 once the card is recorded, past the grace, after a claimed trade or with no grace", async () => {
+    const target = await seedSession();
+    await opened(target);
+    const left = (await pendingOf(target.session, GRACE))?.firstNoticeHoldMs;
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThanOrEqual(GRACE);
+    expect((await pendingOf(target.session, 0))?.firstNoticeHoldMs).toBe(0);
+    await card(target);
+    expect((await pendingOf(target.session, GRACE))?.firstNoticeHoldMs).toBe(0);
+
+    const late = await seedSession();
+    await opened(late);
+    await startedAt(late.session, 'past');
+    expect((await pendingOf(late.session, GRACE))?.firstNoticeHoldMs).toBe(0);
+
+    const sent = await seedSession();
+    await settled(sent, '-5');
+    await claim(sent.session, 0);
+    await opened(sent);
+    expect((await pendingOf(sent.session, GRACE))?.firstNoticeHoldMs).toBe(0);
+
+    const free = await seedSession();
+    await settled(free, '-5');
+    expect((await pendingOf(free.session, 0))?.firstNoticeHoldMs).toBe(0);
+    expect(await claim(free.session, 0, 0)).toBeDefined();
   });
 });

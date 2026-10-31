@@ -61,6 +61,12 @@ import type { Tx } from './trade-intent-ops';
 // written by claimSessionOpenNotice's CAS before the Telegram call: at most once, never repeated,
 // even when its send's outcome is unknown - the trade's result still comes by the cursor. An H1
 // session's open trade gets its block as any (#775).
+//
+// The first message waits for the card (#911): the claim that would create the session's first
+// message of the backend's - a trade's or an open trade's block - is refused while the session has
+// no anchor (firstNoticeHeldSql below) and SESSION_FIRST_NOTICE_GRACE_MS has not passed since
+// started_at by the database's clock, so the bot's card, sent after the start's 201, stands above
+// the cycle message; past the grace the message goes without the card (a CLI session, a lost card).
 
 const SETTLED = literal(TradeIntentStatus.Settled);
 const ACCEPTED = literal(TradeIntentStatus.Accepted);
@@ -143,13 +149,26 @@ const waitingForSignalSql = waitingOf(sql`(
    limit 1
 )`);
 
+// The session has a message in the chat to stand under: the bot's recorded status message (#567),
+// a claimed trade, whose message goes only after the recorded session message or past the grace
+// without one (#911), or the cycle message of an open trade's block (#722).
+const sessionAnchoredSql = sql<boolean>`(${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0 or ${tradingSessions.cycleMessageId} is not null)`;
+
+// The session's first message is held (#911): no anchor yet, and the grace since started_at has
+// not passed by the database's clock. Both claims that create a first message refuse while it
+// holds; the list carries what is left of it as a hint.
+const firstNoticeHeldSql = (graceMs: number) =>
+  sql<boolean>`(not ${sessionAnchoredSql} and ${tradingSessions.startedAt} > now() - make_interval(secs => ${graceMs / 1000}))`;
+
+// what is left of the hold in ms, 0 when not held; the case keeps extract off a negative interval
+const firstNoticeHoldMsSql = (graceMs: number) =>
+  sql<number>`(case when ${firstNoticeHeldSql(graceMs)} then ceil(extract(epoch from (${tradingSessions.startedAt} + make_interval(secs => ${graceMs / 1000}) - now())) * 1000)::int else 0 end)`;
+
 // The fragment both the list and the claim take: an active session that waits for a signal, with
-// no live waiting message, whose slot was not claimed yet, under a message of the session - the
-// bot's recorded status message (#567), a claimed trade, whose message goes only after the
-// session's, recorded or not, or the cycle message of an open trade's block (#722) - so the
+// no live waiting message, whose slot was not claimed yet, under a message of the session - so the
 // waiting message never stands above the session's message.
 const waitingClaimableSql = (waiting: SQL) =>
-  sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and (${tradingSessions.statusMessageId} is not null or ${tradingSessions.notifiedTrades} > 0 or ${tradingSessions.cycleMessageId} is not null) and ${waiting})`;
+  sql`(${tradingSessions.status} = ${literal(TradingSessionStatus.Active)} and ${tradingSessions.waitingMessageId} is null and ${tradingSessions.waitingAfterMessage} is distinct from ${sessionSlotSql} and ${sessionAnchoredSql} and ${waiting})`;
 
 // due: a waiting message is to be sent; nothing goes to a user who blocked the bot (Rule 19)
 const waitingDueSql = (waiting: SQL) =>
@@ -190,6 +209,9 @@ export interface PendingSessionNotice {
   // the session waits for a signal (#722): the sender's hint after its own send or delete; the
   // claim decides
   waitingForSignal: boolean;
+  // what is left of the first message's hold in ms by the database's clock, 0 when not held
+  // (#911): the sender's hint to wait without a claim; the claims decide
+  firstNoticeHoldMs: number;
 }
 
 // The sessions with something to send: notices not closed yet, and a settled trade past the
@@ -197,14 +219,21 @@ export interface PendingSessionNotice {
 // or to delete. Oldest first, on
 // trading_sessions_notice_pending_idx. `exclude`: the sessions the sender holds back after a turn
 // that threw (#660), ids from its own lists. `only`: the woken tick's sessions (#870), at most the
-// sender's scan; `exclude` wins over it. The query is exported unawaited for its EXPLAIN test.
+// sender's scan; `exclude` wins over it. `graceMs`: the first message's hold (#911). The query is
+// exported unawaited for its EXPLAIN test.
 export function pendingSessionNoticesQuery(
   db: Db,
   {
     limit,
     exclude,
     only,
-  }: { limit: number; exclude: readonly string[]; only?: readonly string[] | undefined },
+    graceMs,
+  }: {
+    limit: number;
+    exclude: readonly string[];
+    only?: readonly string[] | undefined;
+    graceMs: number;
+  },
 ) {
   const latest = db
     .select({ outcome: signalDecisions.outcome })
@@ -233,6 +262,7 @@ export function pendingSessionNoticesQuery(
       waitingDue: waitingDueSql(waiting),
       waitingStale: waitingStaleSql(waiting),
       waitingForSignal: waiting,
+      firstNoticeHoldMs: firstNoticeHoldMsSql(graceMs),
     })
     .from(tradingSessions)
     .innerJoin(brokerAccounts, eq(brokerAccounts.id, tradingSessions.brokerAccountId))
@@ -252,7 +282,12 @@ export function pendingSessionNoticesQuery(
 
 export async function listPendingSessionNotices(
   db: Db,
-  options: { limit: number; exclude: readonly string[]; only?: readonly string[] | undefined },
+  options: {
+    limit: number;
+    exclude: readonly string[];
+    only?: readonly string[] | undefined;
+    graceMs: number;
+  },
 ): Promise<PendingSessionNotice[]> {
   return pendingSessionNoticesQuery(db, options);
 }
@@ -337,12 +372,12 @@ export interface ClaimedSessionTrade {
 export const tradeResultSql = sql<SessionTradeResult>`case when ${brokerTrades.profit} > 0 then ${literal(SessionTradeResult.Won)} when ${brokerTrades.profit} < 0 then ${literal(SessionTradeResult.Lost)} else ${literal(SessionTradeResult.Tied)} end`;
 
 // Claims the session's (claimed + 1)-th settled trade: one CAS raises the cursor from `claimed`,
-// only while no summary was sent and that trade exists. Undefined when the CAS lost (another
-// sender took it, or the cursor moved). The trade is read in the same transaction; a settled
-// trade cannot change any more.
+// only while no summary was sent, that trade exists and the first message is not held (#911).
+// Undefined when the CAS lost (another sender took it, the cursor moved, or the hold). The trade
+// is read in the same transaction; a settled trade cannot change any more.
 export async function claimSessionTradeNotice(
   db: Db,
-  { sessionId, claimed }: { sessionId: string; claimed: number },
+  { sessionId, claimed, graceMs }: { sessionId: string; claimed: number; graceMs: number },
 ): Promise<ClaimedSessionTrade | undefined> {
   return db.transaction(async (tx) => {
     const [won] = await tx
@@ -354,6 +389,7 @@ export async function claimSessionTradeNotice(
           eq(tradingSessions.notifiedTrades, claimed),
           isNull(tradingSessions.finalNoticeSentAt),
           sql`${settledCountSql} > ${claimed}`,
+          sql`not ${firstNoticeHeldSql(graceMs)}`,
         ),
       )
       .returning({
@@ -433,11 +469,17 @@ export interface ClaimedSessionOpen {
 // Claims the open trade's block (#700): one CAS marks `intentId` on the session, only while it is
 // not marked already, the notices are not closed, the session has `settled` settled trades and
 // the cursor claimed them all (so the block stands below all their blocks), and `intentId` is
-// still the session's open trade. Undefined when the CAS lost: another sender, the cursor moved, or the trade settled since
-// the list - its result block then comes by the cursor. The rows are read in the same transaction.
+// still the session's open trade, and the first message is not held (#911). Undefined when the
+// CAS lost: another sender, the cursor moved, the hold, or the trade settled since the list - its
+// result block then comes by the cursor. The rows are read in the same transaction.
 export async function claimSessionOpenNotice(
   db: Db,
-  { sessionId, intentId, settled }: { sessionId: string; intentId: string; settled: number },
+  {
+    sessionId,
+    intentId,
+    settled,
+    graceMs,
+  }: { sessionId: string; intentId: string; settled: number; graceMs: number },
 ): Promise<ClaimedSessionOpen | undefined> {
   return db.transaction(async (tx) => {
     const [won] = await tx
@@ -451,6 +493,7 @@ export async function claimSessionOpenNotice(
           eq(tradingSessions.notifiedTrades, settled),
           sql`${settledCountSql} = ${settled}`,
           sql`${openTradeSql} = ${intentId}`,
+          sql`not ${firstNoticeHeldSql(graceMs)}`,
         ),
       )
       .returning({

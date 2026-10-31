@@ -24,6 +24,7 @@ import {
   REFERRAL_REWARDED_AFTER_MS,
   REAL_MODE_BY_DEPOSIT_AFTER_MS,
   MAILING_MIN_OFFSET_MS,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   TOKEN_NUDGE_AFTER_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
@@ -96,6 +97,7 @@ import {
   SESSION_NOTICE_TICK_MS,
   SESSION_NOTICE_WAKE_GAP_MS,
   sessionNoticeWakeBoundsHold,
+  sessionFirstNoticeBoundsHold,
   SESSION_WAIT_CAPTION_EDITS_PER_PASS,
   SESSION_WAIT_CAPTION_MS,
   sessionWaitCaptionBoundsHold,
@@ -647,6 +649,16 @@ describe('broker balance timing', () => {
   it('TW3 breaks the wake chain with a floor between woken ticks not below the chat gap (#723)', () => {
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS - 1 })).toBe(true);
     expect(sessionNoticeWakeBoundsHold({ wakeGapMs: SESSION_NOTICE_CHAT_GAP_MS })).toBe(false);
+  });
+
+  it("G1 pins the first message's grace: a tick sees a held session before it ends (#911)", () => {
+    expect(SESSION_FIRST_NOTICE_GRACE_MS).toBe(15_000);
+    expect(sessionFirstNoticeBoundsHold()).toBe(true);
+  });
+
+  it('G2 breaks the first message chain with a grace not longer than the sender tick (#911)', () => {
+    expect(sessionFirstNoticeBoundsHold({ graceMs: SESSION_NOTICE_TICK_MS })).toBe(false);
+    expect(sessionFirstNoticeBoundsHold({ graceMs: SESSION_NOTICE_TICK_MS + 1 })).toBe(true);
   });
 
   it("TC1 pins the waiting message's caption pass: the owner's 3 to 5 s, nine sessions a pass (#860)", () => {
