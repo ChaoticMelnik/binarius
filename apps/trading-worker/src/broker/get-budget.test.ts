@@ -21,6 +21,16 @@ function fakeRest() {
   return { rest, calls, trades, user };
 }
 
+// the most GETs any window of BROKER_GET_WINDOW_MS holds, over sorted timestamps
+function maxInWindow(sent: readonly number[]): number {
+  let max = 0;
+  for (let i = 0, j = 0; i < sent.length; i += 1) {
+    while (sent[j]! <= sent[i]! - BROKER_GET_WINDOW_MS) j += 1;
+    max = Math.max(max, i - j + 1);
+  }
+  return max;
+}
+
 function clock() {
   let t = 1_000_000;
   return {
@@ -92,13 +102,8 @@ describe('the broker GET budget (#872)', () => {
       }
       c.advance(random(3_000));
     }
-    let max = 0;
-    for (let i = 0, j = 0; i < sent.length; i += 1) {
-      while (sent[j]! <= sent[i]! - BROKER_GET_WINDOW_MS) j += 1;
-      max = Math.max(max, i - j + 1);
-    }
     expect(sent.length).toBeGreaterThan(5 * perMinute);
-    expect(max).toBeLessThanOrEqual(perMinute);
+    expect(maxInWindow(sent)).toBeLessThanOrEqual(perMinute);
     expect(refused).toBeGreaterThan(0);
   });
 
@@ -162,5 +167,63 @@ describe('the broker GET budget (#872)', () => {
     meter.end();
     expect(() => meter.begin(0)).toThrow(RangeError);
     expect(() => createBrokerGetBudget({ perMinute: 0 })).toThrow(RangeError);
+  });
+});
+
+describe('the broker GET budget across a restart (#909)', () => {
+  it('G9: a budget created with carriedOver refuses both meters until the window drops the carried GETs, at exactly 60 s', () => {
+    const c = clock();
+    const budget = createBrokerGetBudget({ perMinute: 5, now: c.now, carriedOver: 5 });
+    const pass = budget.meter(fakeRest().rest);
+    const catchup = budget.meter(fakeRest().rest);
+    expect(budget.committed()).toBe(5);
+    expect(pass.begin(1)).toBe(false);
+    expect(catchup.begin(1)).toBe(false);
+    c.advance(BROKER_GET_WINDOW_MS - 1);
+    expect(pass.begin(1)).toBe(false);
+    expect(catchup.begin(1)).toBe(false);
+    c.advance(1);
+    expect(pass.begin(1)).toBe(true);
+    expect(budget.committed()).toBe(1);
+    expect(catchup.begin(4)).toBe(true);
+  });
+
+  it('G10: a window crossing a restart holds no more than the cap, the old budget’s GETs and the new one’s together', async () => {
+    const perMinute = 10;
+    const c = clock();
+    const old = createBrokerGetBudget({ perMinute, now: c.now });
+    const oldMeter = old.meter(fakeRest().rest);
+    const sent: number[] = [];
+    const restartAt = c.now() + 1_000;
+    expect(oldMeter.begin(perMinute)).toBe(true);
+    for (let i = 0; i < perMinute; i += 1) {
+      sent.push(c.now());
+      await oldMeter.rest.listTrades(AUTH);
+    }
+    oldMeter.end();
+    c.advance(restartAt - c.now());
+    const fresh = createBrokerGetBudget({ perMinute, now: c.now, carriedOver: perMinute });
+    const meter = fresh.meter(fakeRest().rest);
+    let first: number | undefined;
+    const end = restartAt + 2 * BROKER_GET_WINDOW_MS;
+    while (c.now() < end) {
+      if (meter.begin(1)) {
+        first ??= c.now();
+        sent.push(c.now());
+        await meter.rest.listTrades(AUTH);
+        meter.end();
+      }
+      c.advance(5_000);
+    }
+    expect(first).toBe(restartAt + BROKER_GET_WINDOW_MS);
+    expect(maxInWindow(sent)).toBe(perMinute);
+  });
+
+  it('G11: carriedOver above the cap, negative or fractional is a RangeError; 0 and the cap are accepted', () => {
+    expect(() => createBrokerGetBudget({ perMinute: 5, carriedOver: 6 })).toThrow(RangeError);
+    expect(() => createBrokerGetBudget({ perMinute: 5, carriedOver: -1 })).toThrow(RangeError);
+    expect(() => createBrokerGetBudget({ perMinute: 5, carriedOver: 1.5 })).toThrow(RangeError);
+    expect(() => createBrokerGetBudget({ perMinute: 5, carriedOver: 0 })).not.toThrow();
+    expect(() => createBrokerGetBudget({ perMinute: 5, carriedOver: 5 })).not.toThrow();
   });
 });

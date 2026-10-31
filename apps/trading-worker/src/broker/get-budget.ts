@@ -2,7 +2,8 @@ import type { BrokerRestClient } from '@binarius/broker-rest';
 
 // The worker's share of the broker's per-IP limit (WORKER_BROKER_GETS_PER_MINUTE) held at runtime
 // (#872, docs/trade-intent-transport.md -> Budget): the GETs sent in any window of this length
-// never exceed the cap.
+// never exceed the cap. A new process starts with its window full (`carriedOver`, #909): it cannot
+// see what the process before it sent in the last window.
 export const BROKER_GET_WINDOW_MS = 60_000;
 
 export type BrokerGets = Pick<BrokerRestClient, 'listTrades' | 'getUser'>;
@@ -19,13 +20,16 @@ export interface BrokerGetMeter {
 
 export interface BrokerGetBudget {
   meter(rest: BrokerGets): BrokerGetMeter;
-  // the GETs sent in the window plus those reserved and not sent yet
+  // the GETs sent in the window (the carried-over ones included) plus those reserved and not sent yet
   committed(): number;
 }
 
 export interface BrokerGetBudgetOptions {
   perMinute: number;
   now?: () => number;
+  // GETs counted as sent at creation (#909): a new process cannot see what the one before it sent
+  // in the last window, so production carries the whole cap over and the window frees it with time
+  carriedOver?: number;
 }
 
 // Invariant: made (in the window) + outstanding <= perMinute after every operation; a GET moves one
@@ -36,11 +40,16 @@ export interface BrokerGetBudgetOptions {
 export function createBrokerGetBudget({
   perMinute,
   now = Date.now,
+  carriedOver = 0,
 }: BrokerGetBudgetOptions): BrokerGetBudget {
   if (!Number.isInteger(perMinute) || perMinute < 1) {
     throw new RangeError(`perMinute must be a positive integer, got ${perMinute}`);
   }
+  if (!Number.isInteger(carriedOver) || carriedOver < 0 || carriedOver > perMinute) {
+    throw new RangeError(`carriedOver must be an integer in [0, ${perMinute}], got ${carriedOver}`);
+  }
   const made: number[] = [];
+  for (let i = 0; i < carriedOver; i += 1) made.push(now());
   let outstanding = 0;
 
   function trim(): void {
