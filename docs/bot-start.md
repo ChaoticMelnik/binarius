@@ -32,7 +32,8 @@ routes, the confirmation and the starter pack are described in
   `assets/account-card.jpg`, the card's picture), `login-dialog.ts` (the email dialog's state,
   [Email dialog](#email-dialog)), `bot.ts` (the handlers),
   `lifecycle.ts` (start, the profile registration — the menu, the description, the short
-  description — signals, drain), `index.ts` (wiring), and
+  description — signals, drain), `polling.ts` (the long polling loop, #869:
+  [Timing and shutdown](#timing-and-shutdown)), `index.ts` (wiring), and
   `testing.ts`, the fixtures the suites share; `demo.ts`, `demo-catalog.ts` and `analysis.ts` (the
   screens behind the demo button, their check on a fresh catalog and the analysis screen,
   [bot-demo.md](bot-demo.md)), `demo-trade.ts` and `intent-tracker.ts` (the stake press, the
@@ -154,9 +155,9 @@ not stored anywhere else and is not written to the log. `logging.test.ts` reads 
 recheck and a reply that fails on the code step, and finds neither the address nor the code in
 any of them.
 
-No lock guards the entry: grammY runs updates one after another and the bot polls one update at
-a time (`POLLING_BATCH_LIMIT`), so a read, an awaited backend call and a write never interleave
-with another update's.
+No lock guards the entry: the polling loop runs one user's updates one after another
+(`polling.ts`, `updateKey`: the update's `from.id`, #869), and the entry is keyed by that user, so
+a read, an awaited backend call and a write never interleave with another update of the entry.
 
 What each step does with what the user types:
 
@@ -705,7 +706,7 @@ twice (#508): the Russian one under `language_code: 'ru'`, the English one with 
 language, not by the language chosen in the bot's menu: a user with a Russian client who chose
 English still sees the Russian command menu, the bot's messages in English.
 
-`runBot` (`apps/bot/src/lifecycle.ts`) registers the list on every start, inside grammY's
+`runBot` (`apps/bot/src/lifecycle.ts`) registers the list on every start, inside the polling loop's
 `onStart` — after `getMe` and `deleteWebhook` have succeeded and before the first `getUpdates` —
 so an invalid token fails once, at `getMe`, and the list is on Telegram's side before the first
 update is taken. Before the registration `onStart` waits for the first load of the text overrides
@@ -741,7 +742,7 @@ counted here in UTF-16 code units (`String#length`, the unit `bot-commands.test.
 string is what removes the text on Telegram's side), markup or an entity, a non-empty line without a
 leading emoji, a line with a space at either end, and a line break in the short description.
 
-`runBot` registers them on every start, inside grammY's `onStart`, after the first texts load and
+`runBot` registers them on every start, inside the polling loop's `onStart`, after the first texts load and
 right after the command menu: `setMyCommands`, then `setMyDescription`, then
 `setMyShortDescription`, one method at a time and
 one attempt each; a method's Russian and English calls run side by side under the one client
@@ -796,9 +797,25 @@ started in CI rather than silently left out.
 
 `apps/bot/src/timing.ts` holds every bound and checks their order at import, so a constant
 edited into an impossible order stops the process instead of producing a shutdown that loses
-updates. Long polling asks for **one** update per `getUpdates` and waits 5 s for it, below the
-8 s Bot API client timeout (grammY's own default is 500 s, so it is set explicitly); one backend
-call is capped at 5 s.
+updates. Long polling waits 5 s per `getUpdates`, below the 8 s Bot API client timeout (grammY's
+own default is 500 s, so it is set explicitly); one backend call is capped at 5 s.
+
+**The polling loop** (#869, `apps/bot/src/polling.ts`) is the bot's own, over grammY's `Bot`
+(`init`, `api.deleteWebhook`, `api.getUpdates`, `handleUpdate`, the `bot.catch` handler) rather than
+`bot.start()`, which runs a batch one update after another, so one user's slow handler held every
+other user. At most `POLLING_CONCURRENCY` = **8** updates are in work at once; each `getUpdates`
+asks for the free capacity only (`limit` = 8 − in work, the Bot API takes 1-100 — a conjunct of
+the chain) and none is sent while the capacity is full, so every fetched update starts at once. A
+user's updates run in their order — chained by `updateKey`: the update's `from.id`, else its
+`chat.id`; an update with neither runs on its own — and different users' side by side. The offset
+moves past every fetched update, and the next `getUpdates` confirms them. `allowed_updates` goes
+only in the first poll: Telegram keeps the last value. A handler's throw goes to the `bot.catch`
+handler; a throw out of that is logged (`bot.catch failed`) and the loop goes on. A `getUpdates` or
+`deleteWebhook` answered 401 (the token revoked) or 409 (another poller) rejects `start()`; a 429
+sleeps its `retry_after`; anything else sleeps `POLLING_RETRY_MS` = 3 s and polls again, and the
+stop cuts either sleep short. `polling.test.ts` P1–P11 hold each of these on a fake `Bot`;
+`lifecycle.test.ts` runs the loop over the real `Bot` with only the transport replaced, L1 (a slow
+`/start` of user A does not hold user B's `/help`) and L2 (the stop below with two users).
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` and `/menu` are two backend
@@ -833,8 +850,7 @@ hit its timeout. `timing.test.ts` runs
 every terminal branch of each handler through the real handlers and asserts that each makes the
 calls it is declared to make and that the worst of them is what `HANDLER_CALLS` says — so a
 handler that grows a call turns the suite red instead of quietly outgrowing the budget. It reads
-`stop_grace_period` out of `compose.yaml` rather than trusting it, and grammY's polling backoff
-out of grammY.
+`stop_grace_period` out of `compose.yaml` rather than trusting it.
 
 What that test cannot see, and no test here can: a handler or a terminal branch nobody added to
 the enumeration. Adding either is a manual step, because grammY keeps no registry of handlers.
@@ -843,20 +859,21 @@ On SIGTERM or SIGINT `runBot` stops taking updates and waits for `bot.stop()`, t
 itself and the intent tracker's `stop()` (#127: its timers cleared, the poll in flight drained,
 `INTENT_TRACK_DRAIN_MS` = 5 s + 8 s = 13 s, a conjunct of the chain) within the budget, then exits 0. A second signal is ignored: the listeners
 stay installed (`on`, not `once`), so Node never falls back to the default action, which would
-kill the drain instead. Because the batch is one update, the drain waits for at most one
-handler, and `bot.stop()` confirms the offset of exactly the update in flight — with grammY's
-default batch of 100 it would confirm only the current one and leave the rest of the batch to be
-redelivered. Both of those are premises of the budget rather than preferences, so
-`POLLING_BATCH_LIMIT === 1` is a conjunct of the import-time chain in `timing.ts`: another limit
-stops the process at import instead of at the next shutdown. The one case the drain cannot
-shorten is grammY's 3 s sleep after a failed `getUpdates` (`retry_after` after a 429,
-which has no ceiling): `bot.stop()` does not interrupt it, so the drain waits it out — but no
-update is in flight during that sleep, so an overrun there costs the exit code and nothing else.
+kill the drain instead. The loop's `stop()` aborts the long poll and the retry sleep and confirms
+the offset with `getUpdates({ offset, limit: 1 })` past every fetched update, at once, while the
+handlers run; `start()` settles only once every fetched update is handled — the ones still
+waiting behind their user's earlier update included. So inside the budget every fetched update is
+handled exactly once and confirmed: none lost, none redelivered. The handlers in work run in
+parallel, so the drain is bounded by the longest one, `HANDLER_BUDGET_MS` + `LANGUAGE_READ_TIMEOUT_MS`,
+as before; one user's updates run in a chain, so k of them in work at the stop take k handlers'
+time — k ≥ 2 only when a user sent updates faster than the bot answered and the stop came in that
+window (accepted risk). A crash (SIGKILL, OOM) loses the updates in work: the next `getUpdates`
+confirmed them when it fetched more.
 
-grammY retries some Bot API failures by itself and reports them only to the `debug` package, which
-writes nothing without `DEBUG` — and `DEBUG` stays unset, because its lines carry the error message,
-whose URL holds the token. Those are `getUpdates` in the polling loop (every failure but 401 and
-409) and `getMe` and `deleteWebhook` at start. Since #67 `createBot` installs
+The polling loop retries `getUpdates` (every failure but 401 and 409) and `deleteWebhook`, and
+grammY's `init` retries `getMe` at start; neither writes a line of its own (grammY reports only to
+the `debug` package, which writes nothing without `DEBUG` — and `DEBUG` stays unset, because its
+lines carry the error message, whose URL holds the token). Since #67 `createBot` installs
 `createTelegramRetryLog` (`packages/shared/src/telegram-retry-log.ts`) as an API transformer, and
 each such failure is one `warn` line `Bot API call failed, grammY retries it` with `method`, the
 error's name and code (`errorLogFields`), `telegramErrorCode` for a refusal or `transportError` for a
@@ -866,7 +883,7 @@ JSON), `retryAfterS` after a 429, `failures` in the series and `elapsedMs` of th
 success after a series is one `info` line `Bot API call succeeded after failures` with `downMs`.
 That is a line per attempt, at most one every 3 s for `getUpdates`. A 401 or 409 gets the same
 `warn`, then `long polling stopped with an error`, which now carries the method and the code too.
-The long poll `bot.stop()` aborts is not a failure and writes nothing.
+The long poll the loop's `stop()` aborts is not a failure and writes nothing.
 
 The profile registration ([Command menu](#command-menu), [Bot profile](#bot-profile)) is
 `STARTUP_CALLS` = 3 Bot API calls at startup, one after another, each bounded by the same 8 s
@@ -874,14 +891,15 @@ client timeout, after the wait for the first texts load (the refresher's budget,
 `BACKEND_REQUEST_TIMEOUT_MS` = 5 s, as `index.ts` wires it), and is not part of `HANDLER_CALLS`: no
 update is in flight while it runs. Its bound is `STARTUP_BUDGET_MS` = 5 s + 3 × 8 s = **29 s**, and
 `STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS` is a conjunct of the import-time chain; `lifecycle.test.ts` checks that the real start makes exactly
-`STARTUP_CALLS` calls between `deleteWebhook` and the first `getUpdates`. grammY awaits `onStart`
-to completion and `bot.stop()` cancels none of these calls, so a SIGTERM during the registration
-waits for all three (≤ 24 s) with `bot.stop()`'s offset confirmation (≤ 8 s) running alongside,
-inside the 50 s budget, and grammY then returns from `start()` without a first `getUpdates`. In
-that case `bot started` is still written, after `shutting down`, because `onStart` finishes before
-grammY sees the stop.
+`STARTUP_CALLS` calls between `deleteWebhook` and the first `getUpdates`. The loop awaits
+`onStart` to completion and `stop()` cancels none of these calls, so a SIGTERM during the
+registration waits for all three (≤ 24 s) with the offset confirmation (≤ 8 s) running alongside,
+inside the 50 s budget, and `start()` then returns without a first `getUpdates`. In that case
+`bot started` is still written, after `shutting down`, because `onStart` finishes before the loop
+sees the stop.
 
-An overrun exits 1, losing the update in flight rather than the whole container's shutdown. The
+An overrun exits 1, losing the updates in work (up to `POLLING_CONCURRENCY`) rather than the
+whole container's shutdown. The
 closing line distinguishes the two ways a drain ends badly: a step that rejected logs itself as
 it fails (`shutdown: bot.stop() failed`, `shutdown: polling loop failed`,
 `shutdown: intent tracker failed`), and the budget line is

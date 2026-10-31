@@ -17,20 +17,20 @@ import {
 // a constant edited into an impossible order stops the process instead of producing a shutdown
 // that silently loses updates.
 
-// Server-side wait for one getUpdates call (grammY's PollingOptions.timeout, default 30).
+// Server-side wait for one long poll's getUpdates (its `timeout`, polling.ts).
 // It has to stay below the client timeout, or every long poll would be aborted by our own
 // client and retried.
 export const POLLING_TIMEOUT_S = 5;
-// Updates per getUpdates (grammY's PollingOptions.limit, default 100). One, because grammY
-// runs a batch through the middleware sequentially and bot.stop() neither interrupts the batch
-// nor confirms the updates behind the current one: with a batch of one, the drain waits for at
-// most one handler and the confirmed offset is exactly the update in flight. The cost is one
-// round trip per update, accepted at this bot's volume. Both of those are premises of the
-// shutdown budget rather than preferences, which is why this is not a tuning knob: the chain
-// below pins it to 1, and any other value stops the process at import.
-export const POLLING_BATCH_LIMIT = 1;
+// Updates in work at once in one bot process (#869, polling.ts): fetched and not yet handled. Each
+// getUpdates asks for the free capacity only (its `limit`), and none is sent while the capacity is
+// full, so every fetched update starts at once — a user's updates one after another in their order,
+// different users' side by side. The offset is confirmed by the next getUpdates, and at the stop by
+// one getUpdates({ offset, limit: 1 }); start() settles once every fetched update is handled, so
+// the drain waits for at most this many handlers, in parallel. The Bot API takes a limit of 1-100.
+export const POLLING_CONCURRENCY = 8;
+export const TELEGRAM_GET_UPDATES_LIMIT_MAX = 100;
 // Each Bot API call (grammY's ApiClientOptions.timeoutSeconds, default 500), including the
-// confirming getUpdates that bot.stop() issues.
+// confirming getUpdates that the polling loop's stop() issues.
 export const TELEGRAM_API_TIMEOUT_MS = 8_000;
 // One call to the backend's internal API (AbortSignal.timeout in backend-client.ts).
 export const BACKEND_REQUEST_TIMEOUT_MS = 5_000;
@@ -54,7 +54,7 @@ export const LANGUAGE_CACHE_MAX = 10_000;
 
 // The Bot API calls onStart makes one after another before the first getUpdates: the command
 // menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
-// in flight while they run — but grammY awaits onStart to completion and bot.stop() cancels none
+// in flight while they run — but start() awaits onStart to completion and stop() cancels none
 // of them, so a signal during the registration waits for all of them. Each is a slot of two calls
 // side by side, Russian and English (#508), both bounded by the one client timeout, so the slots
 // are what the budget counts: six calls in a row would be 53 000 ms, past SHUTDOWN_BUDGET_MS.
@@ -288,13 +288,10 @@ export const handlerBudgetMs = ({
 export const HANDLER_BUDGET_MS = Math.max(...Object.values(HANDLER_CALLS).map(handlerBudgetMs));
 // bot.stop() plus whatever middleware is still in flight.
 export const SHUTDOWN_BUDGET_MS = 50_000;
-// How long grammY sleeps before retrying a failed getUpdates (out/bot.js, handlePollingError).
-// Nothing of ours configures it and bot.stop() does not interrupt the sleep, so a SIGTERM
-// during a backoff waits it out — with no update in flight, which is why an overrun there
-// costs the exit code and not an update. After a 429 the server's retry_after replaces this
-// value and can exceed any budget. timing.test.ts reads the number back out of grammY rather
-// than trusting this line.
-export const GRAMMY_POLLING_BACKOFF_MS = 3_000;
+// The polling loop's sleep after a failed getUpdates or deleteWebhook (polling.ts): a transport
+// failure or a refusal other than 401, 409 and 429 — those stop the loop, and a 429 sleeps its own
+// retry_after. The stop interrupts the sleep; the link below covers a call that does not.
+export const POLLING_RETRY_MS = 3_000;
 // stop_grace_period of the compose service `bot`, kept in step by timing.test.ts.
 export const COMPOSE_STOP_GRACE_PERIOD_MS = 55_000;
 
@@ -370,6 +367,19 @@ export const TELEGRAM_EDIT_WINDOW_MS = 48 * 3_600_000;
 // retry_after.
 export const SIGNAL_WAIT_EDITS_PER_SECOND = 5;
 export const SIGNAL_WAIT_EDIT_GAP_MS = 1000 / SIGNAL_WAIT_EDITS_PER_SECOND;
+// The wait's edits go through one token bucket (#869, edit-pacer.ts): EDITS_PER_SECOND with a burst
+// of EDIT_BURST after a quiet second — at most burst + rate x T edits in any window of T, 10 in the
+// first second — at most one edit of a chat in CHAT_EDIT_GAP_MS, and the edits that show a signal
+// before the ones a TTL or a caption asks for. The stop's edits keep the gap of EDIT_GAP_MS.
+export const SIGNAL_WAIT_EDIT_BURST = 5;
+export const SIGNAL_WAIT_CHAT_EDIT_GAP_MS = 1_000;
+// The resolutions of a tick (readTradingAccess, evaluateSignal) run side by side, at most this many:
+// with POLLING_CONCURRENCY handlers it bounds the bot's access reads in flight (C + R).
+export const SIGNAL_WAIT_RESOLVE_CONCURRENCY = 10;
+// The bound for a signal shown to many waiting users: the signal edits of FANOUT_ENTRIES entries are
+// sent at most FANOUT_MS after the tick's reads, whatever Telegram and the backend take to answer.
+export const SIGNAL_WAIT_FANOUT_ENTRIES = 20;
+export const SIGNAL_WAIT_FANOUT_MS = 4_000;
 // a transport failure or another refusal of an entry's edit, retried on the next ticks
 export const SIGNAL_WAIT_EDIT_FAILURES_MAX = 3;
 // The scanner's caption under the wait's animation (#859, Rule 58): an entry's caption is redrawn
@@ -383,8 +393,9 @@ export const SIGNAL_WAIT_CAPTION_EDITS_PER_TICK = 2;
 // by TELEGRAM_API_TIMEOUT_MS.
 export const SIGNAL_WAIT_SHUTDOWN_BUDGET_MS = 20_000;
 // What stop() waits for of a tick in flight: an analysis's resolution — evaluateSignal,
-// readTradingAccess, the photo's edit and the text's after a refused photo. The tick's two shared
-// reads are shorter.
+// readTradingAccess, the photo's edit and the text's after a refused photo; the resolutions run in
+// parallel, and an edit still waiting for its slot at the stop ends without being sent. The tick's
+// two shared reads are shorter.
 export const SIGNAL_WAIT_INFLIGHT_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS + 2 * TELEGRAM_API_TIMEOUT_MS;
 
 // The wait's links of the chain, a function so a test can show which value breaks them.
@@ -400,6 +411,11 @@ export const signalWaitBoundsHold = ({
   captionMs = SIGNAL_WAIT_CAPTION_MS,
   captionEditsPerTick = SIGNAL_WAIT_CAPTION_EDITS_PER_TICK,
   editsPerSecond = SIGNAL_WAIT_EDITS_PER_SECOND,
+  editBurst = SIGNAL_WAIT_EDIT_BURST,
+  chatGapMs = SIGNAL_WAIT_CHAT_EDIT_GAP_MS,
+  resolveConcurrency = SIGNAL_WAIT_RESOLVE_CONCURRENCY,
+  fanoutEntries = SIGNAL_WAIT_FANOUT_ENTRIES,
+  fanoutMs = SIGNAL_WAIT_FANOUT_MS,
 }: {
   closeMarginMs?: number;
   maxAgeMs?: number;
@@ -412,6 +428,11 @@ export const signalWaitBoundsHold = ({
   captionMs?: number;
   captionEditsPerTick?: number;
   editsPerSecond?: number;
+  editBurst?: number;
+  chatGapMs?: number;
+  resolveConcurrency?: number;
+  fanoutEntries?: number;
+  fanoutMs?: number;
 } = {}): boolean =>
   0 < pollOffsetMs &&
   // the list read after the clock rule closed the second at the latest
@@ -430,7 +451,16 @@ export const signalWaitBoundsHold = ({
   captionMs <= 5 * pollMs &&
   // a tick's captions fit its second at the edits' pace, and leave the second's budget room
   captionEditsPerTick * (1000 / editsPerSecond) < pollMs &&
-  captionEditsPerTick < editsPerSecond;
+  captionEditsPerTick < editsPerSecond &&
+  // the burst never exceeds a second's worth of edits (#869)
+  1 <= editBurst &&
+  editBurst <= editsPerSecond &&
+  // an entry's one edit a tick never waits for its own previous one
+  chatGapMs <= pollMs &&
+  1 <= resolveConcurrency &&
+  // the fan-out's last signal edit leaves inside its bound, and before the buttons expire
+  (fanoutEntries - editBurst) * (1000 / editsPerSecond) < fanoutMs &&
+  fanoutMs < listTtlMs;
 
 // The session's first message waits for the card's record or SESSION_FIRST_NOTICE_GRACE_MS from
 // started_at (#911): started_at is written inside the start route, whose rest is within its
@@ -448,7 +478,8 @@ export const sessionFirstNoticeBoundsHold = ({
 // /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
 // waiting at least that long keeps a broker GET inside its budget from reading as an outage here.
 const TIMING_CHAIN_HOLDS =
-  POLLING_BATCH_LIMIT === 1 &&
+  1 <= POLLING_CONCURRENCY &&
+  POLLING_CONCURRENCY <= TELEGRAM_GET_UPDATES_LIMIT_MAX &&
   TRADING_ACCESS_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SIGNAL_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
   TRADING_SESSION_START_BUDGET_MS <= BACKEND_REQUEST_TIMEOUT_MS &&
@@ -457,10 +488,11 @@ const TIMING_CHAIN_HOLDS =
   HANDLER_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
   // the language read runs before the handler, inside the same update (#508)
   LANGUAGE_READ_TIMEOUT_MS < BACKEND_REQUEST_TIMEOUT_MS &&
+  // the drain's handlers run in parallel, a user's one after another (accepted risk R1, #869)
   HANDLER_BUDGET_MS + LANGUAGE_READ_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   TELEGRAM_API_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   STARTUP_BUDGET_MS < SHUTDOWN_BUDGET_MS &&
-  GRAMMY_POLLING_BACKOFF_MS < SHUTDOWN_BUDGET_MS &&
+  POLLING_RETRY_MS < SHUTDOWN_BUDGET_MS &&
   INTENT_TRACK_FIRST_POLL_MS < INTENT_TRACK_POLL_MS &&
   INTENT_TRACK_POLL_MS < INTENT_TRACK_DEADLINE_MS &&
   INTENT_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
@@ -490,7 +522,5 @@ const TIMING_CHAIN_HOLDS =
   BACKEND_REQUEST_TIMEOUT_MS < SHUTDOWN_BUDGET_MS &&
   SHUTDOWN_BUDGET_MS < COMPOSE_STOP_GRACE_PERIOD_MS;
 if (!TIMING_CHAIN_HOLDS) {
-  throw new Error(
-    'bot timing constants are out of order, or POLLING_BATCH_LIMIT is not 1 (see timing.ts)',
-  );
+  throw new Error('bot timing constants are out of order (see timing.ts)');
 }

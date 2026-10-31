@@ -1,10 +1,11 @@
 import { errorLogFields } from './logging';
 import { telegramErrorFields } from './telegram-logging';
 
-// The Bot API calls grammY retries by itself: getUpdates in the polling loop (everything but 401
-// and 409), getMe and deleteWebhook while starting. grammY reports those failures only through the
-// `debug` package, which is silent without DEBUG — and DEBUG is never set, because its lines carry
-// the error message, whose URL holds the token.
+// The Bot API calls retried without a line of their own: getUpdates in the polling loop (everything
+// but 401 and 409), getMe and deleteWebhook while starting — by grammY for the staff bot, by
+// apps/bot/src/polling.ts and grammY's init for the client bot. grammY reports those failures only
+// through the `debug` package, which is silent without DEBUG — and DEBUG is never set, because its
+// lines carry the error message, whose URL holds the token.
 export const TELEGRAM_RETRIED_METHODS = ['getUpdates', 'getMe', 'deleteWebhook'] as const;
 export const TELEGRAM_RETRY_FAILED_MESSAGE = 'Bot API call failed, grammY retries it';
 export const TELEGRAM_RETRY_RECOVERED_MESSAGE = 'Bot API call succeeded after failures';

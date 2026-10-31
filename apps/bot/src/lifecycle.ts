@@ -1,4 +1,4 @@
-import type { Api, PollingOptions } from 'grammy';
+import type { PollingOptions } from 'grammy';
 import {
   BOT_COMMAND_SCOPE,
   BotLanguage,
@@ -10,9 +10,10 @@ import {
 import type { IntentTracker } from './intent-tracker';
 import type { SessionTracker } from './session-tracker';
 import type { Logger } from './logging';
+import type { PollingLoop } from './polling';
 import { runWithLanguage } from './language';
 import { botCommands, PROFILE } from './texts';
-import { POLLING_BATCH_LIMIT, POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
+import { POLLING_TIMEOUT_S, SHUTDOWN_BUDGET_MS } from './timing';
 
 // Only the update kinds this bot handles: Telegram then stops delivering the rest, and a new
 // kind has to be enabled deliberately rather than arrive unhandled.
@@ -32,14 +33,6 @@ export const ALLOWED_UPDATES = [
 type ProfileLanguage = { language_code?: BotLanguage };
 const profileLanguageOf = (language: BotLanguage): ProfileLanguage =>
   language === TELEGRAM_PROFILE_DEFAULT_LANGUAGE ? {} : { language_code: language };
-
-// the parts of a grammY Bot this module drives: start, stop and the profile calls; a fake with
-// the same shape is what the tests run, so the drain is provable without a Telegram server
-export interface PollingLoop {
-  start(options: PollingOptions): Promise<void>;
-  stop(): Promise<void>;
-  api: Pick<Api, 'setMyCommands' | 'setMyDescription' | 'setMyShortDescription'>;
-}
 
 export interface RunBotOptions {
   bot: PollingLoop;
@@ -64,8 +57,9 @@ export interface RunBotOptions {
 }
 
 // The process around the bot: start long polling, and on the first termination signal stop
-// taking updates and let the middleware in flight finish inside one budget. bot.start() resolves
-// only once the polling loop has ended, so it is drained alongside stop() rather than after it.
+// taking updates and let the handlers in flight finish inside one budget. bot.start() resolves
+// only once the polling loop has ended and every fetched update is handled (polling.ts), so it is
+// drained alongside stop() rather than after it.
 export function runBot({
   bot,
   tracker,
@@ -132,10 +126,9 @@ export function runBot({
 
   const started = bot.start({
     timeout: POLLING_TIMEOUT_S,
-    limit: POLLING_BATCH_LIMIT,
     allowed_updates: ALLOWED_UPDATES,
-    // grammY awaits this after getMe and deleteWebhook and before the first getUpdates, so
-    // `bot started` still means polling begins now
+    // awaited after getMe and deleteWebhook and before the first getUpdates, so `bot started`
+    // still means polling begins now
     onStart: async () => {
       // A failed load settles it too, and the defaults are published. start() runs the first
       // load before polling, so a signal while it is pending does not cut it short: stop() awaits
@@ -149,7 +142,8 @@ export function runBot({
       logger.info('bot started');
     },
   });
-  // an invalid token fails here: getMe answers 401, which grammY does not retry
+  // an invalid token fails here: getMe answers 401, which grammY's init does not retry; so does a
+  // 401 or a 409 of a getUpdates
   started.catch((error: unknown) => {
     // once a drain owns this promise, only closeAll decides the exit code — exiting here would
     // kill the middleware the drain is deliberately waiting for
@@ -171,9 +165,8 @@ export function runBot({
     logger.info({ signal }, 'shutting down');
 
     // Each step reports its own failure as it happens, because closeAll answers with one
-    // boolean for both an overrun and a rejected step. A SIGTERM during grammY's backoff
-    // between getUpdates waits the sleep out (bot.stop() does not interrupt it), with no
-    // update in flight.
+    // boolean for both an overrun and a rejected step. A SIGTERM during the loop's retry sleep
+    // ends the sleep (polling.ts).
     let settled = 0;
     const step = (name: string, run: () => Promise<unknown>) => (): Promise<unknown> =>
       run()

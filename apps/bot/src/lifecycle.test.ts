@@ -6,18 +6,21 @@ import { BOT_TEXT_DEFAULT_SOURCES, BOT_TEXT_SOURCES_EN, BotLanguage } from '@bin
 import { until } from '@binarius/shared/testing';
 import type { BackendClient } from './backend-client';
 import { createBot } from './bot';
-import { runBot, type PollingLoop } from './lifecycle';
+import { runBot } from './lifecycle';
+import { createPollingLoop, type PollingLoop } from './polling';
 import { runWithLanguage } from './language';
 import { PROFILE, setBotTextSources } from './texts';
-import { STARTUP_CALLS } from './timing';
+import { POLLING_CONCURRENCY, POLLING_RETRY_MS, STARTUP_CALLS } from './timing';
 import {
   BOT_INFO,
+  USER,
   USER_VIEW,
   captureApi,
   stubText,
   stubTextSource,
   fakeLogger,
   startUpdate,
+  textUpdate,
   type FakeLogger,
   stubSessionResumer,
   stubSignalWaiter,
@@ -146,7 +149,7 @@ const BUDGET_LINE = 'shutdown: polling did not stop within the budget, exiting a
 const STEP_LINE = 'shutdown: a drain step failed, exiting anyway';
 
 describe('runBot', () => {
-  it('starts long polling with this project’s own timeout, batch size and update filter', async () => {
+  it('starts long polling with this project’s own timeout and update filter', async () => {
     const fake = fakeBot();
     const log = fakeLogger();
     const signalSource = signals();
@@ -163,12 +166,11 @@ describe('runBot', () => {
     });
 
     // Literals on purpose. These constants are what runBot passes, so an assertion written
-    // against them proves the keys are there and nothing at all about the values — one update
-    // per getUpdates is what makes the drain wait for at most one handler and bot.stop()
-    // confirm exactly the update in flight, and timing.ts pins the constant to 1 at import.
+    // against them proves the keys are there and nothing at all about the values. The batch size
+    // is the polling loop's own (polling.ts, #869), not an option of start().
+    expect(fake.options[0]).not.toHaveProperty('limit');
     expect(fake.options[0]).toMatchObject({
       timeout: 5,
-      limit: 1,
       allowed_updates: [
         'message',
         'callback_query',
@@ -182,7 +184,7 @@ describe('runBot', () => {
     expect(signalSource.listenerCount('SIGINT')).toBe(1);
 
     // literals for the same reason: the command list and its scope are the values asserted
-    await fake.options[0]?.onStart?.(BOT_INFO);
+    await fake.options[0]?.onStart?.();
     // L-lang (#508): Russian under language_code ru, English as the default for every other
     // client
     expect(fake.api.setMyCommands.mock.calls).toEqual([
@@ -220,7 +222,7 @@ describe('runBot', () => {
       signalSource: signals(),
     });
     try {
-      const onStart = fake.options[0]?.onStart?.(BOT_INFO);
+      const onStart = fake.options[0]?.onStart?.();
       await settle();
       expect(fake.api.setMyCommands).not.toHaveBeenCalled();
       expect(fake.api.setMyDescription).not.toHaveBeenCalled();
@@ -275,7 +277,7 @@ describe('runBot', () => {
       exit,
       signalSource,
     });
-    const onStart = fake.options[0]?.onStart?.(BOT_INFO);
+    const onStart = fake.options[0]?.onStart?.();
     await settle();
 
     signalSource.emit('SIGTERM');
@@ -312,7 +314,7 @@ describe('runBot', () => {
       signalSource: signals(),
     });
 
-    const onStart = fake.options[0]?.onStart?.(BOT_INFO);
+    const onStart = fake.options[0]?.onStart?.();
     await until('setMyCommands', () => fake.api.setMyCommands.mock.calls.length >= 2);
     expect(fake.api.setMyCommands).toHaveBeenCalledTimes(2);
     expect(fake.api.setMyDescription).not.toHaveBeenCalled();
@@ -358,7 +360,7 @@ describe('runBot', () => {
         signalSource: signals(),
       });
 
-      await expect(fake.options[0]?.onStart?.(BOT_INFO)).resolves.toBeUndefined();
+      await expect(fake.options[0]?.onStart?.()).resolves.toBeUndefined();
       expect(log.warn.mock.calls).toEqual(
         LANGUAGES.map((botLanguage) => [
           { err: { name: 'TypeError' }, method, botLanguage },
@@ -694,7 +696,7 @@ describe('runBot', () => {
       signalSource: signals(),
     });
     expect(sessionResumer.start).not.toHaveBeenCalled();
-    await fake.options[0]?.onStart?.(BOT_INFO);
+    await fake.options[0]?.onStart?.();
     expect(order).toEqual(['profile', 'profile', 'resume']);
     fake.resolveStart();
 
@@ -713,7 +715,7 @@ describe('runBot', () => {
       exit: vi.fn(),
       signalSource,
     });
-    const onStart = signalled.options[0]?.onStart?.(BOT_INFO);
+    const onStart = signalled.options[0]?.onStart?.();
     signalSource.emit('SIGTERM');
     held.settle();
     await onStart;
@@ -913,18 +915,16 @@ describe('runBot', () => {
 
 // The premises fakeBot encodes — start() resolving only when the loop ends, stop() cutting an
 // idle getUpdates short, a stop() that rejects, an init that fails without a retry, onStart,
-// and a throwing handler reaching bot.catch — are assertions about grammY, and a fake cannot
-// check any of them. These scenes run runBot over a real Bot whose only replacement is the
-// transport, so each premise is read off the library instead of off our model of it.
+// and a throwing handler reaching bot.catch — are assertions about the polling loop over grammY,
+// and a fake cannot check any of them. These scenes run runBot over createPollingLoop and a real
+// Bot whose only replacement is the transport, so each premise is read off the code production
+// runs instead of off our model of it.
 
 const TOKEN = '123456:AA-bot-token';
 
-// bot.stop() confirms the offset with getUpdates({ offset, limit: 1 }) — neither a timeout nor
-// the polling AbortSignal, which is what tells it apart from a long poll (grammY bot.js)
+// stop() confirms the offset with getUpdates({ offset, limit: 1 }) — neither a timeout nor
+// the polling AbortSignal, which is what tells it apart from a long poll (polling.ts)
 const isLongPoll = (payload: Record<string, unknown>): boolean => payload.timeout !== undefined;
-
-// the sleep grammY takes after a failed getUpdates (out/bot.js, handlePollingError)
-const GRAMMY_BACKOFF_MS = 3_000;
 
 const transportFailure = (method: string): HttpError =>
   new HttpError(`Network request for '${method}' failed!`, new Error('The operation was aborted'));
@@ -933,7 +933,7 @@ interface SceneOptions {
   recordStart?: BackendClient['recordStart'];
   withBotInfo?: boolean;
   confirmFails?: boolean;
-  // registered before runBot on purpose: bot.start() issues getMe and deleteWebhook
+  // registered before runBot on purpose: start() issues getMe and deleteWebhook
   // synchronously, so a failure programmed after the call returns arrives too late
   apiErrors?: readonly (readonly [string, ApiError | HttpError])[];
   // what the setMyCommands answer resolves with; a held promise keeps onStart running
@@ -1049,7 +1049,12 @@ function scene(options: SceneOptions = {}) {
     sessionResumer: idleResumer(),
     signalWaiter: idleTracker(),
     botTexts: idleTexts(),
-    bot,
+    bot: createPollingLoop({
+      bot,
+      concurrency: POLLING_CONCURRENCY,
+      retryMs: POLLING_RETRY_MS,
+      logger: log,
+    }),
     logger: log,
     exit,
     signalSource,
@@ -1066,13 +1071,13 @@ function scene(options: SceneOptions = {}) {
     confirmations: () => getUpdates(false),
     methods: () => api.calls.map((call) => call.method),
     deliver: (updates: Update[]) => pending?.resolve(updates),
-    backoffSleeps: () => timers.mock.calls.filter(([, ms]) => ms === GRAMMY_BACKOFF_MS).length,
+    backoffSleeps: () => timers.mock.calls.filter(([, ms]) => ms === POLLING_RETRY_MS).length,
     firstPoll: () => until('the first long poll', () => longPolls().length >= 1),
     drained: () => until('the drain to finish', () => exit.mock.calls.length >= 1),
   };
 }
 
-describe('runBot over the real grammY Bot the fake above stands in for', () => {
+describe('runBot over the polling loop and the real grammY Bot the fake above stands in for', () => {
   it('waits for the handler in flight, and a second signal does not cut it short', async () => {
     let release = (): void => {};
     const held = new Promise<void>((resolve) => {
@@ -1115,8 +1120,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     await s.drained();
     expect(s.exit.mock.calls).toEqual([[0]]);
     expect(errorMessages(s.log)).toEqual([]);
-    // grammY skips its backoff because the poll was cancelled by a stop(); a drain that went
-    // through it would wait the sleep out, which bot.stop() does not interrupt
+    // the loop skips its retry sleep because the poll was cancelled by a stop()
     expect(s.backoffSleeps()).toBe(0);
   });
 
@@ -1143,12 +1147,12 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.exit.mock.calls).toEqual([[1]]);
     expect(errorMessages(s.log)).toEqual(['long polling stopped with an error']);
     expect(s.log.error.mock.calls[0]?.[0]).toMatchObject({ err: { name: 'GrammyError' } });
-    // grammY retries neither getMe nor a 401 on the way in, so the exit is immediate
+    // grammY's init retries no 401, so the exit is immediate
     expect(s.methods().filter((method) => method === 'getMe')).toHaveLength(1);
     expect(s.longPolls()).toHaveLength(0);
   });
 
-  it('logs that the bot started, after the webhook is dropped and before a first poll for one update on this project’s terms', async () => {
+  it('logs that the bot started, after the webhook is dropped and before a first poll for the free capacity on this project’s terms', async () => {
     const s = scene();
     await s.firstPoll();
 
@@ -1181,10 +1185,12 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     // a slot a method: its two languages under one client timeout (timing.ts)
     expect(new Set(startup).size).toBe(STARTUP_CALLS);
     // The premise the fake above stands on: the options object runBot hands start() is what
-    // grammY puts in getUpdates. Only the first poll — after one succeeds grammY stops sending
-    // allowed_updates, because Telegram keeps the last setting (out/bot.js, loop()).
-    expect(s.longPolls()[0]?.payload).toMatchObject({
-      limit: 1,
+    // the loop puts in getUpdates, with the whole capacity as the first limit (#869). Only the
+    // first poll — after one succeeds the loop stops sending allowed_updates, because Telegram
+    // keeps the last setting.
+    expect(s.longPolls()[0]?.payload).toEqual({
+      offset: 0,
+      limit: 8,
       timeout: 5,
       allowed_updates: [
         'message',
@@ -1237,9 +1243,9 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.events).toEqual(eventsWithout(method));
   });
 
-  // grammY's «Bot was stopped during `onStart`» branch, read off the library: stop() confirms
-  // the offset while the registration runs out — every call of it, which is what
-  // STARTUP_BUDGET_MS bounds — and start() then returns without a first poll
+  // a stop during onStart: stop() confirms the offset while the registration runs out — every
+  // call of it, which is what STARTUP_BUDGET_MS bounds — and start() then returns without a
+  // first poll
   it('drains a SIGTERM during the registration without a first poll', async () => {
     let release = (): void => {};
     const held = new Promise<true>((resolve) => {
@@ -1257,7 +1263,7 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     expect(s.exit.mock.calls).toEqual([[0]]);
     expect(s.longPolls()).toEqual([]);
     expect(errorMessages(s.log)).toEqual([]);
-    // onStart finishes before grammY sees the stop, so its line follows the shutdown's
+    // onStart finishes before the loop sees the stop, so its line follows the shutdown's
     expect(s.events).toEqual([
       'deleteWebhook',
       'setMyCommands',
@@ -1289,5 +1295,70 @@ describe('runBot over the real grammY Bot the fake above stands in for', () => {
     await s.drained();
     expect(s.exit.mock.calls).toEqual([[0]]);
     expect(s.backoffSleeps()).toBe(0);
+  });
+
+  // #869: different users' updates side by side, one user's in their order
+  const OTHER = { ...USER, id: USER.id + 1, first_name: 'Grace' };
+  const sentTo = (s: ReturnType<typeof scene>, chatId: number) =>
+    payloadsOf(s.api.calls, 'sendMessage')
+      .map((payload) => payload as { chat_id: number; text: string })
+      .filter((payload) => payload.chat_id === chatId);
+
+  it('L1 answers user B while user A’s slow /start is still in flight', async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const s = scene({ recordStart: () => held.then(() => USER_VIEW) });
+    await s.firstPoll();
+
+    s.deliver([startUpdate('/start'), textUpdate('/help', 'private', OTHER)]);
+    await until('B’s /help to be answered', () => sentTo(s, OTHER.id).length === 1);
+    expect(sentTo(s, USER.id)).toEqual([]);
+
+    release();
+    await until('A’s /start to be answered', () => sentTo(s, USER.id).length >= 1);
+  });
+
+  it('L2 stops with A1 in flight and A2 behind it: confirms past B1, handles each once, A2 after A1', async () => {
+    let release = (): void => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let starts = 0;
+    const s = scene({
+      recordStart: () => {
+        starts += 1;
+        return held.then(() => USER_VIEW);
+      },
+    });
+    await s.firstPoll();
+
+    const a1 = startUpdate('/start');
+    const a2 = textUpdate('/help');
+    const b1 = textUpdate('/help', 'private', OTHER);
+    s.deliver([a1, a2, b1]);
+    await until('B1 to be answered', () => sentTo(s, OTHER.id).length === 1);
+    expect(starts).toBe(1);
+    expect(sentTo(s, USER.id)).toEqual([]);
+
+    s.signalSource.emit('SIGTERM');
+    await until('stop() to confirm the offset', () => s.confirmations().length === 1);
+    expect(s.confirmations()[0]?.payload).toEqual({ offset: b1.update_id + 1, limit: 1 });
+    await settle();
+    expect(s.exit).not.toHaveBeenCalled();
+    expect(sentTo(s, USER.id)).toEqual([]);
+
+    release();
+    await s.drained();
+    expect(s.exit.mock.calls).toEqual([[0]]);
+    expect(starts).toBe(1);
+    const help = sentTo(s, OTHER.id)[0]?.text;
+    const toA = sentTo(s, USER.id).map((payload) => payload.text);
+    expect(toA.filter((text) => text === help)).toHaveLength(1);
+    // A2's answer is the last of A's: it ran after A1 had finished
+    expect(toA.length).toBeGreaterThanOrEqual(2);
+    expect(toA[toA.length - 1]).toBe(help);
+    expect(sentTo(s, OTHER.id)).toHaveLength(1);
   });
 });

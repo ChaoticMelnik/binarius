@@ -10,6 +10,7 @@ import { createBot } from './bot';
 import { parseEnv } from './env';
 import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
+import { createPollingLoop } from './polling';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
 import { createShownSignals } from './shown-signals';
@@ -20,6 +21,8 @@ import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  POLLING_CONCURRENCY,
+  POLLING_RETRY_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -130,7 +133,12 @@ const bot = createBot({
 });
 
 runBot({
-  bot,
+  bot: createPollingLoop({
+    bot,
+    concurrency: POLLING_CONCURRENCY,
+    retryMs: POLLING_RETRY_MS,
+    logger,
+  }),
   tracker: intentTracker,
   sessionTracker,
   sessionResumer: {

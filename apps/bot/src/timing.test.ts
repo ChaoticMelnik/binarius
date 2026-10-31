@@ -144,7 +144,6 @@ import {
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
   COMPOSE_STOP_GRACE_PERIOD_MS,
-  GRAMMY_POLLING_BACKOFF_MS,
   HANDLER_BUDGET_MS,
   HANDLER_CALLS,
   LANGUAGE_READ_TIMEOUT_MS,
@@ -152,6 +151,8 @@ import {
   INTENT_TRACK_DRAIN_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  POLLING_CONCURRENCY,
+  POLLING_RETRY_MS,
   SESSION_RESUME_DRAIN_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
@@ -163,18 +164,24 @@ import {
   SESSION_TRACK_POLL_MS,
   SHUTDOWN_BUDGET_MS,
   STARTUP_BUDGET_MS,
+  TELEGRAM_GET_UPDATES_LIMIT_MAX,
   STARTUP_CALLS,
   TELEGRAM_API_TIMEOUT_MS,
   PRECHECKOUT_ANSWER_RESERVE_MS,
   STARS_PRECHECKOUT_BACKEND_TIMEOUT_MS,
   TELEGRAM_PRECHECKOUT_DEADLINE_MS,
+  SIGNAL_WAIT_CHAT_EDIT_GAP_MS,
+  SIGNAL_WAIT_EDIT_BURST,
   SIGNAL_WAIT_EDIT_FAILURES_MAX,
   SIGNAL_WAIT_EDIT_GAP_MS,
   SIGNAL_WAIT_EDITS_PER_SECOND,
+  SIGNAL_WAIT_FANOUT_ENTRIES,
+  SIGNAL_WAIT_FANOUT_MS,
   SIGNAL_WAIT_INFLIGHT_MS,
   SIGNAL_WAIT_MAX_MS,
   SIGNAL_WAIT_POLL_MS,
   SIGNAL_WAIT_POLL_OFFSET_MS,
+  SIGNAL_WAIT_RESOLVE_CONCURRENCY,
   SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
   SIGNALS_LIST_TTL_MS,
   signalWaitBoundsHold,
@@ -182,15 +189,14 @@ import {
 } from './timing';
 
 // HANDLER_BUDGET_MS is computed from HANDLER_CALLS, so nothing here recomputes it: what this
-// file asserts is that HANDLER_CALLS still describes the handlers, that the two numbers this
-// project does not own (compose's stop_grace_period, grammY's polling backoff) are still what
-// timing.ts says they are, and nothing else.
+// file asserts is that HANDLER_CALLS still describes the handlers, that the number this project
+// does not own (compose's stop_grace_period) is still what timing.ts says it is, and the bounds'
+// values and links.
 
 const composeYaml = readFileSync(
   fileURLToPath(new URL('../../../compose.yaml', import.meta.url)),
   'utf8',
 );
-const grammyBotJs = fileURLToPath(new URL('../node_modules/grammy/out/bot.js', import.meta.url));
 
 interface Calls {
   backend: number;
@@ -4059,6 +4065,21 @@ describe("the demo session tracker's bounds", () => {
   });
 });
 
+// #869: the polling loop's capacity and retry
+describe("the polling loop's bounds", () => {
+  it('T1 keeps 8 updates in work, inside the 1-100 the Bot API takes as a limit', () => {
+    expect(POLLING_CONCURRENCY).toBe(8);
+    expect(TELEGRAM_GET_UPDATES_LIMIT_MAX).toBe(100);
+    expect(POLLING_CONCURRENCY).toBeGreaterThanOrEqual(1);
+    expect(POLLING_CONCURRENCY).toBeLessThanOrEqual(TELEGRAM_GET_UPDATES_LIMIT_MAX);
+  });
+
+  it('T2 retries a failed poll after 3 s, inside the shutdown budget', () => {
+    expect(POLLING_RETRY_MS).toBe(3_000);
+    expect(POLLING_RETRY_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+});
+
 // #664: the wait for a signal polls between updates, like the trackers
 describe("the wait for a signal's bounds (#664)", () => {
   // #828: an H1 signal lives a second
@@ -4100,12 +4121,35 @@ describe("the wait for a signal's bounds (#664)", () => {
     expect(signalWaitBoundsHold({ captionEditsPerTick: 4 })).toBe(true);
     expect(signalWaitBoundsHold({ captionEditsPerTick: 5 })).toBe(false);
     // at 2 edits a second a tick's 2 captions take the whole poll
-    expect(signalWaitBoundsHold({ editsPerSecond: 2 })).toBe(false);
-    expect(signalWaitBoundsHold({ editsPerSecond: 3 })).toBe(true);
+    expect(signalWaitBoundsHold({ editsPerSecond: 2, editBurst: 2 })).toBe(false);
+    expect(signalWaitBoundsHold({ editsPerSecond: 3, editBurst: 3, fanoutMs: 6_000 })).toBe(true);
     // a longer poll fits more captions at the pace, but never the second's whole budget
     const longPoll = { pollMs: 1_100, pollOffsetMs: 600, editsPerSecond: 10 };
     expect(signalWaitBoundsHold({ ...longPoll, captionEditsPerTick: 9 })).toBe(true);
     expect(signalWaitBoundsHold({ ...longPoll, captionEditsPerTick: 10 })).toBe(false);
+  });
+
+  // #869: the token bucket, the gap of a chat, the resolutions in parallel and the fan-out's bound
+  it('edits 5 a second with a burst of 5, a chat once a second, 10 resolutions at once, 20 signal edits within 4 s', () => {
+    expect(SIGNAL_WAIT_EDIT_BURST).toBe(5);
+    expect(SIGNAL_WAIT_CHAT_EDIT_GAP_MS).toBe(1_000);
+    expect(SIGNAL_WAIT_RESOLVE_CONCURRENCY).toBe(10);
+    expect(SIGNAL_WAIT_FANOUT_ENTRIES).toBe(20);
+    expect(SIGNAL_WAIT_FANOUT_MS).toBe(4_000);
+  });
+
+  it('the chain fails on a burst outside 1..rate, a chat gap past a poll, no resolution or a fan-out bound too short', () => {
+    expect(signalWaitBoundsHold({ editBurst: 0 })).toBe(false);
+    expect(signalWaitBoundsHold({ editBurst: 1 })).toBe(true);
+    expect(signalWaitBoundsHold({ editBurst: 6 })).toBe(false);
+    expect(signalWaitBoundsHold({ chatGapMs: 1_000 })).toBe(true);
+    expect(signalWaitBoundsHold({ chatGapMs: 1_001 })).toBe(false);
+    expect(signalWaitBoundsHold({ resolveConcurrency: 0 })).toBe(false);
+    expect(signalWaitBoundsHold({ resolveConcurrency: 1 })).toBe(true);
+    // (20 - 5) edits at 200 ms: the twentieth leaves at +3 000 ms
+    expect(signalWaitBoundsHold({ fanoutMs: 3_000 })).toBe(false);
+    expect(signalWaitBoundsHold({ fanoutMs: 3_001 })).toBe(true);
+    expect(signalWaitBoundsHold({ fanoutMs: SIGNALS_LIST_TTL_MS })).toBe(false);
   });
 
   it('the chain fails on a stop window of SHUTDOWN_BUDGET_MS', () => {
@@ -4214,31 +4258,5 @@ describe('the bounds this project does not own', () => {
     const bot = composeServiceEnvValue(composeYaml, 'bot', 'WEB_PUBLIC_URL');
     expect(bot).toMatch(/^\$\{WEB_PUBLIC_URL:-[^}]+\}$/);
     expect(bot).toBe(composeServiceEnvValue(composeYaml, 'web', 'WEB_PUBLIC_URL'));
-  });
-
-  it('matches the sleep grammY takes after a failed getUpdates', () => {
-    const match = /let sleepSeconds = (\d+);/.exec(readFileSync(grammyBotJs, 'utf8'));
-    expect(
-      match === null ? null : Number(match[1]) * 1000,
-      'grammY changed the sleep in handlePollingError (node_modules/grammy/out/bot.js). This is ' +
-        'a grammY upgrade, not a broken test: bot.stop() does not interrupt that sleep, so the ' +
-        'drain waits it out. Update GRAMMY_POLLING_BACKOFF_MS in timing.ts and re-check it ' +
-        'against SHUTDOWN_BUDGET_MS before touching this assertion.',
-    ).toBe(GRAMMY_POLLING_BACKOFF_MS);
-  });
-
-  // #67: createTelegramRetryLog sees the polling loop's failures only because its getUpdates goes
-  // through the API transformers, and logs a refusal as retried because grammY rethrows only these
-  it('matches what grammY retries in the polling loop and how it calls getUpdates', () => {
-    const source = readFileSync(grammyBotJs, 'utf8');
-    const upgrade =
-      'grammY changed its polling loop (node_modules/grammy/out/bot.js). This is a grammY ' +
-      'upgrade, not a broken test: re-check createTelegramRetryLog ' +
-      '(packages/shared/src/telegram-retry-log.ts) and TELEGRAM_RETRIED_METHODS against ' +
-      'fetchUpdates and handlePollingError before touching this assertion.';
-    expect(source.includes('this.api.getUpdates('), upgrade).toBe(true);
-    expect(source.includes('error.error_code === 401 || error.error_code === 409'), upgrade).toBe(
-      true,
-    );
   });
 });
