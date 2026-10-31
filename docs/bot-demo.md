@@ -833,8 +833,15 @@ end label `f`, by the bot's clock: a quiet pair's second closes by the clock
 links of the bot's chain), so no second's decision is missed. A tick reads `GET /trading/signals`
 and `GET /trading/pairs` once and decides every entry on that snapshot: two in-memory reads a
 second whatever the number of waiting users (accepted risk 3 of #828). A pair has a signal now when
-it is in the `5s` list and `checkDemoTrade` takes it — the list's own definition. A tick that finds the previous one in
-flight is skipped. Push from the backend would need an inbound server on the bot: not built.
+it is in the `5s` list and `checkDemoTrade` takes it — the list's own definition. Since #869 a tick
+first decides every entry on the snapshot (`decide`, before any await), then runs the **signal
+edits** — a list's first pairs, and the chosen pair's resolution (`readTradingAccess`, for the
+analysis `evaluateSignal`), at most `SIGNAL_WAIT_RESOLVE_CONCURRENCY` (10) resolutions at once —
+and once their reads are done launches the **housekeeping edits** (the expiry, a refusal, the other
+pairs' buttons drawn or taken down) and the captions. The tick does not wait for the edits: an
+entry with an edit in flight is left alone by the next ticks until it ends, and a tick that finds
+the previous one's reads in flight is skipped. Push from the backend would need an inbound server
+on the bot: not built.
 
 **The screens.**
 
@@ -870,13 +877,13 @@ while a pair is scanned, signal selection ⏳), and up to three closest pairs (`
 `h1ClosenessPct`, at most 99 %; no line without one); a pair's wait prints its own closeness
 instead. The caption is redrawn last in a tick, after the edits that end waits: an entry at most
 once in `SIGNAL_WAIT_CAPTION_MS` (4 s), the longest waiting first, at most
-`SIGNAL_WAIT_CAPTION_EDITS_PER_TICK` (2) a tick, none in a tick a 429 stopped — with N waiting
-users each caption moves once in max(4 s, N / 2 s). A screen drawn without the scanner's lines (the
+`SIGNAL_WAIT_CAPTION_EDITS_PER_TICK` (2) a tick, none of an entry with an edit in flight, at the
+housekeeping priority — with N waiting users each caption moves once in max(4 s, N / 2 s). A screen drawn without the scanner's lines (the
 analysis reads no list; a door whose read failed) gets them at the first poll. Whatever ends a
 wait — a list, the next step, a refusal, the expiry, the bound, the stop, the user leaving by a
 button or a command — shows the still (`scan-still.png`) in one edit: `leave()` queues it for an
-animation, and the freezes go one at a time outside the tick, at the edits' shared pace, none in a
-429's pause — a pause is waited out, a 429 of the freeze itself waits its `retry_after` and tries
+animation, and the freezes go one at a time outside the tick, at the edits' shared pace at the
+housekeeping priority, none in a 429's pause — a pause is waited out, a 429 of the freeze itself waits its `retry_after` and tries
 again, another refusal is not retried (a file refusal forgets the still's id); `stop()` takes the
 queued ones into its drain and waits for the one in flight. The card is the photo of its
 direction, as before; a photo refused for its file forgets its id and puts the card's text onto the
@@ -896,19 +903,26 @@ The edit by the media the message has and the one it gets:
 **Edits.** By the message's id outside any update, in the entry's language, through `send.ts`
 (`editMessageTextByIdHtml`, `editMessagePhotoByIdHtml`, `editMessageAnimationByIdHtml`,
 `editMessageCaptionByIdHtml`), only when the whole screen differs — its media, its text and its
-keyboard: the render key, as the session tracker's (#568). Paced one every
-`SIGNAL_WAIT_EDIT_GAP_MS` (200 ms, 5 a second), one slot reserved per call, for the tick and the
-freezes alike: with the session recovery's 4 and the backend's
-20 + 9 a second on the same token the worst coincidence is about 38 a second, above Telegram's
-~30 ([bot-session.md](bot-session.md)), so a 429 stops the tick's edits and pauses every edit for
-its `retry_after`. More than 5 resolutions in one second stretch over the next ones (accepted
-risk 3).
+keyboard: the render key, as the session tracker's (#568). Paced by one token bucket for the tick
+and the freezes alike (#869, `edit-pacer.ts`): `SIGNAL_WAIT_EDITS_PER_SECOND` (5) a second with a
+burst of `SIGNAL_WAIT_EDIT_BURST` (5) after a quiet second — at most 5 + 5 × T edits in any window
+of T, 10 in the first second; at most one edit of a chat in `SIGNAL_WAIT_CHAT_EDIT_GAP_MS` (1 s: a
+card's text after its refused photo, a new wait after the old one's freeze); the signal edits
+before the housekeeping ones, first come first served inside each; an edit whose entry ended
+before its turn is dropped without a slot. **The fan-out bound:** the signal edits of
+`SIGNAL_WAIT_FANOUT_ENTRIES` (20) waiting users are sent within `SIGNAL_WAIT_FANOUT_MS` (4 s) of the
+tick's reads — the twentieth at about +3 s, whatever Telegram and the backend take to answer
+(`(20 − burst) × 200 ms < 4 s < SIGNALS_LIST_TTL_MS`, a link of the chain); faster only with a
+bigger share of the token. With the session recovery's 4 and the backend's 20 + 9 a second on the
+same token the worst coincidence is about 43 a second for a moment (38 steady), above Telegram's
+~30 ([bot-session.md](bot-session.md)), so a 429 pauses every edit of the wait for its
+`retry_after`; the edits waiting for a slot go after it if their entries are still there.
 
 | An edit's outcome | The entry |
 |---|---|
 | done, or «message is not modified» | drawn |
 | the message gone, the bot blocked (403) | ends, nothing sent |
-| 429 | unchanged; no edit of the wait — the tick's, a caption, a freeze, the stop's — goes before `retry_after`; a freeze tries again after it |
+| 429 | unchanged; no edit of the wait — the tick's, a caption, a freeze, the stop's — goes before `retry_after`; the waiting ones go after it, a freeze tries again after it |
 | another refusal, a transport failure | retried by the next ticks; the third ends it |
 | anything else | `error`, ends |
 | a screen that throws (an override, Rule 30) | `error`, ends as drawn; the tick goes on with the others |
@@ -921,8 +935,9 @@ risk 3).
 While the data socket is down the list is empty (`scanned: 0`): every entry waits, and a door
 `:n` pressed then waits too; the analysis waits for ever (its `h1` is null).
 
-**The stop.** `stop()` arms no more polls, waits for the tick in flight (at most
-`SIGNAL_WAIT_INFLIGHT_MS`, 26 s: an analysis's resolution) and meanwhile turns every remaining
+**The stop.** `stop()` arms no more polls, closes the pace (an edit waiting for its slot ends
+unsent), waits for the tick in flight and the launched edits (at most `SIGNAL_WAIT_INFLIGHT_MS`,
+26 s: an analysis's resolution; the resolutions run side by side) and meanwhile turns every remaining
 waiting message, and every wait left on the animation whose still has not gone yet, into
 `signalsExpired`: one edit launched every 200 ms inside `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS` (20 s,
 100 messages), none after a 429 — of the stop, of the last tick, nor of a freeze in flight: the
@@ -933,7 +948,7 @@ message «⏳…» — the launched ones awaited
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
 Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), W6g, W23–W41 (#859: the
-live wait), `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
+live wait), W42–W47 (#869: the fan-out and the pace), `edit-pacer.test.ts` EP1–EP8, `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
 W-shown1–6 (#829), `shown-signals.test.ts` SS1–SS7, `timing.test.ts` → the wait's bounds,
 `lifecycle.test.ts`. Stated: how the animation looks in Telegram's light and dark themes (the
 media has its own opaque ground) and that it loops and autoplays — the owner's check on a stand.

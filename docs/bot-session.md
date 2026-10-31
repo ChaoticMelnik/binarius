@@ -1243,8 +1243,9 @@ token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and onl
 session's is an edit (#536, `mayDraw`) — up to 16 calls when each entry's summary is due (#537:
 a 429 adds one photo) ([risk
 47](#accepted-risks)). The wait for a signal (#664) adds up to 5 edits a second
-(`SIGNAL_WAIT_EDITS_PER_SECOND`; its scanner captions, #859, are inside them, at most 2 a tick
-after the edits that end waits): about 38 a second in the worst coincidence, above Telegram's ~30,
+(`SIGNAL_WAIT_EDITS_PER_SECOND`, with a burst of 5 after a quiet second since #869 — at most 10 in
+that second; its scanner captions, #859, are inside them, at most 2 a tick): about 38 a second in
+the worst steady coincidence and about 43 for a moment, above Telegram's ~30,
 so its edits pause on a 429 for its `retry_after`
 ([bot-demo.md](bot-demo.md#the-wait-for-a-signal-664)). The fallback summary's balance refresh is
 not waited for (#870, [The fallback](#the-fallback)): the link
