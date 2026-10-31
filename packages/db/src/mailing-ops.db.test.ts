@@ -3176,17 +3176,18 @@ describe('the demo-to-real chain (#880)', () => {
       const [job] = await chainJobsOf(user.userId);
       return (job!.payload as { bonus: unknown }).bonus;
     };
-    expect(await bonusOf(() => depositBonus({}))).toEqual(DR_BONUS);
-    expect(await bonusOf(() => depositBonus({ isActive: false }))).toBeNull();
-    expect(
+    // every case runs before the one assertion: a failing case leaves no deposit_bonus version of
+    // its own as the code's newest, so the later cases read what they would anyway
+    const bonuses = [
+      await bonusOf(() => depositBonus({})),
+      await bonusOf(() => depositBonus({ isActive: false })),
       await bonusOf(() => depositBonus({ validTo: sql`now() - interval '1 minute'` })),
-    ).toBeNull();
-    expect(
       await bonusOf(() =>
         depositBonus({ kind: BonusRuleKind.LinkBonus, params: { tokens: '100' } }),
       ),
-    ).toBeNull();
-    expect(await bonusOf(async () => {})).toBeNull();
+      await bonusOf(async () => {}),
+    ];
+    expect(bonuses).toEqual([DR_BONUS, null, null, null, null]);
   });
 
   it('DR8 plans for a user in real mode as well: the chain is about the deposit, not the mode', async () => {
