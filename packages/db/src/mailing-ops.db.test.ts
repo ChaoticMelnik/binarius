@@ -6,6 +6,7 @@ import {
   BrokerAccountStatus,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
+  HELP_LINKS_AFTER_MS,
   NotificationKind,
   NotificationLevel,
   PostbackSource,
@@ -97,6 +98,11 @@ afterAll(() => tmp.drop());
 
 const SCAN = 50;
 const [STEP_1H, STEP_24H, STEP_72H] = FIRST_SESSION_CHAIN;
+// The help push (#879) shares the chain's fact: a case that counts a linked user's every job plans
+// without it, and its own cases are in «the help push».
+const CHAIN_ERA_KINDS = Object.values(NotificationKind).filter(
+  (kind) => kind !== NotificationKind.HelpLinks,
+);
 
 // The cutoff of every kind, `minutes` before now() on the database clock.
 const plansFromMinutesAgo = async (minutes: number, kind?: NotificationKind): Promise<void> => {
@@ -225,7 +231,7 @@ describe('planMailingJobs', () => {
     const second = await linked(hours(24) + 1);
     const third = await linked(hours(72) + 1);
 
-    await planMailingJobs(tmp.db);
+    await planMailingJobs(tmp.db, { kinds: CHAIN_ERA_KINDS });
 
     expect(await jobsOf(early.userId)).toEqual([]);
     for (const [user, step] of [
@@ -255,7 +261,8 @@ describe('planMailingJobs', () => {
 
   it('M2 plans a step once when two planners run at the same time', async () => {
     const user = await linked(hours(24) + 1);
-    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    const plan = () => planMailingJobs(tmp.db, { kinds: CHAIN_ERA_KINDS });
+    await Promise.all([plan(), plan(), plan()]);
     expect((await jobsOf(user.userId)).map((job) => job.kind)).toEqual([
       NotificationKind.FirstSession24h,
     ]);
@@ -314,7 +321,7 @@ describe('planMailingJobs', () => {
       after.push(await linked(hours(step.afterHours) + 20));
     }
 
-    await planMailingJobs(tmp.db);
+    await planMailingJobs(tmp.db, { kinds: CHAIN_ERA_KINDS });
 
     for (const user of before) expect(await jobsOf(user.userId)).toEqual([]);
     expect(
@@ -1387,13 +1394,13 @@ describe('the low-token nudge', () => {
 
   it('T12 leaves a canceled first-session step canceled: only the nudges are planned again', async () => {
     const user = await linked(hours(72) + 1);
-    await planMailingJobs(tmp.db);
+    await planMailingJobs(tmp.db, { kinds: CHAIN_ERA_KINDS });
     await tmp.db
       .update(notificationJobs)
       .set({ status: NotificationJobStatus.Canceled })
       .where(eq(notificationJobs.userId, user.userId));
 
-    expect((await planMailingJobs(tmp.db))[STEP_72H.kind]).toBe(0);
+    expect((await planMailingJobs(tmp.db, { kinds: CHAIN_ERA_KINDS }))[STEP_72H.kind]).toBe(0);
 
     expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status])).toEqual([
       [STEP_72H.kind, NotificationJobStatus.Canceled],
@@ -2774,5 +2781,188 @@ describe('retention: tokens_out_2d', () => {
     const user = await outUser(hours(49));
     await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
     expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+});
+
+describe('the help push (#879)', () => {
+  retentionSetup();
+  const KIND = NotificationKind.HelpLinks;
+  const WITHOUT = Object.values(NotificationKind).filter((kind) => kind !== KIND);
+  const OFFSET_MIN = HELP_LINKS_AFTER_MS / 60_000;
+
+  const helpJobOf = async (userId: string) => {
+    const [job, ...rest] = await kindJobsOf(userId, KIND);
+    expect(rest).toEqual([]);
+    return job;
+  };
+
+  it('HL1 plans one job HELP_LINKS_AFTER after the connect, under the constant key, and none before', async () => {
+    const due = await linked(OFFSET_MIN + 1);
+    const early = await linked(OFFSET_MIN - 1);
+    await planMailingJobs(tmp.db);
+
+    const jobs = await kindJobsOf(due.userId, KIND);
+    expect(jobs.map((job) => [job.status, job.dedupeKey, job.payload])).toEqual([
+      [NotificationJobStatus.Pending, 'help_links', {}],
+    ]);
+    expect(jobs[0]!.scheduledAt.getTime()).toBe(due.linkedAt.getTime() + HELP_LINKS_AFTER_MS);
+    expect(await kindJobsOf(early.userId, KIND)).toEqual([]);
+  });
+
+  it('HL2 plans one job per user however many planners run, and none for a second account', async () => {
+    const user = await linked(OFFSET_MIN + 1);
+    await Promise.all([planMailingJobs(tmp.db), planMailingJobs(tmp.db)]);
+    await seedBrokerAccount(tmp.db, user.userId);
+    expect((await planMailingJobs(tmp.db))[KIND]).toBe(0);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it('HL3 plans and claims the job of a user in real mode with a session: the links are for everyone', async () => {
+    const user = await linked(OFFSET_MIN + 1);
+    await setTradingMode(tmp.db, user.telegramUserId, TradeMode.Real);
+    await seedTradingSession(tmp.db, user.accountId);
+    await planMailingJobs(tmp.db);
+    const job = await helpJobOf(user.userId);
+    expect((await claimOnly(job!.id)).job).toMatchObject({ id: job!.id, kind: KIND });
+  });
+
+  it('HL4 plans nothing without an active account, and cancels at the claim once it is revoked', async () => {
+    const revoke = (accountId: string) =>
+      tmp.db
+        .update(brokerAccounts)
+        .set({ status: BrokerAccountStatus.Revoked })
+        .where(eq(brokerAccounts.id, accountId));
+    const never = await linked(OFFSET_MIN + 1);
+    await revoke(never.accountId);
+    const later = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(never.userId, KIND)).toEqual([]);
+
+    const job = await helpJobOf(later.userId);
+    await revoke(later.accountId);
+    expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Canceled);
+  });
+
+  it('HL5 plans nothing for a user blocked by the admin, and cancels at the claim once blocked', async () => {
+    const block = (userId: string) =>
+      tmp.db.update(users).set({ status: UserStatus.Blocked }).where(eq(users.id, userId));
+    const never = await linked(OFFSET_MIN + 1);
+    await block(never.userId);
+    const later = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(never.userId, KIND)).toEqual([]);
+
+    const job = await helpJobOf(later.userId);
+    await block(later.userId);
+    expect(await claimOnly(job!.id)).toEqual({ job: undefined, canceled: 1 });
+  });
+
+  it('HL6 plans nothing for a user at off or who blocked the bot', async () => {
+    const off = await linked(OFFSET_MIN + 1);
+    await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+    const unreachable = await linked(OFFSET_MIN + 1);
+    await markTelegramBlocked(tmp.db, unreachable.telegramUserId);
+    await planMailingJobs(tmp.db);
+    expect(await kindJobsOf(off.userId, KIND)).toEqual([]);
+    expect(await kindJobsOf(unreachable.userId, KIND)).toEqual([]);
+  });
+
+  it('HL7 is an ordinary kind: off cancels its pending job, reduced holds it for the window', async () => {
+    const off = await linked(OFFSET_MIN + 1);
+    const reduced = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    const offJob = await helpJobOf(off.userId);
+    await setNotificationLevel(tmp.db, off.telegramUserId, NotificationLevel.Off);
+    expect((await jobRow(offJob!.id)).status).toBe(NotificationJobStatus.Canceled);
+
+    const job = await helpJobOf(reduced.userId);
+    await setNotificationLevel(tmp.db, reduced.telegramUserId, NotificationLevel.Reduced);
+    // another mailing sent inside the window
+    await insertJob(reduced.userId, NotificationKind.AnalysisUnused, 'analysis_unused:1', {
+      status: NotificationJobStatus.Sent,
+      minutes: hours(1),
+    });
+    expect((await claimOnly(job!.id)).job).toBeUndefined();
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Pending);
+  });
+
+  it('HL8 plans nothing for the kind when the process leaves it out of `kinds`', async () => {
+    const user = await linked(OFFSET_MIN + 1);
+    const planned = await planMailingJobs(tmp.db, { kinds: WITHOUT });
+    expect(planned[KIND]).toBe(0);
+    expect(await kindJobsOf(user.userId, KIND)).toEqual([]);
+    expect((await planMailingJobs(tmp.db))[KIND]).toBeGreaterThanOrEqual(1);
+    expect(await kindJobsOf(user.userId, KIND)).toHaveLength(1);
+  });
+
+  it('HL9 neither claims nor cancels a job of a kind left out of `kinds`; with it, claims it', async () => {
+    const user = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    const job = await helpJobOf(user.userId);
+    await setAsidePendingJobs(job!.id);
+    // revoked: a claim that read the job would cancel it
+    const revoked = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    const stale = await helpJobOf(revoked.userId);
+    await tmp.db
+      .update(brokerAccounts)
+      .set({ status: BrokerAccountStatus.Revoked })
+      .where(eq(brokerAccounts.id, revoked.accountId));
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Failed })
+      .where(
+        and(
+          eq(notificationJobs.status, NotificationJobStatus.Pending),
+          ne(notificationJobs.id, job!.id),
+          ne(notificationJobs.id, stale!.id),
+        ),
+      );
+
+    expect(await claimMailingJob(tmp.db, { scan: SCAN, kinds: WITHOUT })).toEqual({
+      job: undefined,
+      canceled: 0,
+    });
+    expect((await jobRow(job!.id)).status).toBe(NotificationJobStatus.Pending);
+    expect((await jobRow(stale!.id)).status).toBe(NotificationJobStatus.Pending);
+
+    const claimed = await claimMailingJob(tmp.db, { scan: SCAN });
+    expect(claimed.job).toMatchObject({ id: job!.id, kind: KIND });
+    expect(claimed.canceled).toBe(1);
+  });
+
+  it('HL10 CUT plans nothing for a connect before the kind’s plans_from, and the job for one after', async () => {
+    await plansFromMinutesAgo(OFFSET_MIN + 30, KIND);
+    try {
+      const before = await linked(OFFSET_MIN + 40);
+      const after = await linked(OFFSET_MIN + 20);
+      await planMailingJobs(tmp.db);
+      expect(await kindJobsOf(before.userId, KIND)).toEqual([]);
+      expect(await kindJobsOf(after.userId, KIND)).toHaveLength(1);
+    } finally {
+      await plansFromMinutesAgo(hours(200));
+    }
+  });
+
+  it('HL11 plans nothing more once the job was sent or canceled', async () => {
+    const sent = await linked(OFFSET_MIN + 1);
+    const canceled = await linked(OFFSET_MIN + 1);
+    await planMailingJobs(tmp.db);
+    const sentJob = await helpJobOf(sent.userId);
+    expect((await claimOnly(sentJob!.id)).job?.id).toBe(sentJob!.id);
+    const canceledJob = await helpJobOf(canceled.userId);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.id, canceledJob!.id));
+
+    expect((await planMailingJobs(tmp.db))[KIND]).toBe(0);
+    expect((await kindJobsOf(sent.userId, KIND)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Sent,
+    ]);
+    expect((await kindJobsOf(canceled.userId, KIND)).map((job) => job.status)).toEqual([
+      NotificationJobStatus.Canceled,
+    ]);
   });
 });

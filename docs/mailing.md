@@ -5,7 +5,7 @@ in the backend process. A mailing is a row of `notification_jobs`; the engine pl
 facts already in the database and sends the due ones through the client push, the backend's one
 send seam for user texts ([bot-start.md](bot-start.md) → Two seams).
 
-Today it carries six scenarios: the **first-session chain**, three reminders that lead a user who
+Today it carries seven scenarios: the **first-session chain**, three reminders that lead a user who
 connected an account but has not started a trading session into the demo, the **analysis
 reminder** (#484), one reminder after an analysis card nobody acted on, the **referral reward
 notification** (#576), one message to an inviter per reward, the **low-token nudge** (#123),
@@ -13,7 +13,8 @@ one push when the balance falls to a share of the user's starter pack, and the *
 notification** (#686), one message per deposit that switched the user to real, the one
 *important* kind, and **retention** (#124), four pushes that bring back a user who stopped: after
 three days without activity, a day after the last session, a weekly summary of the demo trades,
-and a second word two days after the tokens ran out.
+and a second word two days after the tokens ran out, and the **help push** (#879), one picture
+with the links to the bot's channel, its reviews and the manager, 2 hours after the connect.
 
 ```bash
 pnpm test --project unit apps/backend/src/mailing apps/backend/src/auth/client-push.test.ts apps/backend/src/trading/signal-routes.test.ts   # no database or Redis
@@ -30,8 +31,8 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   `tokenNudgePayloadSchema` (#123), `REAL_MODE_BY_DEPOSIT_AFTER_MS` and
   `realModeByDepositPayloadSchema` (#686), `INACTIVE_AFTER_MS`, `INACTIVE_REPEAT_DAYS`,
   `SESSION_IDLE_AFTER_MS`, `WEEKLY_SUMMARY_HOUR_UTC`, `TOKENS_OUT_REPEAT_AFTER_MS`,
-  `sessionIdlePayloadSchema` and `weeklySummaryPayloadSchema` (#124), and `MAILING_MIN_OFFSET_MS`,
-  the earliest offset among the kinds that wait.
+  `sessionIdlePayloadSchema` and `weeklySummaryPayloadSchema` (#124), `HELP_LINKS_AFTER_MS` (#879),
+  and `MAILING_MIN_OFFSET_MS`, the earliest offset among the kinds that wait.
 - `packages/db/src/mailing-scenarios.ts` — `MAILING_SCENARIOS`: per kind, the facts it counts
   from (`facts`, a lateral row source over the user's row with a column `at`), the offset
   (`afterMs`), the dedupe key and the job's payload (SQL over the user's row and the fact; the
@@ -45,16 +46,25 @@ pnpm test --project integration packages/db/src/mailing-ops.db.test.ts apps/back
   moment (the entry is `weeklySummaryAt(now())`), exported for the tests.
 - `packages/db/src/mailing-ops.ts` — the statements: `planMailingJobs` (one `planMailingKind` per
   kind; a test passes `planMailingKind` a scenario built over a literal moment), `claimMailingJob`,
-  `settleMailingJob`.
+  `settleMailingJob`. The planner and the claim take `kinds`, the kinds the process sends (all by
+  default; the backend leaves out the help push without a link, #879).
 - `apps/backend/src/mailing/messages.ts` — `MAILING_MESSAGES`: per kind, the message built from the
   job's payload and the `MailingContext` (the cashier's URL, the user's mode and language at the
   claim; every kind is written in that language, #686, #633); the
   chain's keyboard is the demo button (`demoKeyboard`, `client-push.ts`), the same as the link
-  push's re-login, the analysis reminder's a new analysis.
+  push's re-login, the analysis reminder's a new analysis. A message is a text
+  (`ClientPushMessage`) or a picture with a caption (`MailingPhotoMessage`, #879), which names its
+  picture (`MailingPhoto`) and leaves the file to the engine.
+- `apps/backend/src/mailing/help-links.ts` — the help push's links (`HelpLinks`, from the env),
+  `enabledKinds`, the keyboard and `managerButton`, the mailing kinds' shared «💬 Написать
+  менеджеру» (#879, #880); `apps/backend/src/mailing/photo-media.ts` — `createPhotoMedia`, a
+  picture's file and its `file_id` (Rule 58).
 - `apps/backend/src/mailing/engine.ts` — the two loops, the pacer, the failure policy and
   `wakePlan()` (#686, The planner → The wake); its
-  `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, passed once by `apps/backend/src/index.ts`;
-  `apps/backend/src/auth/client-push.ts` — `sendMailing`, beside the link push.
+  `cashierUrl` is `cashierUrlOf(WEB_PUBLIC_URL)`, its `helpLinks` the env's and its `photos` one
+  `createPhotoMedia` per picture, passed once by `apps/backend/src/index.ts`;
+  `apps/backend/src/auth/client-push.ts` — `sendMailing` and `sendMailingPhoto` (#879), beside the
+  link push.
 - `apps/backend/src/timing.ts` — the `MAILING_*` numbers and their links in `TIMING_CHAIN_HOLDS`.
 
 `MAILING_SCENARIOS` and `MAILING_MESSAGES` are checked with `satisfies Record<NotificationKind, …>`:
@@ -62,7 +72,8 @@ a kind without either does not compile. The tests named below by their ids are i
 `packages/db/src/mailing-ops.db.test.ts` (C1–C3, M1–M6, CUT; A1–A8 for #484; R1–R8 for #576; T1–T16 for #123), `apps/backend/src/mailing/engine.db.test.ts`
 (M7–M11, E1–E2, E-R1–E-R2, E-MR, E-RT; the engine's own pacing is M10 there), `apps/backend/src/mailing/engine.test.ts` (M10,
 the pacer alone; WP1–WP6, the wake) and `apps/backend/src/mailing/messages.test.ts` (RM1–RM6 for
-#124); MR1–MR9 for #686 and RT, RS, RW, RZ for #124 in `mailing-ops.db.test.ts`.
+#124); MR1–MR9 for #686 and RT, RS, RW, RZ for #124 in `mailing-ops.db.test.ts`; the help push's
+are listed in its section.
 
 ## The first-session chain
 
@@ -114,7 +125,8 @@ notification's row is seeded by `0076_real_mode_by_deposit_seed.sql`; 0075 close
 deposit as `predates`, so no switch precedes it anyway. The four retention kinds' rows are seeded by
 `0080_retention_kinds_seed.sql` in one statement (#124, answer 2 (a) of 2026-10-23): only activity,
 sessions, weeks and sent `tokens_out` jobs after the deploy count, so the deploy sends no wave over
-the whole base, and the first weekly summary goes out on the first Monday after it.
+the whole base, and the first weekly summary goes out on the first Monday after it. The help push's
+row is seeded by `0089_help_links_seed.sql` (#879): only accounts connected after its deploy get it.
 
 ## The analysis reminder (#484)
 
@@ -437,6 +449,60 @@ kind's CUT is RT8, RS6, RW7, RZ9), `engine.db.test.ts` E-RT, `messages.test.ts` 
 `bot-navigation.test.ts` BD1, the pin in
 `timing.test.ts`.
 
+## The help push (#879)
+
+| Kind         | Sent                  | Picture and caption (`mailing` group)                                                                             | Buttons                                                                              |
+| ------------ | --------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `help_links` | 2 h after the connect | the banner; `helpLinksTitle` and a line per link set (`helpLinksChannel`, `helpLinksReviews`, `helpLinksManager`) | «📣 Канал» and «⭐ Отзывы» in a row, «💬 Написать менеджеру» under them, url buttons |
+
+Where to learn more about the bot: the channel with its news and answers to common questions, the
+channel of reviews, and the manager to ask about the account, a deposit or a withdrawal.
+
+- **The fact** is the connect, the first-session chain's: the starter pack's ledger row (The
+  first-session chain → The connect), one per user. A user without it gets no help push either.
+- **It applies** while the user is not blocked by the admin and has an active account. The links
+  are for everyone: the trading mode, deposits and sessions are not read. An ordinary kind
+  (Delivery rules): `off` and the bot block cancel its pending job, `reduced` holds it for the
+  window.
+- **Once per user.** The dedupe key is the constant `help_links` and the payload is empty; a
+  canceled job is not planned again (no `replansCanceled`), and a second account adds nothing.
+- **Timing.** `HELP_LINKS_AFTER_MS` is 2 h (the manager's answer of 2026-10-31; the owner may
+  change it at review); it counts in `MAILING_MIN_OFFSET_MS`, and `timing.test.ts` pins
+  `MAILING_PLAN_TICK_MS` under it. For a `reduced` user the 1 h chain step takes the window first,
+  so the help push waits until 25 h and the chain's 24 h step until 49 h (Accepted risks).
+- **The links** are the backend's env, `HELP_CHANNEL_URL`, `HELP_REVIEWS_URL` and `HELP_MANAGER_URL`
+  (`.env.example`; https each, an empty value stops the start, Rule 14). A link not set has neither
+  its caption line nor its button. With none set the engine leaves the kind out of `kinds`: it is
+  neither planned nor claimed, and a job planned before the links were removed stays `pending`
+  until they are back, or `off` or a block cancels it. The message is built from the links at the
+  send, so it always names the current ones; the caption names no age, so a late send stays true.
+  The reviews channel is set only when it holds real reviews by this bot's users: configuration,
+  not checked by the code.
+- **The banner** is `packages/shared/assets/help-banner.png`, rendered from `help-banner.svg`
+  beside it by `node tooling/help-banner.ts` (resvg, as the session card); no words on it, so one
+  file serves both languages. The backend uploads it until an answer brings its `file_id`, then
+  sends that (`createPhotoMedia`, Rule 58); a refused file (`fileRefusal`) forgets the id before
+  the job's retry, so the retry uploads the file again; an answer without a photo is a `warn`
+  (`mailing photo not remembered`). The caption carries no width spacer (Rule 18).
+- **«💬 Написать менеджеру»** is `managerButton(context)`: a green url button on its own row,
+  undefined without `HELP_MANAGER_URL`, for any kind's keyboard (#880).
+
+What becomes of a job of this kind:
+
+| Outcome                                               | The job                                                                      |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| the claim: active, an active account, a link set      | `sent` with `outcome_unknown`, then the sender's table                       |
+| the claim: blocked by the admin, or no active account | `canceled` in the same statement; its key stays taken, never planned again   |
+| the claim: no link set (the kind is not in `kinds`)   | left `pending`, neither claimed nor canceled                                 |
+| the send: the file refused                            | `pending` after `MAILING_RETRY_MS`, the `file_id` forgotten, attempt counted |
+| the planner: bot blocked or notifications `off`       | not created yet; planned on the first tick after they are back               |
+| the planner: a connect before `plans_from`            | never created                                                                |
+
+Tests: `mailing-ops.db.test.ts` HL1–HL11 (its CUT is HL10), `engine.db.test.ts` E-HL1–E-HL4,
+`messages.test.ts` HM1–HM7, `client-push.test.ts` CP5–CP7, `env.test.ts` → HELP_*_URL,
+`packages/shared/src/help-links-text.test.ts` HT1–HT3, `tooling/help-banner.test.ts` HB1–HB3, the
+pins in `timing.test.ts`.
+
 ## The planner
 
 Once at `start()` (#874, Rule 65: it reads only the database) and then every `MAILING_PLAN_TICK_MS` (60 s, shorter than the earliest offset of the kinds that wait, `MAILING_MIN_OFFSET_MS`) the planner runs one
@@ -449,11 +515,12 @@ scenario applies — one job per row of the kind's `facts` (`cross join lateral`
 the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_session:1h`,
 `…:24h`, `…:72h`; `analysis_unused:<epoch>`; `referral_rewarded:<ledger row id>`;
 `tokens:50`, `tokens:80`, `tokens:100`; `real_mode_by_deposit:<deposit id>`; `inactive_3d:<epoch>`,
-`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`) makes it idempotent: a second run, a second backend process or a restart
+`session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
 
-The planner reads facts; no trading or linking path writes a mailing.
+The planner reads facts; no trading or linking path writes a mailing. It plans only the kinds the
+process sends (`kinds`, The help push → The links); the claim takes the same list.
 
 **The wake (#686).** `wakePlan()` runs a pass now, or one more right after the pass in flight; wakes
 during a pass merge into one more pass (a counter reset before the pass's first statement, so a
@@ -478,7 +545,9 @@ a time, each by one statement (`claimMailingJob`):
 3. the earliest one that applies becomes `sent`, with `sent_at = now()` and
    `last_error = 'outcome_unknown'`, before anything reaches Telegram.
 
-Then it sends through the client push and writes the outcome:
+Then it sends through the client push — a text by `sendMailing`, a picture by `sendMailingPhoto`
+(#879: the file, or its `file_id` once known; a refused file forgets the id before the outcome
+below, so the retry uploads it) — and writes the outcome:
 
 | Outcome                                              | The job                                                                                                               |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -562,9 +631,17 @@ Lock order: every statement here is one autocommit statement on `Db`. The sender
    `MAILING_MIN_OFFSET_MS`, which the planner's tick must stay under; a kind due at its fact (0)
    is left out of it.
 5. Tests in `mailing-ops.db.test.ts` for its planning and stop conditions.
+6. A kind with a picture (#879): its `MailingPhoto` literal in `messages.ts` and its
+   `createPhotoMedia` in the engine's `photos` (`Record<MailingPhoto, PhotoMedia>`: a picture
+   without one does not compile). A kind the env can switch off: its condition in `enabledKinds`
+   (`help-links.ts`), so it is neither planned nor claimed while off.
 
 ## Accepted risks
 
+- The help push (#879): its `file_id` lives in the process's memory, so each restart and each
+  second process uploads the banner once (~180 KB); a job left `pending` after the links were
+  removed goes out when they are back, however late; for a `reduced` user it takes the window and
+  moves the first-session chain a day later.
 - During a deploy with two backend processes the two senders together may exceed the rate, and
   two claims of one `reduced` user at the same instant can both pass the window
   (`acceptsMailing()`'s comment). The first-session chain has one step applicable at a time, so

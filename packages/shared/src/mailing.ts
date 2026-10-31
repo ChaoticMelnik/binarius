@@ -20,6 +20,7 @@ export const NotificationKind = {
   SessionIdle24h: 'session_idle_24h',
   WeeklySummary: 'weekly_summary',
   TokensOut2d: 'tokens_out_2d',
+  HelpLinks: 'help_links',
 } as const;
 export type NotificationKind = (typeof NotificationKind)[keyof typeof NotificationKind];
 
@@ -120,6 +121,10 @@ export type SessionIdlePayload = z.infer<typeof sessionIdlePayloadSchema>;
 export const weeklySummaryPayloadSchema = z.object(settledScoreShape);
 export type WeeklySummaryPayload = z.infer<typeof weeklySummaryPayloadSchema>;
 
+// The help push (#879, docs/mailing.md → The help push; manager 2026-10-31): hours after the
+// account was connected, once per user; the links come from the backend's env.
+export const HELP_LINKS_AFTER_MS = 2 * 3_600_000;
+
 // The smallest offset among the scenarios that wait; the planner's tick must be shorter. The
 // immediate kinds (referral_rewarded, the low-token nudges, real_mode_by_deposit and
 // weekly_summary, 0) are not in it: the link about the planner's tick concerns only a kind that
@@ -130,4 +135,5 @@ export const MAILING_MIN_OFFSET_MS = Math.min(
   INACTIVE_AFTER_MS,
   SESSION_IDLE_AFTER_MS,
   TOKENS_OUT_REPEAT_AFTER_MS,
+  HELP_LINKS_AFTER_MS,
 );

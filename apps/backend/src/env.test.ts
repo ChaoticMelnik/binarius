@@ -50,6 +50,7 @@ describe('parseEnv', () => {
       sessionStakeStrategy: 'martingale',
       h1SubmitBudgetMs: 700,
       depositWidgetOrigins: ['https://binodex.app'],
+      helpLinks: { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined },
     });
   });
 
@@ -321,6 +322,34 @@ describe('BROKER_WS_URL (#404)', () => {
     'wss://[::1]:443',
   ])('refuses BROKER_WS_URL=%s', (value) => {
     expect(() => parseEnv({ ...valid, BROKER_WS_URL: value })).toThrow('BROKER_WS_URL');
+  });
+});
+
+describe('HELP_*_URL (#879)', () => {
+  const VARIABLES = [
+    ['HELP_CHANNEL_URL', 'channelUrl'],
+    ['HELP_REVIEWS_URL', 'reviewsUrl'],
+    ['HELP_MANAGER_URL', 'managerUrl'],
+  ] as const;
+
+  it.each(VARIABLES)('reads %s into helpLinks.%s, the others absent', (name, field) => {
+    const value = 'https://t.me/+AbCdEf123';
+    expect(parseEnv({ ...valid, [name]: value }).helpLinks).toEqual({
+      channelUrl: undefined,
+      reviewsUrl: undefined,
+      managerUrl: undefined,
+      [field]: value,
+    });
+  });
+
+  it.each(
+    VARIABLES.flatMap(([name]) =>
+      ['', 'http://t.me/channel', 'tg://resolve?domain=channel', 'not a url'].map(
+        (value) => [name, value] as const,
+      ),
+    ),
+  )('refuses %s=%j: empty, not https', (name, value) => {
+    expect(() => parseEnv({ ...valid, [name]: value })).toThrow(name);
   });
 });
 

@@ -54,6 +54,7 @@ import {
   BOT_TEXT_DEFAULT_SOURCES,
   H1_CLOSENESS_MAX_PCT,
   joinHtmlLines,
+  helpLinksCaption,
 } from '@binarius/shared';
 import { botTextSourcesWith } from '@binarius/shared/testing';
 import { analysisScreen, analysisUnavailableScreen } from './analysis';
@@ -503,6 +504,23 @@ const REAL: Record<string, () => TelegramHtml[]> = {
     SCAN_LISTS.flatMap((list) =>
       [wideSymbol, () => undefined].map((symbolOf) =>
         joinHtmlLines(scanTexts.scanSummaryLines(list, symbolOf)),
+      ),
+    ),
+  // the help push's caption (#879, help-links-text.ts): every combination of the set links
+  helpLinks: () =>
+    [true, false].flatMap((channel) =>
+      [true, false].flatMap((reviews) =>
+        [true, false].map((manager) =>
+          helpLinksCaption(
+            {
+              helpLinksTitle: textOf('helpLinksTitle'),
+              helpLinksChannel: textOf('helpLinksChannel'),
+              helpLinksReviews: textOf('helpLinksReviews'),
+              helpLinksManager: textOf('helpLinksManager'),
+            },
+            { channel, reviews, manager },
+          ),
+        ),
       ),
     ),
   intentStatus: () =>

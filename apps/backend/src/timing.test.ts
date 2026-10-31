@@ -27,6 +27,7 @@ import {
   SESSION_FIRST_NOTICE_GRACE_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   TOKEN_NUDGE_AFTER_MS,
+  HELP_LINKS_AFTER_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
   H1_ENTRY_WINDOW_SEC,
   H1_EXPIRY_SEC,
@@ -234,6 +235,17 @@ describe('backend shutdown timing', () => {
       composeServiceEnvValue(composeYaml, 'trading-worker', 'H1_SUBMIT_BUDGET_MS'),
     ).toBeUndefined();
   });
+
+  // #879: the mailing engine alone reads the help push's links, forwarded only when set
+  it.each(['HELP_CHANNEL_URL', 'HELP_REVIEWS_URL', 'HELP_MANAGER_URL'])(
+    'forwards %s to the backend only, without a default',
+    (name) => {
+      expect(composeServiceEnvValue(composeYaml, 'backend', name)).toBe('');
+      for (const service of ['trading-worker', 'web', 'bot']) {
+        expect(composeServiceEnvValue(composeYaml, service, name)).toBeUndefined();
+      }
+    },
+  );
 
   it('forwards POSTBACK_URL_SECRET to the backend only, without a default', () => {
     expect(composeServiceEnvValue(composeYaml, 'backend', 'POSTBACK_URL_SECRET')).toBe('');
@@ -605,6 +617,8 @@ describe('broker balance timing', () => {
     expect(REFERRAL_REWARDED_AFTER_MS).toBe(0);
     // #123: the low-token nudges likewise
     expect(TOKEN_NUDGE_AFTER_MS).toBe(0);
+    // #879: the help push waits its offset, planned within a tick of it
+    expect(MAILING_PLAN_TICK_MS).toBeLessThan(HELP_LINKS_AFTER_MS);
     expect(MAILING_MIN_OFFSET_MS).toBeGreaterThan(0);
     expect(MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS).toBe(65_000);
     // #464: the session notices share the bot's rate with the mailings

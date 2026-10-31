@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <!-- The help push's banner (#879, docs/mailing.md → The help push): no words, so one file for
+       both languages. The signal cards' navy, blue, green and gold (tooling/scan-media.ts). The
+       three tiles are the push's three links: the channel, the reviews, the manager.
+       PNG: node tooling/help-banner.ts -->
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0B1A3A"/>
+      <stop offset="1" stop-color="#112A55"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#275CA8" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#275CA8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#ground)"/>
+  <ellipse cx="640" cy="320" rx="620" ry="300" fill="url(#glow)"/>
+  <g stroke="#1B4686" stroke-width="2" fill="none" opacity="0.6">
+    <circle cx="640" cy="320" r="250"/>
+    <circle cx="640" cy="320" r="330" stroke-dasharray="8 12"/>
+  </g>
+  <g stroke="#275CA8" stroke-width="4" stroke-linecap="round" stroke-dasharray="2 14">
+    <line x1="456" y1="320" x2="534" y2="320"/>
+    <line x1="746" y1="320" x2="824" y2="320"/>
+  </g>
+  <!-- the channel: a megaphone -->
+  <g transform="translate(350 320)">
+    <rect x="-106" y="-106" width="212" height="212" rx="44" fill="#11294F" stroke="#275CA8" stroke-width="4"/>
+    <path d="M-52 -18 L-8 -18 L44 -52 L44 52 L-8 18 L-52 18 Z" fill="#39FF6A"/>
+    <path d="M-36 18 L-22 58 L-4 58 L-14 18 Z" fill="#2AC05E"/>
+    <path d="M60 -26 Q78 0 60 26" stroke="#39FF6A" stroke-width="7" fill="none" stroke-linecap="round"/>
+  </g>
+  <!-- the reviews: a star -->
+  <g transform="translate(640 320)">
+    <rect x="-106" y="-106" width="212" height="212" rx="44" fill="#11294F" stroke="#F0C05A" stroke-width="4"/>
+    <path d="M0 -62 L18 -20 L62 -18 L28 10 L40 54 L0 30 L-40 54 L-28 10 L-62 -18 L-18 -20 Z" fill="#F0C05A" stroke="#FFF0B0" stroke-width="4" stroke-linejoin="round"/>
+  </g>
+  <!-- the manager: a speech bubble -->
+  <g transform="translate(930 320)">
+    <rect x="-106" y="-106" width="212" height="212" rx="44" fill="#11294F" stroke="#275CA8" stroke-width="4"/>
+    <path d="M-58 -46 H58 Q70 -46 70 -34 V22 Q70 34 58 34 H-10 L-40 60 L-36 34 H-58 Q-70 34 -70 22 V-34 Q-70 -46 -58 -46 Z" fill="#39FF6A"/>
+    <circle cx="-30" cy="-6" r="9" fill="#0B1A3A"/>
+    <circle cx="0" cy="-6" r="9" fill="#0B1A3A"/>
+    <circle cx="30" cy="-6" r="9" fill="#0B1A3A"/>
+  </g>
+  <g fill="#F0C05A">
+    <circle cx="180" cy="140" r="5"/>
+    <circle cx="1110" cy="510" r="5"/>
+    <circle cx="1060" cy="120" r="4" fill="#39FF6A"/>
+    <circle cx="230" cy="500" r="4" fill="#39FF6A"/>
+  </g>
+</svg>

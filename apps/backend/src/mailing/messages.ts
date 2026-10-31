@@ -7,6 +7,7 @@ import {
   cycleDoorCallbackData,
   DEMO_CALLBACK_DATA,
   demoAnalysisCallbackData,
+  helpLinksCaption,
   keyboardOf,
   MENU_CALLBACK_DATA,
   MODE_CALLBACK_DATA,
@@ -18,22 +19,39 @@ import {
   TradeMode,
   webAppButton,
   weeklySummaryPayloadSchema,
+  type BotKeyboard,
   type BotLanguage,
   type BotStaticHtmlKey,
+  type TelegramHtml,
 } from '@binarius/shared';
 import { demoKeyboard, type ClientPushMessage } from '../auth/client-push';
 import { clientLabelsOf, clientSessionTextsOf, clientTextsOf } from '../auth/texts';
+import { helpLinksConfigured, helpLinksKeyboard, type HelpLinks } from './help-links';
 
 type Payload = Record<string, unknown>;
 
 // What a message reads besides its payload: the cashier's Mini App URL (cashierUrlOf, undefined
-// without https), the user's mode and language at the claim. Every kind is written in that
-// language (#686, #633).
+// without https), the help push's links from the env (#879), the user's mode and language at the
+// claim. Every kind is written in that language (#686, #633).
 export interface MailingContext {
   cashierUrl: string | undefined;
+  helpLinks: HelpLinks;
   tradingMode: TradeMode;
   language: BotLanguage;
 }
+
+// The pictures a mailing sends (#879): the engine holds each one's file and file_id
+// (MailingEngineDeps.photos), so a message names its picture only.
+export type MailingPhoto = 'help_banner';
+
+// A mailing with a picture: its caption carries the text (ClientPush.sendMailingPhoto).
+export interface MailingPhotoMessage {
+  photo: MailingPhoto;
+  caption: TelegramHtml;
+  reply_markup: BotKeyboard;
+}
+
+export type MailingMessage = ClientPushMessage | MailingPhotoMessage;
 
 // The first-session chain leads into the demo (#320's entry), the path to a session.
 const chainStep =
@@ -181,6 +199,23 @@ function realModeByDeposit(payload: Payload, { language }: MailingContext): Clie
   };
 }
 
+// The help push (#879, docs/mailing.md → The help push): the banner, a caption line and a button
+// per link the env sets. Without a single link the engine neither plans nor takes the kind; the
+// throw (`mailing not built`) keeps a message without a keyboard from going out all the same.
+function helpLinks(_payload: Payload, context: MailingContext): MailingPhotoMessage {
+  const { helpLinks: links, language } = context;
+  if (!helpLinksConfigured(links)) throw new Error('the help push has no link');
+  return {
+    photo: 'help_banner',
+    caption: helpLinksCaption(clientTextsOf(language), {
+      channel: links.channelUrl !== undefined,
+      reviews: links.reviewsUrl !== undefined,
+      manager: links.managerUrl !== undefined,
+    }),
+    reply_markup: helpLinksKeyboard(context),
+  };
+}
+
 // What each kind sends (docs/mailing.md), built from the job's payload when the job is sent so a
 // text override reaches it. One entry per kind: a kind added to NotificationKind without a message
 // does not compile.
@@ -198,15 +233,16 @@ const MAILING_MESSAGES = {
   [NotificationKind.SessionIdle24h]: sessionIdle,
   [NotificationKind.WeeklySummary]: weeklySummary,
   [NotificationKind.TokensOut2d]: tokensOutStill,
+  [NotificationKind.HelpLinks]: helpLinks,
 } as const satisfies Record<
   NotificationKind,
-  (payload: Payload, context: MailingContext) => ClientPushMessage
+  (payload: Payload, context: MailingContext) => MailingMessage
 >;
 
 export function mailingMessage(
   kind: NotificationKind,
   payload: Payload,
   context: MailingContext,
-): ClientPushMessage {
+): MailingMessage {
   return MAILING_MESSAGES[kind](payload, context);
 }

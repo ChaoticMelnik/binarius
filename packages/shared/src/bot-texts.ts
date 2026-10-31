@@ -1991,6 +1991,50 @@ export const BOT_TEXT_CATALOG = {
     'Уведомление о награде за приглашение: кнопка экрана приглашения (/invite).',
     '👥 Пригласить ещё',
   ),
+  // The help push (#879, docs/mailing.md → The help push): a photo's caption — the title, then
+  // one line per link the backend's env sets, each quoting its own button. Labels of the backend's
+  // message only, so in this group; managerButton is the mailing kinds' shared button (#879, #880).
+  helpLinksTitle: html(
+    g.Mailing,
+    'Подпись баннера справочного пуша через 2 часа после подключения аккаунта: заголовок; под ним — строки заданных ссылок.',
+    `📬 <b>Полезные ссылки</b>
+
+Где узнать больше о боте — по кнопкам ниже.`,
+    caption,
+  ),
+  helpLinksChannel: html(
+    g.Mailing,
+    'Справочный пуш: строка о канале бота, если ссылка на канал задана.',
+    '📣 «{helpChannelButton}» — новости бота и ответы на частые вопросы.',
+    { ...caption, fragments: { helpChannelButton: 'helpChannelButton' } },
+  ),
+  helpLinksReviews: html(
+    g.Mailing,
+    'Справочный пуш: строка о канале отзывов, если ссылка на него задана.',
+    '⭐ «{helpReviewsButton}» — отзывы пользователей бота.',
+    { ...caption, fragments: { helpReviewsButton: 'helpReviewsButton' } },
+  ),
+  helpLinksManager: html(
+    g.Mailing,
+    'Справочный пуш: строка о менеджере, если контакт менеджера задан.',
+    '💬 «{managerButton}» — вопрос про счёт, пополнение или вывод.',
+    { ...caption, fragments: { managerButton: 'managerButton' } },
+  ),
+  helpChannelButton: plain(
+    g.Mailing,
+    'Справочный пуш: кнопка-ссылка на канал бота; шлёт только backend.',
+    '📣 Канал',
+  ),
+  helpReviewsButton: plain(
+    g.Mailing,
+    'Справочный пуш: кнопка-ссылка на канал отзывов; шлёт только backend.',
+    '⭐ Отзывы',
+  ),
+  managerButton: plain(
+    g.Mailing,
+    'Общая кнопка рассылок: ссылка на контакт менеджера (#879, #880); шлёт только backend.',
+    '💬 Написать менеджеру',
+  ),
 
   // ---- Кнопки -------------------------------------------------------------------------------
   confirmButton: plain(

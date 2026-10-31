@@ -64,7 +64,9 @@ Not in the catalog: the staff bot (`apps/backend/src/admin`, plain text by the o
   `deposit`, `mailing`, `buttons`, `commands`, `profile`. `mailing` holds the texts only the
   backend's mailing engine sends (#202: the first-session chain; #484: `analysisUnusedReminder`;
   #576: `referralRewarded` and its button's label `inviteMoreButton`, a label of the backend's
-  message only, so here and not in `buttons`), so the bot's `TEXTS` leaves the group out. `deposit`
+  message only, so here and not in `buttons`; #879: the help push's caption keys `helpLinksTitle`,
+  `helpLinksChannel`, `helpLinksReviews`, `helpLinksManager` and its labels `helpChannelButton`,
+  `helpReviewsButton`, `managerButton`), so the bot's `TEXTS` leaves the group out. `deposit`
   holds the backend's push after a deposit in the cashier (`depositCredited`, #112), left out of
   `TEXTS` by name. `buttons` is exactly
   the bot's `LABELS` buttons plus
@@ -631,7 +633,9 @@ analysis card, `analysisCard`, a caption of 1024, #482; the waits for a signal �
 `pairWaiting`, `analysisWaiting`, `analysisWaitingData` with the scanner's lines — and the next
 step the wait draws, `demoLaunch` and `demoCycleStake`, captions of 1024 under the wait's media
 since #859; the session's waiting message, `sessionWaiting` — its header and the session pair's
-scan lines, the backend's caption under the scanner's animation, #860), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
+scan lines, the backend's caption under the scanner's animation, #860; the help push's caption,
+`helpLinks` — its title and a line per link the env sets, the backend's caption under its banner,
+built by `helpLinksCaption` in `packages/shared/src/help-links-text.ts`, #879), and each html key with variables in no such message. A text message is bounded by `BOT_TEXT_LIMIT`,
 a caption by 1024. The card's block is measured as the bot pads it:
 each of its eight rows is the longest of the eight labels, a space and the value, and each
 direction is measured whole, since its title and its last row follow the same signal. `estimateBotTextMessage` adds up the parts with every placeholder the text holds at its
