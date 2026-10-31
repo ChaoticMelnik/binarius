@@ -1,6 +1,6 @@
-# Every pattern here is `**/`-prefixed: Docker matches a slash-less pattern only at the context
-# root, so a bare `coverage` or `.claude` would let a nested one into the image. That is how
-# apps/backend/.env used to get in while .gitignore hid it from `git status`.
+# Docker matches a slash-less pattern only at the context root, so the entries that must hold at
+# any depth are `**/`-prefixed: a bare `coverage` or `.claude` would let a nested one into the
+# image. That is how apps/backend/.env used to get in while .gitignore hid it from `git status`.
 **/node_modules
 **/dist
 **/coverage
@@ -10,3 +10,15 @@
 **/.playwright-mcp
 **/.codegraph
 **/.claude
+**/*.test.ts
+**/*.typecheck.ts
+# Root-anchored on purpose (#877): no process in a container reads them, and a commit that changes
+# only these must not invalidate `COPY . .` (the CI compose job checks the layers). The files a
+# container does read are listed in docs/deploy.md -> Files a package reads; none is here
+# (tooling/image.test.ts D1). The drizzle snapshots are drizzle-kit's, never the migrator's.
+docs
+audits.md
+README.md
+.github
+deploy
+packages/db/drizzle/meta/*_snapshot.json

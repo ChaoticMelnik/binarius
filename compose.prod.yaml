@@ -1,18 +1,25 @@
 # The production profile: an override of compose.yaml, never a file on its own. Selected on
 # the server by COMPOSE_FILE=compose.yaml:compose.prod.yaml in .env (docs/deploy.md), in CI by
 # the same COMPOSE_FILE in the compose job's env, and in a local prod-shaped run by passing both
-# files with -f. It changes three things and nothing else:
+# files with -f. It changes four things and nothing else:
 # the app commands (one node process on the bundle tooling/build.ts wrote into the image:
 # no pnpm, no tsx watch, so a process that exits takes its container down and the restart
 # policy brings it back), log rotation on every service (the pilot's disk is ~2 GB; the
-# daemon-level setting is not an option because dockerd must never be restarted there), and a
-# restart policy for postgres and redis, which compose.yaml leaves without one. A service named
-# here must exist in compose.yaml: Compose refuses an override that adds one.
+# daemon-level setting is not an option because dockerd must never be restarted there), a
+# restart policy for postgres and redis, which compose.yaml leaves without one, and the image's
+# target: the Dockerfile's `prod` stage (dependencies only, the sources, the bundles) instead of
+# `dev` (#877). A service named here must exist in compose.yaml: Compose refuses an override that
+# adds one.
 x-logging: &logging
   driver: json-file
   options:
     max-size: "10m"
     max-file: "3"
+
+# merged over compose.yaml's `build: {context: ., target: dev}` of every service built from the
+# repository root; they share one tag, so all of them name it
+x-prod-build: &prod-build
+  target: prod
 
 services:
   postgres:
@@ -21,21 +28,27 @@ services:
   redis:
     restart: ${COMPOSE_RESTART:-unless-stopped}
     logging: *logging
-  # the one-shot keeps its runner command (Rule 16); only its logs rotate
+  # the runner's command is compose.yaml's under both profiles (Rule 16); only its logs rotate and
+  # its target is prod
   migrate:
+    build: *prod-build
     logging: *logging
   # One node process under tini per container: the exit code and the SIGTERM drain are the
   # application's own. The paths are relative to the image's WORKDIR /app.
   backend:
+    build: *prod-build
     command: node apps/backend/dist/index.js
     logging: *logging
   bot:
+    build: *prod-build
     command: node apps/bot/dist/index.js
     logging: *logging
   trading-worker:
+    build: *prod-build
     command: node apps/trading-worker/dist/index.js
     logging: *logging
   web:
+    build: *prod-build
     command: node apps/web/dist/index.js
     logging: *logging
   # the backup service (#143, docs/backups.md): log rotation only, its restart is compose.yaml's
