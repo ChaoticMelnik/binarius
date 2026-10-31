@@ -78,9 +78,14 @@ describe('wakePlan (#686)', () => {
     }) as typeof planMailingJobs;
     const engine = createMailingEngine({
       db: {} as Db,
-      push: { sendMailing: () => Promise.reject(new Error('no send in these tests')) },
+      push: {
+        sendMailing: () => Promise.reject(new Error('no send in these tests')),
+        sendMailingPhoto: () => Promise.reject(new Error('no send in these tests')),
+      },
       logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
       cashierUrl: undefined,
+      helpLinks: { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined },
+      photos: { help_banner: { photo: () => 'unused', remember: () => {}, forget: () => {} } },
       plan,
     });
     const open = async (index: number) => {

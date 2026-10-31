@@ -16,6 +16,7 @@ import {
   keyboardOf,
   formatUsd,
   telegramHtml,
+  urlButton,
   type DecimalString,
   BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
@@ -409,6 +410,66 @@ describe('the waiting message (#536, #860)', () => {
       chat_id: '9007199254740993',
       message_id: 4243,
     });
+  });
+});
+
+describe('the mailing photo (#879)', () => {
+  const reply_markup = keyboardOf([
+    urlButton(ButtonRole.Forward, RU_LABELS.managerButton, 'https://t.me/manager'),
+  ]);
+  const SENT = { message_id: 4244, photo: [{ file_id: 'small' }, { file_id: 'banner-id' }] };
+
+  it('CP5 sends the photo with an HTML caption, with sound, with its keyboard, answering the message', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendPhoto', () => SENT);
+    expect(
+      await push.sendMailingPhoto(TELEGRAM_USER_ID, {
+        photo: 'banner-id',
+        caption: telegramHtml`<b>ссылки</b>`,
+        reply_markup,
+      }),
+    ).toEqual(SENT);
+    expect(calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    const payload = sentPayload(calls, 'sendPhoto');
+    expect(payload).toMatchObject({
+      chat_id: '9007199254740993',
+      photo: 'banner-id',
+      caption: '<b>ссылки</b>',
+      parse_mode: 'HTML',
+    });
+    expect(payload?.disable_notification).toBeUndefined();
+    expect(inlineButtons(payload)).toEqual([
+      { text: RU_LABELS.managerButton, url: 'https://t.me/manager' },
+    ]);
+  });
+
+  // Rule 18: a caption carries no width spacer, the media sets the width
+  it('CP6 the caption does not end with the width spacer', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendPhoto', () => SENT);
+    await push.sendMailingPhoto(TELEGRAM_USER_ID, {
+      photo: 'banner-id',
+      caption: telegramHtml`<b>x</b>`,
+      reply_markup,
+    });
+    expect(sentPayload(calls, 'sendPhoto')?.caption).toBe('<b>x</b>');
+  });
+
+  it('CP7 uploads a file as a file and names a file_id as a string', async () => {
+    const push = createClientPush({ token: TOKEN });
+    const { calls, answers } = captureApi(push);
+    answers.set('sendPhoto', () => SENT);
+    const file = new InputFile(new Uint8Array([137, 80, 78, 71]), 'help-banner.png');
+    for (const photo of [file, 'banner-id']) {
+      await push.sendMailingPhoto(TELEGRAM_USER_ID, {
+        photo,
+        caption: telegramHtml`x`,
+        reply_markup,
+      });
+    }
+    expect(calls.map((call) => call.payload.photo)).toEqual([file, 'banner-id']);
   });
 });
 

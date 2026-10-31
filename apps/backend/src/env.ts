@@ -45,6 +45,7 @@ import {
   MAX_H1_SUBMIT_BUDGET_MS,
   MIN_H1_SUBMIT_BUDGET_MS,
 } from './timing';
+import type { HelpLinks } from './mailing/help-links';
 
 // the compose probe timeout (3s) is sized above this ceiling
 const MIN_HEALTH_TIMEOUT_MS = 500;
@@ -100,6 +101,9 @@ export interface Env {
   postbackUrlSecretPrevious?: string;
   // the broker's Socket.IO URL (#404); absent = no market data socket
   brokerWsUrl?: string;
+  // the help push's links (#879, docs/mailing.md → The help push); each absent = no line and no
+  // button, all absent = the push is not planned
+  helpLinks: HelpLinks;
 }
 
 export function parseEnv(source: EnvSource): Env {
@@ -174,10 +178,22 @@ export function parseEnv(source: EnvSource): Env {
       source.BROKER_WS_URL === undefined
         ? undefined
         : parseUrlEnv(readEnv(source, 'BROKER_WS_URL'), 'BROKER_WS_URL', BROKER_WS_URL_RULES),
+    helpLinks: {
+      channelUrl: optionalHttpsUrl(source, 'HELP_CHANNEL_URL'),
+      reviewsUrl: optionalHttpsUrl(source, 'HELP_REVIEWS_URL'),
+      managerUrl: optionalHttpsUrl(source, 'HELP_MANAGER_URL'),
+    },
     ...parseBotTokens(source),
     ...parseTokenEncryption(source),
   };
 }
+
+// readEnv refuses '', while an absent variable leaves the link off (Rule 14). https only: a url
+// button Telegram opens, t.me links included.
+const optionalHttpsUrl = (source: EnvSource, name: string): string | undefined =>
+  source[name] === undefined
+    ? undefined
+    : parseUrlEnv(readEnv(source, name), name, HTTPS_ONLY_RULES);
 
 // The broker redirects to apps/web's callback page, so a path other than OAUTH_CALLBACK_PATH would
 // send every login to a page nothing serves (until #314 the backend also derived the Mini App's

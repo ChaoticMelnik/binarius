@@ -1,6 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { GrammyError } from 'grammy';
-import { errorIdentity, errorLogFields, telegramErrorFields } from '@binarius/shared';
+import { errorIdentity, errorLogFields, fileRefusal, telegramErrorFields } from '@binarius/shared';
 import {
   claimMailingJob,
   planMailingJobs,
@@ -9,7 +9,7 @@ import {
   type Db,
   type MailingOutcome,
 } from '@binarius/db';
-import type { ClientPush, ClientPushMessage } from '../auth/client-push';
+import type { ClientPush } from '../auth/client-push';
 import {
   MAILING_CLAIM_SCAN,
   MAILING_MAX_ATTEMPTS,
@@ -20,7 +20,9 @@ import {
   MAILING_SEND_TICK_MS,
 } from '../timing';
 import { recordTelegramSendFailure } from '../users/telegram-delivery';
-import { mailingMessage } from './messages';
+import { enabledKinds, type HelpLinks } from './help-links';
+import { mailingMessage, type MailingMessage, type MailingPhoto } from './messages';
+import type { PhotoMedia } from './photo-media';
 
 // docs/mailing.md. Two loops in the backend process: the planner turns facts into
 // notification_jobs rows, the sender delivers the due ones through the client push, one at a
@@ -48,12 +50,17 @@ const DEFAULT_MAILING_CONFIG: MailingConfig = {
 
 export interface MailingEngineDeps {
   db: Db;
-  push: Pick<ClientPush, 'sendMailing'>;
+  push: Pick<ClientPush, 'sendMailing' | 'sendMailingPhoto'>;
   logger: FastifyBaseLogger;
   config?: Partial<MailingConfig>;
   // the cashier's Mini App URL for the low-token nudges' «💳 Пополнить» (#123): cashierUrlOf of
   // WEB_PUBLIC_URL, undefined without https. Required, so no caller leaves it out by accident.
   cashierUrl: string | undefined;
+  // the help push's links (#879, docs/mailing.md → The help push): without one the kind is neither
+  // planned nor claimed (enabledKinds). Required, as cashierUrl.
+  helpLinks: HelpLinks;
+  // each mailing picture's file and file_id (#879, photo-media.ts)
+  photos: Record<MailingPhoto, PhotoMedia>;
   // the tests' clock and sleep; the engine's own pacing and pause read only these. The clock is
   // monotonic (performance.now by default): a wall-clock step neither stretches nor cuts a gap or
   // Telegram's pause
@@ -135,12 +142,14 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
   let planTimer: NodeJS.Timeout | undefined;
   let sendTimer: NodeJS.Timeout | undefined;
   const plan = deps.plan ?? planMailingJobs;
+  // a constant of the process: the env is read once at start
+  const kinds = enabledKinds(deps.helpLinks);
   let planWoken = 0;
 
   async function runPlanTick(): Promise<void> {
     // before the first await: a wakePlan() after this line is served by the next pass
     planWoken = 0;
-    const planned = await plan(db);
+    const planned = await plan(db, { kinds });
     if (Object.values(planned).some((count) => count > 0)) {
       logger.info({ planned }, 'mailing planned');
     }
@@ -184,12 +193,35 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
     }
   }
 
+  // Sends the message by its shape: a picture's by its file_id once one is known, else the file;
+  // a refused file forgets its id, so the retry uploads it again (docs/mailing.md → The sender).
+  async function send(job: ClaimedMailingJob, message: MailingMessage): Promise<void> {
+    if (!('photo' in message)) {
+      await push.sendMailing(job.telegramUserId, message);
+      return;
+    }
+    const media = deps.photos[message.photo];
+    let sent;
+    try {
+      sent = await push.sendMailingPhoto(job.telegramUserId, {
+        photo: media.photo(),
+        caption: message.caption,
+        reply_markup: message.reply_markup,
+      });
+    } catch (error) {
+      if (error instanceof GrammyError && fileRefusal(error)) media.forget();
+      throw error;
+    }
+    media.remember(sent);
+  }
+
   // Resolves to what became of the job; undefined when Telegram's answer is unknown.
   async function deliver(job: ClaimedMailingJob): Promise<MailingOutcome | undefined> {
-    let message: ClientPushMessage;
+    let message: MailingMessage;
     try {
       message = mailingMessage(job.kind, job.payload, {
         cashierUrl: deps.cashierUrl,
+        helpLinks: deps.helpLinks,
         tradingMode: job.tradingMode,
         language: job.language,
       });
@@ -203,7 +235,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       return outcome;
     }
     try {
-      await push.sendMailing(job.telegramUserId, message);
+      await send(job, message);
     } catch (error) {
       // identity only: grammY's HttpError wraps a message with the token in its URL
       logger.warn(
@@ -211,7 +243,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
           jobId: job.id,
           kind: job.kind,
           ...errorLogFields(error),
-          ...telegramErrorFields(error, 'sendMessage'),
+          ...telegramErrorFields(error, 'photo' in message ? 'sendPhoto' : 'sendMessage'),
         },
         'mailing not delivered',
       );
@@ -235,7 +267,7 @@ export function createMailingEngine(deps: MailingEngineDeps): MailingEngine {
       await pace();
       // after the pace, so a stop during its sleep claims nothing more
       if (stopped) break;
-      const claim = await claimMailingJob(db, { scan: config.claimScan });
+      const claim = await claimMailingJob(db, { scan: config.claimScan, kinds });
       counts.canceled += claim.canceled;
       if (claim.job === undefined) break;
       const outcome = await deliver(claim.job);

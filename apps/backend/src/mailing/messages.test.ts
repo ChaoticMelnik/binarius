@@ -2,28 +2,47 @@ import { describe, expect, it } from 'vitest';
 import {
   BotLanguage,
   FIRST_SESSION_CHAIN,
+  helpLinksCaption,
   NotificationKind,
   TOKEN_NUDGES,
   TradeMode,
   decimalStringSchema,
 } from '@binarius/shared';
+import { botKeyboardProblems } from '@binarius/shared/testing';
+import type { ClientPushMessage } from '../auth/client-push';
 import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { inlineRows, inlineStyles } from '../admin/testing';
-import { mailingMessage, type MailingContext } from './messages';
+import type { HelpLinks } from './help-links';
+import { mailingMessage as anyMessage, type MailingContext } from './messages';
 
 // the Russian texts, the language of every user these tests make (#633)
 const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
 const RU_LABELS = clientLabelsOf(BotLanguage.Ru);
 
 const CASHIER_URL = 'https://web.example/cashier';
+const HELP_LINKS: HelpLinks = {
+  channelUrl: 'https://t.me/binarius_news',
+  reviewsUrl: 'https://t.me/binarius_reviews',
+  managerUrl: 'https://t.me/binarius_manager',
+};
 const DEMO: MailingContext = {
   cashierUrl: CASHIER_URL,
+  helpLinks: HELP_LINKS,
   tradingMode: TradeMode.Demo,
   language: BotLanguage.Ru,
 };
 
-const buttonsOf = (message: ReturnType<typeof mailingMessage>) => inlineRows({ ...message }).flat();
-const stylesOf = (message: ReturnType<typeof mailingMessage>) => inlineStyles({ ...message });
+// a text kind's message: every kind but the help push, which sends a photo (#879)
+const mailingMessage = (...args: Parameters<typeof anyMessage>): ClientPushMessage => {
+  const message = anyMessage(...args);
+  if ('photo' in message) throw new Error(`${args[0]} sends a photo`);
+  return message;
+};
+
+type AnyMessage = ReturnType<typeof anyMessage>;
+const buttonsOf = (message: AnyMessage) => inlineRows({ ...message }).flat();
+const stylesOf = (message: AnyMessage) => inlineStyles({ ...message });
+const textOf = (message: AnyMessage) => ('photo' in message ? message.caption : message.text);
 
 // #484
 describe('the analysis reminder message', () => {
@@ -399,19 +418,23 @@ describe('the mailings in English (#633)', () => {
     [NotificationKind.SessionIdle24h]: { assetId: 101, durationSec: 5, ...score },
     [NotificationKind.WeeklySummary]: score,
     [NotificationKind.TokensOut2d]: {},
+    [NotificationKind.HelpLinks]: {},
   };
   const contexts = Object.values(TradeMode).flatMap((tradingMode) =>
-    [CASHIER_URL, undefined].map(
-      (cashierUrl): MailingContext => ({ cashierUrl, tradingMode, language: BotLanguage.En }),
-    ),
+    [CASHIER_URL, undefined].map((cashierUrl): MailingContext => ({
+      cashierUrl,
+      helpLinks: HELP_LINKS,
+      tradingMode,
+      language: BotLanguage.En,
+    })),
   );
 
   it.each(Object.values(NotificationKind))('M-lang %s has no Russian word', (kind) => {
     for (const context of contexts) {
-      const message = mailingMessage(kind, PAYLOADS[kind], context);
+      const message = anyMessage(kind, PAYLOADS[kind], context);
       const labels = buttonsOf(message).map((button) => button.text);
       expect(labels.length).toBeGreaterThan(0);
-      for (const text of [message.text.value, ...labels]) expect(text).not.toMatch(CYRILLIC);
+      for (const text of [textOf(message).value, ...labels]) expect(text).not.toMatch(CYRILLIC);
     }
   });
 
@@ -421,5 +444,97 @@ describe('the mailings in English (#633)', () => {
       language: BotLanguage.En,
     });
     expect(message.text.value).toContain('4 trades — 2 won, 1 lost, 1 tied');
+  });
+});
+
+// #879 (docs/mailing.md → The help push)
+describe('the help push message', () => {
+  const kind = NotificationKind.HelpLinks;
+  const channel = { text: RU_LABELS.helpChannelButton, url: HELP_LINKS.channelUrl };
+  const reviews = { text: RU_LABELS.helpReviewsButton, url: HELP_LINKS.reviewsUrl };
+  const manager = { text: RU_LABELS.managerButton, url: HELP_LINKS.managerUrl };
+  const withLinks = (patch: Partial<HelpLinks>): MailingContext => ({
+    ...DEMO,
+    helpLinks: { ...HELP_LINKS, ...patch },
+  });
+  const photoOf = (context: MailingContext) => {
+    const message = anyMessage(kind, {}, context);
+    if (!('photo' in message)) throw new Error('the help push sends a photo');
+    return message;
+  };
+  const rowsOf = (context: MailingContext) => inlineRows({ ...photoOf(context) });
+  const linesOf = (context: MailingContext) => photoOf(context).caption.value.split('\n');
+
+  it('HM1 sends the banner, the caption of every link, the channel and the reviews in a row and the manager under them', () => {
+    const message = photoOf(DEMO);
+    expect(message.photo).toBe('help_banner');
+    expect(message.caption).toStrictEqual(
+      helpLinksCaption(RU_TEXTS, { channel: true, reviews: true, manager: true }),
+    );
+    expect(rowsOf(DEMO)).toStrictEqual([[channel, reviews], [manager]]);
+    // #475: the two navigation buttons without colour, the manager green on its own row
+    expect(stylesOf(message)).toEqual([[null, null], ['success']]);
+  });
+
+  it('HM2 a channel that is not set has neither its line nor its button', () => {
+    const context = withLinks({ channelUrl: undefined });
+    expect(rowsOf(context)).toStrictEqual([[reviews], [manager]]);
+    expect(photoOf(context).caption.value).not.toContain(RU_LABELS.helpChannelButton);
+    expect(photoOf(context).caption).toStrictEqual(
+      helpLinksCaption(RU_TEXTS, { channel: false, reviews: true, manager: true }),
+    );
+  });
+
+  it('HM3 a manager that is not set has neither its line nor its button', () => {
+    const context = withLinks({ managerUrl: undefined });
+    expect(rowsOf(context)).toStrictEqual([[channel, reviews]]);
+    expect(photoOf(context).caption.value).not.toContain(RU_LABELS.managerButton);
+  });
+
+  it('HM4 the manager alone: one line and one button', () => {
+    const context = withLinks({ channelUrl: undefined, reviewsUrl: undefined });
+    expect(rowsOf(context)).toStrictEqual([[manager]]);
+    expect(linesOf(context).at(-1)).toBe(
+      '💬 «💬 Написать менеджеру» — вопрос про счёт, пополнение или вывод.',
+    );
+  });
+
+  it('HM5 names no age, no money and promises no result, in either language', () => {
+    for (const language of Object.values(BotLanguage)) {
+      const text = photoOf({ ...DEMO, language }).caption.value.toLowerCase();
+      for (const word of ['вероятност', 'точност', 'гарант', 'прибыл', 'profit', 'guarantee']) {
+        expect(text).not.toContain(word);
+      }
+      expect(text).not.toContain('$');
+      expect(text).not.toMatch(/\d/u);
+      expect(namesAnAge(text)).toBe(false);
+    }
+  });
+
+  it('HM6 every combination of the links lays out a keyboard the role rules accept', () => {
+    const urls = [HELP_LINKS.channelUrl, undefined];
+    for (const channelUrl of urls) {
+      for (const reviewsUrl of [HELP_LINKS.reviewsUrl, undefined]) {
+        for (const managerUrl of [HELP_LINKS.managerUrl, undefined]) {
+          if (channelUrl === undefined && reviewsUrl === undefined && managerUrl === undefined) {
+            continue;
+          }
+          for (const language of Object.values(BotLanguage)) {
+            const context = { ...withLinks({ channelUrl, reviewsUrl, managerUrl }), language };
+            expect(botKeyboardProblems(photoOf(context).reply_markup)).toEqual([]);
+          }
+        }
+      }
+    }
+  });
+
+  it('HM7 throws without a single link, which the sender settles as not built', () => {
+    expect(() =>
+      anyMessage(
+        kind,
+        {},
+        withLinks({ channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined }),
+      ),
+    ).toThrow('the help push has no link');
   });
 });

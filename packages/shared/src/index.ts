@@ -49,6 +49,7 @@ export * from './session-steps';
 export * from './trade-log';
 export * from './wilson';
 export * from './session-texts';
+export * from './help-links-text';
 export * from './bot-commands';
 export * from './bot-text-overrides';
 export * from './admin-bot-texts';

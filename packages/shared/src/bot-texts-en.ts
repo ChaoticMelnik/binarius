@@ -501,6 +501,16 @@ Auto-trading does not start without tokens: each trade needs one token.
 👇 “{buyButton}” — token packages.`,
   sessionRelaunchButton: '🔁 Start again',
   inviteMoreButton: '👥 Invite more',
+  helpLinksTitle: `📬 <b>Useful links</b>
+
+Where to learn more about the bot — the buttons below.`,
+  helpLinksChannel: '📣 “{helpChannelButton}” — bot news and answers to common questions.',
+  helpLinksReviews: "⭐ “{helpReviewsButton}” — what the bot's users say.",
+  helpLinksManager:
+    '💬 “{managerButton}” — a question about the account, a deposit or a withdrawal.',
+  helpChannelButton: '📣 Channel',
+  helpReviewsButton: '⭐ Reviews',
+  managerButton: '💬 Message the manager',
 
   // ---- buttons -------------------------------------------------------------------------------
   confirmButton: '✅ Confirm: {email}',

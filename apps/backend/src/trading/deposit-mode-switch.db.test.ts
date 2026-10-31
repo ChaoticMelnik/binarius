@@ -33,6 +33,8 @@ import { captureApi, callsTo, inlineRows, pushedText } from '../admin/testing';
 import { createClientPush } from '../auth/client-push';
 import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { createMailingEngine, type MailingEngine } from '../mailing/engine';
+import { HELP_BANNER_PATH } from '../mailing/help-links';
+import { createPhotoMedia } from '../mailing/photo-media';
 import { createDepositModeSwitcher } from './deposit-mode-switch';
 
 // the Russian texts, the language of every user these tests make (#633)
@@ -74,6 +76,10 @@ function setup({
     push,
     logger,
     cashierUrl: undefined,
+    helpLinks: { channelUrl: undefined, reviewsUrl: undefined, managerUrl: undefined },
+    photos: {
+      help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger }),
+    },
     ...(plan === undefined ? {} : { plan }),
   });
   engines.push(mailing);

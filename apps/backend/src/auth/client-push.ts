@@ -125,6 +125,12 @@ export interface ClientPush {
   // the link and deposit pushes are written in the recipient's language, read with the recipient
   sendLink(telegramUserId: bigint, language: BotLanguage, outcome: LinkPushOutcome): Promise<void>;
   sendMailing(telegramUserId: bigint, message: ClientPushMessage): Promise<void>;
+  // A mailing with a picture (#879, docs/mailing.md → The sender): with sound, its caption and its
+  // keyboard. Resolves to the sent message, whose photo's file_id the next send reuses.
+  sendMailingPhoto(
+    telegramUserId: bigint,
+    message: MailingPhotoPush,
+  ): Promise<Message.PhotoMessage>;
   sendDepositCredited(
     telegramUserId: bigint,
     language: BotLanguage,
@@ -170,6 +176,14 @@ export interface ClientPush {
   deleteSessionWaiting(telegramUserId: bigint, messageId: number): Promise<void>;
 }
 
+// A mailing's picture (#879): by its file_id once one is known, else the file. The keyboard is
+// required, as every message's next step (Rule 31).
+export interface MailingPhotoPush {
+  photo: string | InputFile;
+  caption: TelegramHtml;
+  reply_markup: BotKeyboard;
+}
+
 // The waiting message (#860): the animation by its file_id once one is known, else the file
 interface SessionWaitingPush {
   animation: string | InputFile;
@@ -199,8 +213,8 @@ export function createClientPush({
   // chat_id as a string: the column is bigint, and a string is the conversion that cannot round.
   // This is the backend's one send seam for user texts, as apps/bot/src/send.ts is the bot's: the
   // only place here that sets parse_mode and unwraps TelegramHtml, which is why ESLint allows a
-  // raw sendMessage (and, since #860, sendAnimation and editMessageCaption) in this file alone outside
-  // tests. The button label is plain: Telegram does
+  // raw sendMessage (and, since #860, sendAnimation and editMessageCaption; since #879, sendPhoto) in
+  // this file alone outside tests. The button label is plain: Telegram does
   // not parse it. Every text ends with the width spacer, as the bot's do (#506,
   // docs/bot-navigation.md → The width).
   const sent = (text: TelegramHtml) => text.value + BOT_MESSAGE_SPACER;
@@ -241,6 +255,15 @@ export function createClientPush({
       disable_notification: true,
       reply_markup,
     });
+  const sendMailingPhoto = (
+    telegramUserId: bigint,
+    { photo, caption, reply_markup }: MailingPhotoPush,
+  ) =>
+    api.sendPhoto(String(telegramUserId), photo, {
+      caption: caption.value,
+      parse_mode: 'HTML',
+      reply_markup,
+    });
   const editSessionWaitingCaption = async (
     telegramUserId: bigint,
     messageId: number,
@@ -261,6 +284,7 @@ export function createClientPush({
     sendLink: (telegramUserId, language, outcome) =>
       send(telegramUserId, linkPushMessage(outcome, language)),
     sendMailing: send,
+    sendMailingPhoto,
     sendDepositCredited: (telegramUserId, language, balance) =>
       send(telegramUserId, depositCreditedMessage(balance, language)),
     sendSessionTrade,

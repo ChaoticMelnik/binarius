@@ -1,5 +1,5 @@
-import { eq, sql } from 'drizzle-orm';
-import { HttpError } from 'grammy';
+import { eq, sql, type SQL } from 'drizzle-orm';
+import { HttpError, InputFile } from 'grammy';
 import { pino } from 'pino';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -23,6 +23,7 @@ import {
   NotificationJobStatus,
   notificationJobs,
   notificationKinds,
+  planMailingJobs,
   referrals,
   tokenLedger,
   tradingSessions,
@@ -42,6 +43,8 @@ import { createClientPush } from '../auth/client-push';
 import { clientLabelsOf, clientTextsOf } from '../auth/texts';
 import { MAILING_SEND_PER_SECOND } from '../timing';
 import { createMailingEngine, type MailingConfig } from './engine';
+import { HELP_BANNER_PATH, type HelpLinks } from './help-links';
+import { createPhotoMedia } from './photo-media';
 
 // the Russian texts, the language of every user these tests make (#633)
 const RU_TEXTS = clientTextsOf(BotLanguage.Ru);
@@ -59,7 +62,15 @@ beforeAll(async () => {
   tmp = await createTempDatabase(baseUrl);
   // every kind plans for the accounts these cases backdate
   await tmp.db.update(notificationKinds).set({ plansFrom: sql`now() - interval '200 hours'` });
+  // but the help push (#879) only in its own cases: the others do not depend on its links
+  await helpPushFrom(sql`now() + interval '1 year'`);
 });
+
+const helpPushFrom = (at: SQL) =>
+  tmp.db
+    .update(notificationKinds)
+    .set({ plansFrom: at })
+    .where(eq(notificationKinds.kind, NotificationKind.HelpLinks));
 afterAll(() => tmp.drop());
 
 // each case starts with no job waiting, so a claim can only take the case's own
@@ -100,21 +111,34 @@ async function linked(minutes: number, balance = 100n): Promise<Linked> {
 // a user whose last step is due
 const dueUser = () => linked(72 * 60 + 1);
 
+// the help push off (#879): no link, so the kind is neither planned nor claimed in the other cases
+const NO_HELP_LINKS: HelpLinks = {
+  channelUrl: undefined,
+  reviewsUrl: undefined,
+  managerUrl: undefined,
+};
+
 // 'default': the engine's own clock, which the case then probes by stepping the wall clock
 function engine(
   config: Partial<MailingConfig> = {},
   clock: { now: number } | 'default' = { now: 0 },
   sleep: (ms: number) => Promise<void> = async () => {},
+  helpLinks: HelpLinks = NO_HELP_LINKS,
 ) {
   const push = createClientPush({ token: PUSH_TOKEN });
   const captured = captureApi(push);
   const lines: string[] = [];
+  const logger = pino(logOptions('info'), { write: (line: string) => void lines.push(line) });
   const mailing = createMailingEngine({
     db: tmp.db,
     push,
-    logger: pino(logOptions('info'), { write: (line: string) => void lines.push(line) }),
+    logger,
     config,
     cashierUrl: CASHIER_URL,
+    helpLinks,
+    photos: {
+      help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger }),
+    },
     ...(clock === 'default' ? {} : { now: () => clock.now }),
     sleep,
   });
@@ -938,6 +962,147 @@ describe('the retention messages through the engine', () => {
     expect((await jobsOf(user.userId)).map((job) => [job.kind, job.status, job.lastError])).toEqual(
       [[NotificationKind.SessionIdle24h, NotificationJobStatus.Sent, null]],
     );
+    await mailing.stop();
+  });
+});
+
+// #879 (docs/mailing.md → The help push)
+describe('the help push through the engine', () => {
+  const LINKS: HelpLinks = {
+    channelUrl: 'https://t.me/binarius_news',
+    reviewsUrl: undefined,
+    managerUrl: 'https://t.me/binarius_manager',
+  };
+  // connected past the help push's offset, with a session: the help push is for everyone, and the
+  // first-session chain then plans nothing, so the user's one job is the help push's
+  const helpUser = async () => {
+    const user = await linked(2 * 60 + 1);
+    await seedTradingSession(tmp.db, user.accountId);
+    return user;
+  };
+  const helpEngine = (config: Partial<MailingConfig> = {}) =>
+    engine(config, { now: 0 }, async () => {}, LINKS);
+  const photosTo = (calls: ReturnType<typeof captureApi>['calls'], telegramUserId: string) =>
+    callsTo(calls, 'sendPhoto').filter((call) => call.payload.chat_id === telegramUserId);
+  const helpJobsOf = async (userId: string) =>
+    (await jobsOf(userId)).filter((job) => job.kind === NotificationKind.HelpLinks);
+  const BANNER = { message_id: 7, photo: [{ file_id: 'banner-small' }, { file_id: 'banner-id' }] };
+
+  beforeAll(() => helpPushFrom(sql`now() - interval '200 hours'`));
+  afterAll(() => helpPushFrom(sql`now() + interval '1 year'`));
+
+  // the earlier cases' users are linked past the offset too: their help jobs are planned and
+  // canceled here, so a case's sends are its own users'
+  beforeEach(async () => {
+    await planMailingJobs(tmp.db);
+    await tmp.db
+      .update(notificationJobs)
+      .set({ status: NotificationJobStatus.Canceled })
+      .where(eq(notificationJobs.status, NotificationJobStatus.Pending));
+  });
+
+  it('E-HL1 sends the banner as a file with its caption and buttons, then by the file_id the answer brought', async () => {
+    const first = await helpUser();
+    const second = await helpUser();
+    const { mailing, captured } = helpEngine();
+    captured.answers.set('sendPhoto', () => BANNER);
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    const [upload] = photosTo(captured.calls, first.telegramUserId);
+    expect(upload!.payload.photo).toBeInstanceOf(InputFile);
+    expect(upload!.payload.caption).toBe(
+      clientTextsOf(BotLanguage.Ru).helpLinksTitle.value +
+        '\n\n' +
+        RU_TEXTS.helpLinksChannel.value +
+        '\n' +
+        RU_TEXTS.helpLinksManager.value,
+    );
+    expect(upload!.payload.parse_mode).toBe('HTML');
+    expect(inlineRows(upload!.payload)).toEqual([
+      [{ text: RU_LABELS.helpChannelButton, url: LINKS.channelUrl }],
+      [{ text: RU_LABELS.managerButton, url: LINKS.managerUrl }],
+    ]);
+    expect(photosTo(captured.calls, second.telegramUserId)[0]!.payload.photo).toBe('banner-id');
+    for (const user of [first, second]) {
+      expect(await helpJobsOf(user.userId)).toMatchObject([
+        { status: NotificationJobStatus.Sent, lastError: null },
+      ]);
+    }
+    await mailing.stop();
+  });
+
+  it('E-HL2 a refused file forgets its file_id: the retry uploads the file again', async () => {
+    const known = await helpUser();
+    const { mailing, captured } = helpEngine({ retryMs: 0, sendBatch: 1 });
+    captured.answers.set('sendPhoto', () => BANNER);
+    await mailing.planTick();
+    await mailing.sendTick();
+    expect(photosTo(captured.calls, known.telegramUserId)).toHaveLength(1);
+
+    const refused = await helpUser();
+    await mailing.planTick();
+    captured.apiErrors.set('sendPhoto', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: wrong file identifier/HTTP URL specified',
+    });
+    await mailing.sendTick();
+    captured.apiErrors.delete('sendPhoto');
+    expect(await helpJobsOf(refused.userId)).toMatchObject([
+      { status: NotificationJobStatus.Pending, attempts: 1 },
+    ]);
+    await mailing.sendTick();
+
+    expect(
+      photosTo(captured.calls, refused.telegramUserId).map((call) => call.payload.photo),
+    ).toEqual(['banner-id', expect.any(InputFile)]);
+    expect(await helpJobsOf(refused.userId)).toMatchObject([
+      { status: NotificationJobStatus.Sent, lastError: null },
+    ]);
+    await mailing.stop();
+  });
+
+  it('E-HL3 without a single link the kind is neither planned nor claimed: a job of it waits', async () => {
+    const user = await helpUser();
+    const { mailing, captured } = engine();
+    await mailing.planTick();
+    expect(await helpJobsOf(user.userId)).toEqual([]);
+
+    const [row] = await tmp.db
+      .insert(notificationJobs)
+      .values({
+        userId: user.userId,
+        kind: NotificationKind.HelpLinks,
+        dedupeKey: 'help_links',
+        scheduledAt: sql`now() - interval '1 minute'`,
+      })
+      .returning({ id: notificationJobs.id });
+    await mailing.sendTick();
+    expect(callsTo(captured.calls, 'sendPhoto')).toEqual([]);
+    expect(await helpJobsOf(user.userId)).toMatchObject([
+      { id: row!.id, status: NotificationJobStatus.Pending, attempts: 0 },
+    ]);
+    await mailing.stop();
+  });
+
+  it('E-HL4 an answer without a photo is logged, and the next send uploads the file again', async () => {
+    const first = await helpUser();
+    const second = await helpUser();
+    const { mailing, captured, logs } = helpEngine();
+    captured.answers.set('sendPhoto', () => ({ message_id: 8 }));
+    await mailing.planTick();
+    await mailing.sendTick();
+
+    for (const user of [first, second]) {
+      expect(photosTo(captured.calls, user.telegramUserId)[0]!.payload.photo).toBeInstanceOf(
+        InputFile,
+      );
+    }
+    expect(logs().filter((line) => line.msg === 'mailing photo not remembered')).toMatchObject([
+      { level: WARN, reason: 'no_file_id', media: 'help banner' },
+      { level: WARN, reason: 'no_file_id', media: 'help banner' },
+    ]);
     await mailing.stop();
   });
 });

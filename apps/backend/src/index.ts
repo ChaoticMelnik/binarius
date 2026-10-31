@@ -38,6 +38,8 @@ import type { TradingRoutesDeps } from './trading/routes';
 import { createClientPush } from './auth/client-push';
 import { secretDigest, secretKeyId } from './auth/internal';
 import { createMailingEngine } from './mailing/engine';
+import { HELP_BANNER_PATH } from './mailing/help-links';
+import { createPhotoMedia } from './mailing/photo-media';
 import { createDepositModeSwitcher } from './trading/deposit-mode-switch';
 import { createSessionNoticeListener } from './trading/session-notice-listener';
 import { createScanMedia } from './trading/scan-media';
@@ -381,13 +383,17 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
-// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123); started with the other loops after
+// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879); started with the other loops after
 // listen(), stopped in phase 1
 const mailing = createMailingEngine({
   db,
   push: clientPush,
   logger: app.log,
   cashierUrl: cashierUrlOf(env.webPublicUrl),
+  helpLinks: env.helpLinks,
+  photos: {
+    help_banner: createPhotoMedia({ path: HELP_BANNER_PATH, name: 'help banner', logger: app.log }),
+  },
 });
 
 // docs/trading-mode.md → The automatic switch after a deposit (#686): switches a demo user to real

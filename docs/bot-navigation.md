@@ -255,6 +255,8 @@ longer than its row: Telegram cuts them with an ellipsis; the loader still takes
 | `starsPayButton` | ⭐ Оплатить N | forward (the pay button) | green | own, first |
 | `paysupportListButton`, `paysupportRefundButton` | ↩️ К списку оплат, ↩️ Нужен возврат: … | nav, forward | —, green | 2, own |
 | `inviteMoreButton` (push) | 👥 Пригласить ещё | secondary | blue | alone |
+| `helpChannelButton`, `helpReviewsButton` (push, #879) | 📣 Канал, ⭐ Отзывы (URLs) | nav | — | 2 |
+| `managerButton` (push, #879) | 💬 Написать менеджеру (a URL) | forward | green | own |
 | data: `signalButtonLabel` | EUR/USD ⬆️ 85% | up / down | green / red | list of 2 |
 | data: `pairButtonLabel`, `groupButtonLabel` | EUR/USD 85%, 💱 Валюты · 12 | nav | — | list of 2 |
 | data: `cycleStakeLabel` | $1.00 ✅, $10.00 · риск | stake / stake_risk | green / red | list of 3 / 2 |
@@ -297,6 +299,9 @@ chat with the bot:
   trade's block since #722) and
   `SESSION_STOP_PATTERN`. The bot and the backend's push build their buttons from it, so a pushed
   button lands on the bot's handler.
+- `apps/backend/src/mailing/help-links.ts` (#879): `managerButton(context)`, «💬 Написать
+  менеджеру» on the manager's contact (`HELP_MANAGER_URL`), a green url button on its own row, for
+  any mailing kind's keyboard (#880); undefined without the contact.
 - `packages/shared/src/bot-keyboard.ts` (#475): the roles, `callbackButton`, `urlButton`,
   `webAppButton`, `payButton`, `switchInlineButton`, `keyboardOf`, `stackKeyboards`,
   `buttonLabelWidth` ([Roles, colours and rows](#roles-colours-and-rows-475)).
@@ -427,6 +432,7 @@ no repeat.
 | the low-token nudges (#123) | 50 %: 🎮 Демо-торговля (🚀 Торговать in real); 80 % and 100 %: 💳 Пополнить (the entry without https) // ⭐ Купить |
 | the inviter's reward notification `referralRewarded` (#576, the backend's mailing, [mailing.md](mailing.md)) | 👥 Пригласить ещё (`cmd:invite`, the /invite screen as a new message) — one button, as the reminders |
 | the real-mode message after a deposit `realModeByDeposit` (#686, the backend's mailing, [mailing.md](mailing.md#the-real-mode-notification-686)) | ⚙️ Режим торговли (`mode`, the mode screen) \| 🏠 В меню, in the user's language |
+| the help push (#879, the backend's mailing: the banner with its caption, [mailing.md](mailing.md#the-help-push-879)) | 📣 Канал \| ⭐ Отзывы // 💬 Написать менеджеру (URLs from the env; a link not set has no button) |
 | the staff bot (`apps/backend/src/admin/telegram.ts`) | `/start`: Войти в админку; the login prompt: Подтвердить вход // Это не я (red) |
 
 «📊 Анализ» at the end of a trade opens the analysis of the same pair at 5 s (`demo:an:<assetId>:5`), never

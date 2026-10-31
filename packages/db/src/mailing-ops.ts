@@ -38,10 +38,16 @@ const replanCanceled = sql`do update set status = ${literal(NotificationJobStatu
 // planner, a restart or a slow tick inserts nothing twice. A job is planned only once due, for a
 // fact at or after the kind's plans_from, to a user the bot may mail (an important kind: reach,
 // whatever the level, #686), while the scenario applies.
-// Returns how many jobs each kind gained, re-planned ones included.
-export async function planMailingJobs(db: Db): Promise<Record<NotificationKind, number>> {
+// Returns how many jobs each kind gained, re-planned ones included. `kinds` are the kinds this
+// process sends (the backend leaves out a kind its env switched off, #879); any other gains 0.
+export async function planMailingJobs(
+  db: Db,
+  { kinds = KINDS }: { kinds?: readonly NotificationKind[] } = {},
+): Promise<Record<NotificationKind, number>> {
   const planned = {} as Record<NotificationKind, number>;
-  for (const kind of KINDS) planned[kind] = await planMailingKind(db, kind);
+  for (const kind of KINDS) {
+    planned[kind] = kinds.includes(kind) ? await planMailingKind(db, kind) : 0;
+  }
   return planned;
 }
 
@@ -107,14 +113,23 @@ const acceptsJob =
     : sql`((${notificationJobs.kind} in (${IMPORTANT}) and ${reachable()})
       or (${notificationJobs.kind} not in (${IMPORTANT}) and ${acceptsMailing()}))`;
 
+const kindIn = (kinds: readonly NotificationKind[]) =>
+  kinds.length === 0
+    ? sql`false`
+    : sql`${notificationJobs.kind} in (${sql.join(
+        kinds.map((kind) => literal(kind)),
+        sql`, `,
+      )})`;
+
 // Takes the earliest due job of a user the bot may mail now (acceptsJob) and marks it `sent`
 // with MAILING_OUTCOME_UNKNOWN before anything reaches Telegram, so no restart or second process
 // sends it again. Among the `scan` earliest due jobs, those whose scenario no longer applies are
 // canceled in the same statement. One job per call: the next claim of the same user sees this
-// one's sent_at, which is what the `reduced` window reads.
+// one's sent_at, which is what the `reduced` window reads. A job of a kind outside `kinds` (one
+// this process does not send, #879) is neither claimed nor canceled: it stays pending.
 export async function claimMailingJob(
   db: Db,
-  { scan }: { scan: number },
+  { scan, kinds = KINDS }: { scan: number; kinds?: readonly NotificationKind[] },
 ): Promise<{ job: ClaimedMailingJob | undefined; canceled: number }> {
   const result = await db.execute<{
     canceled: number;
@@ -133,6 +148,7 @@ export async function claimMailingJob(
       join ${users} on ${users.id} = ${notificationJobs.userId}
       where ${notificationJobs.status} = ${literal(NotificationJobStatus.Pending)}
         and ${notificationJobs.scheduledAt} <= now()
+        and ${kindIn(kinds)}
         and ${acceptsJob}
       order by ${notificationJobs.scheduledAt}, ${notificationJobs.id}
       limit ${scan}
