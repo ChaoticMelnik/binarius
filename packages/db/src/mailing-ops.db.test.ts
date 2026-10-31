@@ -3283,4 +3283,30 @@ describe('the demo-to-real chain (#880)', () => {
       bonus: null,
     });
   });
+
+  // A payload that fails whenever Postgres computes it: the planner must leave a key that already
+  // has a job out in WHERE, since the SELECT list is built before the conflict check. Only for
+  // `userId`: tmp.db is shared by the file, so the trap must not reach another user.
+  const trapped = (kind: NotificationKind, userId: string) => {
+    const scenario = MAILING_SCENARIOS[kind];
+    return planMailingKind(tmp.db, kind, {
+      ...scenario,
+      stillApplies: sql`(${scenario.stillApplies} and ${users.id} = ${userId})`,
+      payload: sql`jsonb_build_object('n', 1 / (${users.id} is null)::int)`,
+    });
+  };
+
+  it('DR13 the planner computes no payload for a key that already has a job', async () => {
+    const user = await demoUser(hours(73));
+    await planMailingJobs(tmp.db);
+    expect((await chainJobsOf(user.userId)).map((job) => job.kind)).toEqual([DR_72H.kind]);
+    expect(await trapped(DR_72H.kind, user.userId)).toBe(0);
+
+    // a replansCanceled kind: a pending job leaves the key out as well
+    const [, , OUT] = TOKEN_NUDGES;
+    const spent = await linked(0, { balance: 0n });
+    expect(await planMailingKind(tmp.db, OUT.kind)).toBeGreaterThanOrEqual(1);
+    expect((await jobsOf(spent.userId)).map((job) => job.kind)).toContain(OUT.kind);
+    expect(await trapped(OUT.kind, spent.userId)).toBe(0);
+  });
 });

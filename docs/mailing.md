@@ -439,7 +439,10 @@ Monday 00:00–10:00 UTC plans nothing (`weeklyTimely`), so it never summarises 
 - Planner load: each kind is one `INSERT … SELECT` per 60 s over all users with correlated
   subqueries (`trade_intents_user_id_idx`, `notification_jobs_user_id_idx`); `inactive_3d`'s also
   reads the two specific scenarios' facts per user. Assumed scale: up to 10 000 users and 10 000
-  intents per user keep one pass under 1 s; not measured, no new index here.
+  intents per user keep one pass under 1 s; not measured, no new index here. The payload is
+  computed only for a row the statement inserts or takes back (The planner, DR13); the facts and
+  `stillApplies` are still evaluated for every user on every tick (for the demo-to-real chain,
+  `nthDemoSessionEndedAt` over `trading_sessions`).
 - `inactive_3d` is rarer (round 2, answer 1 (a)): after a specific push it waits for the next
   spell. In the normal path, a session and then idle, the user gets `session_idle_24h` only.
 - The reverse is not held: a `tokens_out_2d` whose `tokens_out` (#123) was sent after `inactive_3d`
@@ -549,8 +552,9 @@ deposit bonus when one is in force, the risk, and the cashier.
   результат -$1.50»: the result with its sign, a loss as a minus), the bonus line
   (`demoToRealBonus`, or `demoToRealBonusAnyAmount` when `minAmountUsd` is zero; none without a
   version in force), `demoToRealRisk` and `demoToRealDeposit`. No age, no deadline and no claim
-  about the user beyond the payload (the owner's limits; `messages.test.ts` DM7). A broker's promo
-  code is not in it: none was given (a configuration of its own when it is).
+  about the user beyond the payload (the owner's limits; `messages.test.ts` DM7, a list of claim
+  words). A broker's promo code is not in it: none was given (a configuration of its own when it
+  is).
 - **Timing.** 1 h, 24 h and 72 h (the manager's answer of 2026-10-31), in `DEMO_TO_REAL_CHAIN`;
   they count in `MAILING_MIN_OFFSET_MS`, and `timing.test.ts` pins `MAILING_PLAN_TICK_MS` under the
   first.
@@ -592,6 +596,10 @@ the fact plus the offset, and `payload` the scenario's. The dedupe key (`first_s
 `session_idle:<session id>`, `weekly_summary:<IYYY-"W"IW>`, `tokens_out_2d`; `help_links`; `demo_to_real:1h`, `…:24h`, `…:72h`) makes it idempotent: a second run, a second backend process or a restart
 inserts nothing twice (M1, M2), and a canceled job keeps its key, so a step canceled by `off` is
 not planned again — except a low-token nudge's, which is taken back once it applies again (T7).
+A user whose key already has a job (for a `replansCanceled` kind, one not canceled) is left out in
+WHERE (`not exists` on `notification_jobs_dedupe_key_idx`), so the payload's subqueries run only
+for a row the statement inserts or takes back (DR13); the conflict clause stays for two planners at
+once.
 
 The planner reads facts; no trading or linking path writes a mailing. It plans only the kinds the
 process sends (`kinds`: The help push → The links, The demo-to-real chain → The cashier); the

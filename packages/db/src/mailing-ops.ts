@@ -37,7 +37,10 @@ const replanCanceled = sql`do update set status = ${literal(NotificationJobStatu
 // One INSERT … SELECT per kind, idempotent through notification_jobs_dedupe_key_idx: a second
 // planner, a restart or a slow tick inserts nothing twice. A job is planned only once due, for a
 // fact at or after the kind's plans_from, to a user the bot may mail (an important kind: reach,
-// whatever the level, #686), while the scenario applies.
+// whatever the level, #686), while the scenario applies. A key that already has a job (for a
+// replansCanceled kind, one not canceled) is left out in WHERE, so the payload is computed only
+// for a row the statement inserts or takes back: Postgres builds the SELECT list before the
+// conflict check. The conflict clause stays for two planners at once.
 // Returns how many jobs each kind gained, re-planned ones included. `kinds` are the kinds this
 // process sends (the backend leaves out a kind its env switched off, #879); any other gains 0.
 export async function planMailingJobs(
@@ -61,6 +64,7 @@ export async function planMailingKind(
   const { facts, afterMs, dedupeKey, stillApplies, replansCanceled, important } = scenario;
   const payload = scenario.payload ?? sql`'{}'::jsonb`;
   const after = sql`make_interval(secs => ${afterMs / 1000})`;
+  const notCanceled = sql`planned.status <> ${literal(NotificationJobStatus.Canceled)}`;
   const result = await db.execute(sql`
     insert into ${notificationJobs} (user_id, kind, dedupe_key, payload, scheduled_at)
     select ${users.id}, ${literal(kind)}, ${dedupeKey}, ${payload}, fact.at + ${after}
@@ -71,6 +75,10 @@ export async function planMailingKind(
       and fact.at + ${after} <= now()
       and ${important === true ? reachable() : deliverable()}
       and ${stillApplies}
+      and not exists (select 1 from ${notificationJobs} planned
+        where planned.user_id = ${users.id}
+          and planned.dedupe_key = ${dedupeKey}
+          and ${replansCanceled === true ? notCanceled : sql`true`})
     on conflict (user_id, dedupe_key) where dedupe_key is not null
     ${replansCanceled === true ? replanCanceled : sql`do nothing`}`);
   return result.rowCount ?? 0;

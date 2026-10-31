@@ -384,8 +384,8 @@ const app = buildApp({
 
 const publisher = new OutboxPublisher({ db, jobs, logger: app.log });
 
-// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879, #880); started with the other loops after
-// listen(), stopped in phase 1
+// docs/mailing.md: the reminders and notifications (#202, #484, #576, #123, #879, #880); started
+// with the other loops after listen(), stopped in phase 1
 const mailing = createMailingEngine({
   db,
   push: clientPush,

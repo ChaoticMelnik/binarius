@@ -656,7 +656,8 @@ describe('the demo-to-real chain messages', () => {
     }
   });
 
-  // the owner's limits on the texts (#880): no age, no deadline, no claim about the user, a risk line
+  // the owner's limits on the texts (#880): no age, no deadline, no claim about the user, a risk
+  // line
   it('DM7 names no age or deadline, claims nothing about the user, and has the risk line, in either language', () => {
     const URGENCY = [
       'успе',
@@ -672,7 +673,10 @@ describe('the demo-to-real chain messages', () => {
       'калибровк',
       'топ',
       'прогресс',
-      'готов зарабатывать',
+      'готов',
+      'освоил',
+      'научил',
+      'навык',
       'гарант',
       'прибыл',
       'точност',
@@ -680,6 +684,11 @@ describe('the demo-to-real chain messages', () => {
       'profit',
       'guarantee',
       'calibrat',
+      'hang of',
+      'master',
+      'skill',
+      'learned',
+      'ready',
     ];
     for (const step of DEMO_TO_REAL_CHAIN) {
       for (const language of Object.values(BotLanguage)) {

@@ -39,7 +39,7 @@ const lines = (
 describe('the demo-to-real chain text (#880)', () => {
   it('DT1 the intro, an empty line, the facts, the bonus, the risk and the button', () => {
     expect(lines({})).toEqual([
-      '🎓 На демо ты освоился',
+      '🎓 Итоги демо',
       '',
       'Следующий этап — реальный счёт.',
       '',

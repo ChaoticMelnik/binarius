@@ -123,23 +123,48 @@ const beforeFirstSession = sql`(${users.status} = ${literal(UserStatus.Active)}
     join ${brokerAccounts} on ${brokerAccounts.id} = ${tradingSessions.brokerAccountId}
     where ${brokerAccounts.userId} = ${users.id}))`;
 
-// A step is stale once the next one is due: after a backend outage the user gets the latest step,
-// not the backlog of them one after another.
-const firstSessionStep = (kind: NotificationKind): MailingScenario => {
-  const index = FIRST_SESSION_CHAIN.findIndex((step) => step.kind === kind);
-  const step = FIRST_SESSION_CHAIN[index];
-  if (step === undefined) throw new Error(`${kind} is not a step of FIRST_SESSION_CHAIN`);
-  const next = FIRST_SESSION_CHAIN[index + 1];
+// A step of a chain (FIRST_SESSION_CHAIN, DEMO_TO_REAL_CHAIN): its key is the chain's prefix and
+// the step's hour. A step is stale once the next one is due: after a backend outage the user gets
+// the latest step, not the backlog of them one after another.
+const chainStep = ({
+  chain,
+  kind,
+  keyPrefix,
+  factAt,
+  applies,
+  payload,
+}: {
+  chain: readonly { kind: NotificationKind; afterHours: number }[];
+  kind: NotificationKind;
+  keyPrefix: string;
+  factAt: SQL;
+  applies: SQL;
+  payload?: SQL;
+}): MailingScenario => {
+  const index = chain.findIndex((step) => step.kind === kind);
+  const step = chain[index];
+  if (step === undefined) throw new Error(`${kind} is not a step of its chain`);
+  const next = chain[index + 1];
   return oneFact({
-    factAt: linkedAt,
+    factAt,
     afterMs: step.afterHours * 3_600_000,
-    dedupeKey: sql`${`first_session:${String(step.afterHours)}h`}`,
+    dedupeKey: sql`${`${keyPrefix}:${String(step.afterHours)}h`}`,
+    payload,
     stillApplies:
       next === undefined
-        ? beforeFirstSession
-        : sql`(${beforeFirstSession} and ${linkedAt} + make_interval(hours => ${next.afterHours}) > now())`,
+        ? applies
+        : sql`(${applies} and ${factAt} + make_interval(hours => ${next.afterHours}) > now())`,
   });
 };
+
+const firstSessionStep = (kind: NotificationKind): MailingScenario =>
+  chainStep({
+    chain: FIRST_SESSION_CHAIN,
+    kind,
+    keyPrefix: 'first_session',
+    factAt: linkedAt,
+    applies: beforeFirstSession,
+  });
 
 const lastAnalysisAt = sql`${users.lastAnalysisAt}`;
 
@@ -446,24 +471,16 @@ const demoToRealApplies = sql`(${users.status} = ${literal(UserStatus.Active)}
   and not exists (select 1 from ${depositEvents} where ${depositEvents.userId} = ${users.id})
   and ${tradingOpenSql})`;
 
-// One chain per user (constant keys); a step is stale once the next one is due, as
-// firstSessionStep's.
-const demoToRealStep = (kind: NotificationKind): MailingScenario => {
-  const index = DEMO_TO_REAL_CHAIN.findIndex((step) => step.kind === kind);
-  const step = DEMO_TO_REAL_CHAIN[index];
-  if (step === undefined) throw new Error(`${kind} is not a step of DEMO_TO_REAL_CHAIN`);
-  const next = DEMO_TO_REAL_CHAIN[index + 1];
-  return oneFact({
+// One chain per user (constant keys).
+const demoToRealStep = (kind: NotificationKind): MailingScenario =>
+  chainStep({
+    chain: DEMO_TO_REAL_CHAIN,
+    kind,
+    keyPrefix: 'demo_to_real',
     factAt: demoToRealAt,
-    afterMs: step.afterHours * 3_600_000,
-    dedupeKey: sql`${`demo_to_real:${String(step.afterHours)}h`}`,
+    applies: demoToRealApplies,
     payload: demoToRealPayload,
-    stillApplies:
-      next === undefined
-        ? demoToRealApplies
-        : sql`(${demoToRealApplies} and ${demoToRealAt} + make_interval(hours => ${next.afterHours}) > now())`,
   });
-};
 
 // One entry per kind: a kind added to NotificationKind without a scenario does not compile.
 export const MAILING_SCENARIOS = {
