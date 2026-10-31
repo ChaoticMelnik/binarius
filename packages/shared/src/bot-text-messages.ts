@@ -931,6 +931,19 @@ const ASSEMBLED: readonly BotTextMessage[] = [
       k('demoNext'),
     ],
   },
+  // the help push's caption under its banner (#879, help-links-text.ts → helpLinksCaption): a line
+  // per link the backend's env sets
+  {
+    id: 'helpLinks',
+    title: 'Справочный пуш: подпись баннера',
+    limit: TELEGRAM_CAPTION_LIMIT,
+    body: [
+      k('helpLinksTitle'),
+      oneOf([], ['\n\n', k('helpLinksChannel')]),
+      oneOf([], ['\n', k('helpLinksReviews')]),
+      oneOf([], ['\n', k('helpLinksManager')]),
+    ],
+  },
 ];
 
 function keysIn(body: readonly BotTextSegment[]): BotTextKey[] {

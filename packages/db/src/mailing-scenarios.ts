@@ -5,6 +5,7 @@ import {
   BrokerAccountStatus,
   DepositModeSwitch,
   FIRST_SESSION_CHAIN,
+  HELP_LINKS_AFTER_MS,
   INACTIVE_AFTER_MS,
   INACTIVE_REPEAT_DAYS,
   NotificationKind,
@@ -458,6 +459,19 @@ export const MAILING_SCENARIOS = {
   [NotificationKind.SessionIdle24h]: sessionIdle24h,
   [NotificationKind.WeeklySummary]: weeklySummaryAt(sql`now()`),
   [NotificationKind.TokensOut2d]: tokensOut2d,
+  // The help push (#879, docs/mailing.md → The help push): once per user, HELP_LINKS_AFTER after
+  // the connect, while the user is not blocked by the admin and has an active account. The links
+  // are for everyone: no trading mode, deposit or session is read. Whether the links are set is
+  // the backend's (env), so it is not here: the engine leaves the kind out of planning and claims.
+  [NotificationKind.HelpLinks]: oneFact({
+    factAt: linkedAt,
+    afterMs: HELP_LINKS_AFTER_MS,
+    dedupeKey: sql`${'help_links'}`,
+    stillApplies: sql`(${users.status} = ${literal(UserStatus.Active)}
+      and exists (select 1 from ${brokerAccounts}
+        where ${brokerAccounts.userId} = ${users.id}
+          and ${brokerAccounts.status} = ${literal(BrokerAccountStatus.Active)}))`,
+  }),
 } as const satisfies Record<NotificationKind, MailingScenario>;
 
 // The important kinds (MailingScenario.important), from the scenarios alone.

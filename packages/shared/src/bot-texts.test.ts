@@ -299,6 +299,10 @@ const BUTTON_LABEL_ROWS = {
   languageRuButton: 3,
   languageEnButton: 3,
   paysupportListButton: 2,
+  // the help push's buttons (#879): the channel and the reviews in one row, the manager on its own
+  helpChannelButton: 2,
+  helpReviewsButton: 2,
+  managerButton: 1,
 } as const satisfies Partial<Record<BotTextKey, 1 | 2 | 3>>;
 
 describe('button label widths (#475)', () => {

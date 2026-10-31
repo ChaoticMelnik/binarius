@@ -110,9 +110,10 @@ export const CLIENT_PUSH_TELEGRAM_API_TIMEOUT_MS = 3_000;
 
 // --- The mailing engine (#202) -----------------------------------------------------------------
 // docs/mailing.md. The planner's tick: shorter than the earliest offset of any scenario that waits
-// (the analysis reminder's 10 minutes, #484), so no job is planned a whole offset late. The
-// inviter's reward notification (#576) waits for nothing: its delay is this tick and the sender's,
-// at most MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS after the reward.
+// (the analysis reminder's 10 minutes, #484; the help push's 2 hours, #879, is longer), so no job
+// is planned a whole offset late. The inviter's reward notification (#576) waits for nothing: its
+// delay is this tick and the sender's, at most MAILING_PLAN_TICK_MS + MAILING_SEND_TICK_MS after
+// the reward.
 export const MAILING_PLAN_TICK_MS = 60_000;
 // The sender's tick, and how many jobs one tick claims and sends, one after another.
 export const MAILING_SEND_TICK_MS = 5_000;

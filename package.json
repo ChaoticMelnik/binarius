@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@resvg/resvg-js": "2.6.2",
     "@types/node": "^22.20.4",
     "@types/pg": "^8.23.1",
     "esbuild": "^0.28.2",
