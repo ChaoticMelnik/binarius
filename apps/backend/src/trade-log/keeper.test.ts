@@ -322,29 +322,73 @@ describe('the trade log keeper: capture (#668)', () => {
   });
 });
 
-describe('the trade log keeper: sweep (#668)', () => {
+describe('the trade log keeper: sweep (#668, #845)', () => {
   it('C14 repeats full batches up to the max, stops at a short one, logs the totals', async () => {
-    const full = harness({ sweep: () => Promise.resolve({ decisions: 10, ticks: 1 }) });
-    await full.keeper.sweep();
+    const full = harness({
+      sweep: () => {
+        full.clock.now += 100;
+        return Promise.resolve({ decisions: 10, ticks: 1 });
+      },
+    });
+    expect(await full.keeper.sweep()).toBe(true);
     expect(full.sweep).toHaveBeenCalledTimes(3);
     expect(full.logs).toEqual([
-      { level: 'info', msg: 'trade log sweep', fields: { decisions: 30, ticks: 3, batches: 3 } },
+      {
+        level: 'info',
+        msg: 'trade log sweep',
+        fields: { decisions: 30, ticks: 3, batches: 3, capped: true, elapsedMs: 300 },
+      },
     ]);
 
     const answers = [10, 4];
     const short = harness({
       sweep: () => Promise.resolve({ decisions: answers.shift() ?? 0, ticks: 0 }),
     });
-    await short.keeper.sweep();
+    expect(await short.keeper.sweep()).toBe(false);
     expect(short.sweep).toHaveBeenCalledTimes(2);
+    expect(short.logs).toMatchObject([
+      { level: 'info', fields: { decisions: 14, batches: 2, capped: false } },
+    ]);
 
     const empty = harness();
-    await empty.keeper.sweep();
+    expect(await empty.keeper.sweep()).toBe(false);
     expect(empty.logs).toEqual([]);
 
-    const failing = harness({ sweep: () => Promise.reject(new Error('locked')) });
-    await failing.keeper.sweep();
-    expect(failing.logs).toMatchObject([{ level: 'error', msg: 'trade log sweep failed' }]);
+    // the client-side query_timeout: the statement's own time is logged, the counters are zero
+    const failing = harness({
+      sweep: () => {
+        failing.clock.now += 1_800;
+        return Promise.reject(new Error('locked'));
+      },
+    });
+    expect(await failing.keeper.sweep()).toBe(false);
+    expect(failing.logs).toEqual([
+      {
+        level: 'error',
+        msg: 'trade log sweep failed',
+        fields: {
+          err: { name: 'Error' },
+          batches: 0,
+          decisions: 0,
+          ticks: 0,
+          statementMs: 1_800,
+        },
+      },
+    ]);
+
+    const late: (() => Promise<{ decisions: number; ticks: number }>)[] = [
+      () => Promise.resolve({ decisions: 10, ticks: 1 }),
+      () => Promise.reject(new Error('locked')),
+    ];
+    const afterFull = harness({ sweep: () => late.shift()!() });
+    expect(await afterFull.keeper.sweep()).toBe(false);
+    expect(afterFull.logs).toMatchObject([
+      {
+        level: 'error',
+        msg: 'trade log sweep failed',
+        fields: { batches: 1, decisions: 10, ticks: 1, statementMs: 0 },
+      },
+    ]);
 
     let stopping: Promise<void> | undefined;
     const stopped = harness({
@@ -353,8 +397,92 @@ describe('the trade log keeper: sweep (#668)', () => {
         return Promise.resolve({ decisions: 10, ticks: 0 });
       },
     });
-    await stopped.keeper.sweep();
+    expect(await stopped.keeper.sweep()).toBe(false);
     await stopping;
     expect(stopped.sweep).toHaveBeenCalledTimes(1);
+  });
+
+  it('C16 a tick at the cap is followed by a catch-up tick, a short one by the hour', async () => {
+    vi.useFakeTimers();
+    try {
+      let decisions = 10;
+      const h = harness({
+        ticks: null,
+        sweep: () => Promise.resolve({ decisions, ticks: 0 }),
+        config: { sweepMs: 5_000, sweepCatchupMs: 1_000 },
+      });
+      h.keeper.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sweep).toHaveBeenCalledTimes(3);
+      expect(h.logs.at(-1)).toMatchObject({ msg: 'trade log sweep', fields: { capped: true } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sweep).toHaveBeenCalledTimes(6);
+      decisions = 4;
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sweep).toHaveBeenCalledTimes(7);
+      expect(h.logs.at(-1)).toMatchObject({ msg: 'trade log sweep', fields: { capped: false } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sweep).toHaveBeenCalledTimes(7);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(h.sweep).toHaveBeenCalledTimes(8);
+      await h.keeper.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('C17 a failed tick is retried after the hour, not the catch-up delay', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({
+        ticks: null,
+        sweep: () => Promise.reject(new Error('timeout')),
+        config: { sweepMs: 5_000, sweepCatchupMs: 1_000 },
+      });
+      h.keeper.start();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(h.sweep).toHaveBeenCalledTimes(1);
+      expect(h.logs).toMatchObject([{ level: 'error', msg: 'trade log sweep failed' }]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sweep).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(h.sweep).toHaveBeenCalledTimes(2);
+      await h.keeper.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('C18 one chain per keeper: start() during a tick adds none, stop() clears the catch-up wait', async () => {
+    vi.useFakeTimers();
+    try {
+      let release: (() => void) | undefined;
+      const h = harness({
+        ticks: null,
+        sweep: () =>
+          release === undefined
+            ? new Promise<{ decisions: number; ticks: number }>((resolve) => {
+                release = () => resolve({ decisions: 10, ticks: 0 });
+              })
+            : Promise.resolve({ decisions: 10, ticks: 0 }),
+        config: { sweepMs: 5_000, sweepCatchupMs: 1_000, sweepMaxBatches: 1 },
+      });
+      h.keeper.start();
+      h.keeper.start();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(vi.getTimerCount()).toBe(0);
+      h.keeper.start();
+      expect(vi.getTimerCount()).toBe(0);
+      release!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(1);
+      await h.keeper.stop();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(h.sweep).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

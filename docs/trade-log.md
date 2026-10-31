@@ -306,17 +306,32 @@ decision 2026-10-23 on #502 (В2), the owner confirms it on the PR.
 
 The age is `recorded_at` against the database's `now()`, never the process clock. The keeper's
 sweep runs every `SIGNAL_DECISION_SWEEP_MS` (first one an hour after the start): one statement per
-batch of `SIGNAL_DECISION_SWEEP_BATCH` victims, oldest first, deleting their ticks rows and then
-the decisions, repeated while a batch is full, at most `SIGNAL_DECISION_SWEEP_MAX_BATCHES` a tick
-and never after `stop()`. `info` `trade log sweep { decisions, ticks, batches }` when it deleted
-anything; a throw is `error` `trade log sweep failed`, retried next hour. The shadow band is served
-by `signal_decisions_shadow_recorded_idx`, the 30-day band by `signal_decisions_recorded_idx`, the
-kept-forever test by `trade_intents_decision_key`. The sweep locks only `decision_ticks` and
-`signal_decisions` rows (outside Rule 5's chain). A first run on a long-lived database deletes at
-most the batch cap an hour and continues the next hour.
+batch of `SIGNAL_DECISION_SWEEP_BATCH` (100) victims, oldest first, deleting their ticks rows and
+then the decisions, repeated while a batch is full, at most `SIGNAL_DECISION_SWEEP_MAX_BATCHES`
+(20) a tick and never after `stop()`. A tick that ends at that cap with a full last batch is
+`capped`: victims may remain, and the next tick comes after `SIGNAL_DECISION_SWEEP_CATCHUP_MS` (a
+minute) instead of the hour, so a backlog goes at up to 2 000 rows a minute; a tick that ends on a
+short batch or a throw arms the hour (a throw is not retried sooner, #845). The lines:
 
-No shadow row is written since #830: the shadow band empties itself seven days after the deploy
-; nothing of #835 touches it.
+- `info` `trade log sweep { decisions, ticks, batches, capped, elapsedMs }` when it deleted
+  anything;
+- `error` `trade log sweep failed { err, cause?, batches, decisions, ticks, statementMs }` on a
+  throw: the counters of the batches before the failed statement and that statement's own
+  duration, no message (Rule 8).
+
+Each statement runs under the backend pool's client-side `query_timeout` (`HEALTH_TIMEOUT_MS − 200`,
+`apps/backend/src/index.ts`; 1.8 s by default), which is the budget of one batch: 500 wide rows
+overran it on the pilot (#845). Its error is pg's `Query read timeout` with no code, so the line
+reads `err: { name: "Error" }` with `statementMs` near that bound; a server error adds its SQLSTATE
+as `cause.code`. The client timeout does not cancel the statement: the server finishes and commits
+that batch, and the next tick does not find those rows. The shadow band is served by
+`signal_decisions_shadow_recorded_idx`, the 30-day band by `signal_decisions_recorded_idx`, the
+kept-forever test by `trade_intents_decision_key`. The sweep locks only `decision_ticks` and
+`signal_decisions` rows (outside Rule 5's chain).
+
+No shadow row is written since #830, so the shadow band's tail is finite: it is caught up at the
+catch-up cadence and then stays empty; nothing of #835 touches it. Deleting rows does not shrink
+the database's files: autovacuum reuses the space, only `VACUUM FULL` returns it to the disk.
 
 ## The record's columns
 
@@ -500,7 +515,7 @@ On the pilot: `docker compose exec -T backend pnpm --silent --filter @binarius/b
   X1–X14, X19 (#829), `h1/driver.db.test.ts` SD20 (#829),
   `cli/trade-report.db.test.ts` RP1–RP12 and `cli/report.test.ts` W1–W2 (#502: the report through
   the entry point, the window parser),
-  `trade-log/keeper.test.ts` C1–C15 (one case per ending, the sweep loop),
+  `trade-log/keeper.test.ts` C1–C18 (one case per ending, the sweep loop, its catch-up chain),
   `trade-log/keeper.db.test.ts` D1–D4, `timing.test.ts` (the #668 chain).
 - `apps/trading-worker`: `orchestrator.db.test.ts` L1 (the `warn` row is gone with #835).
 - `packages/signal-stand`: `journal-line.test.ts` JL and `calibrate.test.ts` unchanged; C12 (an

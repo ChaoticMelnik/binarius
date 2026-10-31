@@ -21,6 +21,7 @@ import {
   SIGNAL_DECISION_RETENTION_DAYS,
   SIGNAL_DECISION_SHADOW_RETENTION_DAYS,
   SIGNAL_DECISION_SWEEP_BATCH,
+  SIGNAL_DECISION_SWEEP_CATCHUP_MS,
   SIGNAL_DECISION_SWEEP_MAX_BATCHES,
   SIGNAL_DECISION_SWEEP_MS,
   TRADE_TICKS_AFTER_CLOSE_MS,
@@ -35,7 +36,8 @@ import {
 // The trade log keeper (#668, docs/trade-log.md → The ticks around a decision, → Retention): it
 // writes one decision_ticks row per captured decision when its window has closed, and sweeps the
 // decisions without a trade past their retention. Every ending of a candidate is a row of the
-// table in docs/trade-log.md.
+// table in docs/trade-log.md. A sweep tick that ends at the statement cap is followed by a catch-up
+// tick after sweepCatchupMs instead of the hour (#845).
 
 export interface TradeLogKeeperConfig {
   scanMs: number;
@@ -47,6 +49,7 @@ export interface TradeLogKeeperConfig {
   scanLimit: number;
   insertChunk: number;
   sweepMs: number;
+  sweepCatchupMs: number;
   retentionDays: number;
   shadowRetentionDays: number;
   sweepBatch: number;
@@ -63,6 +66,7 @@ const DEFAULT_TRADE_LOG_KEEPER_CONFIG: TradeLogKeeperConfig = {
   scanLimit: TRADE_TICKS_SCAN_LIMIT,
   insertChunk: TRADE_TICKS_INSERT_CHUNK,
   sweepMs: SIGNAL_DECISION_SWEEP_MS,
+  sweepCatchupMs: SIGNAL_DECISION_SWEEP_CATCHUP_MS,
   retentionDays: SIGNAL_DECISION_RETENTION_DAYS,
   shadowRetentionDays: SIGNAL_DECISION_SHADOW_RETENTION_DAYS,
   sweepBatch: SIGNAL_DECISION_SWEEP_BATCH,
@@ -87,7 +91,8 @@ export interface TradeLogKeeperDeps {
 
 export interface TradeLogKeeper {
   capture(): Promise<void>;
-  sweep(): Promise<void>;
+  // true when the tick ended at the statement cap with a full batch: victims may remain
+  sweep(): Promise<boolean>;
   start(): void;
   stop(): Promise<void>;
 }
@@ -129,8 +134,9 @@ export function createTradeLogKeeper(deps: TradeLogKeeperDeps): TradeLogKeeper {
   };
   const now = deps.now ?? Date.now;
   let stopped = false;
+  let started = false;
   let capturing: Promise<void> | undefined;
-  let sweeping: Promise<void> | undefined;
+  let sweeping: Promise<boolean> | undefined;
   let captureTimer: NodeJS.Timeout | undefined;
   let sweepTimer: NodeJS.Timeout | undefined;
   // a writer's defect is said once per decision per process, not on every tick
@@ -227,24 +233,52 @@ export function createTradeLogKeeper(deps: TradeLogKeeperDeps): TradeLogKeeper {
     }
   }
 
-  async function runSweep(): Promise<void> {
+  async function runSweep(): Promise<boolean> {
+    const startedAt = now();
     let decisions = 0;
     let removedTicks = 0;
     let batches = 0;
-    while (!stopped && batches < config.sweepMaxBatches) {
-      const batch = await ops.sweep(db, {
-        retentionDays: config.retentionDays,
-        shadowRetentionDays: config.shadowRetentionDays,
-        batch: config.sweepBatch,
-      });
+    let capped = false;
+    while (!stopped) {
+      if (batches >= config.sweepMaxBatches) {
+        capped = true;
+        break;
+      }
+      const statementAt = now();
+      let batch: { decisions: number; ticks: number };
+      try {
+        batch = await ops.sweep(db, {
+          retentionDays: config.retentionDays,
+          shadowRetentionDays: config.shadowRetentionDays,
+          batch: config.sweepBatch,
+        });
+      } catch (error) {
+        // statementMs near the pool's query_timeout names the client-side timeout, whose error
+        // carries neither a code nor (Rule 8) a logged message
+        logger.error(
+          {
+            ...errorLogFields(error),
+            batches,
+            decisions,
+            ticks: removedTicks,
+            statementMs: now() - statementAt,
+          },
+          'trade log sweep failed',
+        );
+        return false;
+      }
       batches += 1;
       decisions += batch.decisions;
       removedTicks += batch.ticks;
       if (batch.decisions < config.sweepBatch) break;
     }
     if (decisions > 0) {
-      logger.info({ decisions, ticks: removedTicks, batches }, 'trade log sweep');
+      logger.info(
+        { decisions, ticks: removedTicks, batches, capped, elapsedMs: now() - startedAt },
+        'trade log sweep',
+      );
     }
+    return capped && !stopped;
   }
 
   // a tick longer than its interval makes the next one a no-op
@@ -258,28 +292,43 @@ export function createTradeLogKeeper(deps: TradeLogKeeperDeps): TradeLogKeeper {
     return capturing;
   }
 
-  function sweep(): Promise<void> {
-    if (stopped) return Promise.resolve();
+  function sweep(): Promise<boolean> {
+    if (stopped) return Promise.resolve(false);
     sweeping ??= runSweep()
-      .catch((error: unknown) => logger.error(errorLogFields(error), 'trade log sweep failed'))
+      .catch((error: unknown) => {
+        logger.error(errorLogFields(error), 'trade log sweep failed');
+        return false;
+      })
       .finally(() => {
         sweeping = undefined;
       });
     return sweeping;
   }
 
+  // a chain, not an interval: the delay depends on how the previous tick ended
+  function armSweep(delayMs: number): void {
+    sweepTimer = setTimeout(() => {
+      sweepTimer = undefined;
+      void sweep().then((capped) => {
+        if (!stopped) armSweep(capped ? config.sweepCatchupMs : config.sweepMs);
+      });
+    }, delayMs);
+  }
+
   return {
     capture,
     sweep,
     start() {
-      if (stopped || sweepTimer !== undefined) return;
+      // during a sweep tick sweepTimer is empty, so it cannot tell a started keeper
+      if (stopped || started) return;
+      started = true;
       if (ticks !== undefined) captureTimer = setInterval(() => void capture(), config.scanMs);
-      sweepTimer = setInterval(() => void sweep(), config.sweepMs);
+      armSweep(config.sweepMs);
     },
     async stop() {
       stopped = true;
       clearInterval(captureTimer);
-      clearInterval(sweepTimer);
+      clearTimeout(sweepTimer);
       captureTimer = undefined;
       sweepTimer = undefined;
       await Promise.all([capturing, sweeping]);

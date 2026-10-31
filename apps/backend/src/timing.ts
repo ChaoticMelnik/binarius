@@ -322,9 +322,13 @@ export const TRADE_TICKS_INSERT_CHUNK = 50;
 export const SIGNAL_DECISION_RETENTION_DAYS = 30;
 export const SIGNAL_DECISION_SHADOW_RETENTION_DAYS = 7;
 export const SIGNAL_DECISION_SWEEP_MS = 3_600_000;
-// rows a DELETE statement, statements a sweep tick
-export const SIGNAL_DECISION_SWEEP_BATCH = 500;
+// rows a DELETE statement, statements a sweep tick; one statement runs under the pool's
+// query_timeout (HEALTH_TIMEOUT_MS - 200, index.ts), which 500 wide rows overran on the pilot (#845)
+export const SIGNAL_DECISION_SWEEP_BATCH = 100;
 export const SIGNAL_DECISION_SWEEP_MAX_BATCHES = 20;
+// the next tick after one that ended at the statement cap with a full batch: a backlog is caught
+// up at the cap's rows a minute, not an hour (#845)
+export const SIGNAL_DECISION_SWEEP_CATCHUP_MS = 60_000;
 
 // --- The scrypt queue --------------------------------------------------------------------------
 // One hash is 128 MiB and about 250 ms of a threadpool thread. Without a limit, a burst of
@@ -682,6 +686,7 @@ const TIMING_CHAIN_HOLDS =
   TRADE_TICKS_SCAN_MS < TRADE_TICKS_HORIZON_MS &&
   SIGNAL_DECISION_SHADOW_RETENTION_DAYS <= SIGNAL_DECISION_RETENTION_DAYS &&
   TRADE_TICKS_HORIZON_MS < SIGNAL_DECISION_SWEEP_MS &&
+  SIGNAL_DECISION_SWEEP_CATCHUP_MS < SIGNAL_DECISION_SWEEP_MS &&
   SIGNAL_DECISION_SWEEP_MS < SIGNAL_DECISION_SHADOW_RETENTION_DAYS * 86_400_000;
 if (!TIMING_CHAIN_HOLDS) {
   throw new Error('backend shutdown timing constants are out of order (see timing.ts)');
