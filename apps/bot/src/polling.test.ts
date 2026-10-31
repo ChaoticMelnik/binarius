@@ -49,7 +49,10 @@ const flush = async () => {
   for (let index = 0; index < 5; index += 1) await vi.advanceTimersByTimeAsync(0);
 };
 
-function setup({ concurrency = 8 }: { concurrency?: number } = {}) {
+function setup({
+  concurrency = 8,
+  waitingMax = 16,
+}: { concurrency?: number; waitingMax?: number } = {}) {
   const events: string[] = [];
   const polls: Poll[] = [];
   const confirmations: Record<string, unknown>[] = [];
@@ -104,6 +107,7 @@ function setup({ concurrency = 8 }: { concurrency?: number } = {}) {
   const loop = createPollingLoop({
     bot: bot as unknown as PollingBot,
     concurrency,
+    waitingMax,
     retryMs: RETRY_MS,
     logger,
   });
@@ -403,4 +407,75 @@ describe('createPollingLoop (#869)', () => {
     expect(s.polls).toHaveLength(2);
     expect(s.last().payload).toEqual({ offset: 2, limit: 1, timeout: 5 });
   });
+
+  it('P12 counts only running handlers in the capacity: user B is fetched and handled while A2 waits behind A1', async () => {
+    const s = setup({ concurrency: 2, waitingMax: 4 });
+    void s.start();
+    await flush();
+    s.held.add(1);
+
+    s.last().resolve([message(1, A), message(2, A)]);
+    await flush();
+    expect(s.polls).toHaveLength(2);
+    expect(s.last().payload).toEqual({ offset: 3, limit: 1, timeout: 5 });
+
+    s.last().resolve([message(3, B)]);
+    await flush();
+    expect(s.handled).toEqual([3]);
+    expect(s.started).toEqual([1, 3]);
+
+    s.release(1);
+    await flush();
+    expect(s.handled).toEqual([3, 1, 2]);
+  });
+
+  it('P13 pauses polling while waitingMax updates wait behind their users, with one warn line, and asks for the smaller remainder after', async () => {
+    const s = setup({ waitingMax: 2 });
+    void s.start();
+    await flush();
+    s.held.add(1);
+    s.held.add(2);
+
+    s.last().resolve([message(1, A), message(2, A), message(3, A)]);
+    await flush();
+    await vi.advanceTimersByTimeAsync(RETRY_MS);
+    expect(s.polls).toHaveLength(1);
+    const paused = s.logger.warn.mock.calls.filter(
+      ([, text]) => text === 'polling paused: updates waiting behind their users at the bound',
+    );
+    expect(paused).toEqual([
+      [{ heads: 1, waiting: 2 }, 'polling paused: updates waiting behind their users at the bound'],
+    ]);
+
+    s.release(1);
+    await flush();
+    expect(s.started).toEqual([1, 2]);
+    expect(s.polls).toHaveLength(2);
+    expect(s.last().payload).toEqual({ offset: 4, limit: 1, timeout: 5 });
+  });
+
+  it.each([401, 409])(
+    'P14 rejects start() on a %i of getUpdates only once the held handler is done',
+    async (code) => {
+      const s = setup();
+      void s.start();
+      await flush();
+      s.held.add(1);
+
+      s.last().resolve([message(1, A)]);
+      await flush();
+      s.last().reject(refusal(code));
+      await flush();
+      expect(s.settled()).toBe('pending');
+      expect(s.bot.handleUpdate).toHaveBeenCalledTimes(1);
+
+      s.release(1);
+      await flush();
+      expect(s.settled()).toBe('rejected');
+      expect(s.rejection()).toMatchObject({ error_code: code });
+      expect(s.handled).toEqual([1]);
+      await vi.advanceTimersByTimeAsync(RETRY_MS);
+      expect(s.polls).toHaveLength(2);
+    },
+  );
 });

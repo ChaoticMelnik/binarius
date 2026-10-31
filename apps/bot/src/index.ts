@@ -23,6 +23,7 @@ import {
   INTENT_TRACK_POLL_MS,
   POLLING_CONCURRENCY,
   POLLING_RETRY_MS,
+  POLLING_WAITING_MAX,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -144,6 +145,7 @@ runBot({
   bot: createPollingLoop({
     bot,
     concurrency: POLLING_CONCURRENCY,
+    waitingMax: POLLING_WAITING_MAX,
     retryMs: POLLING_RETRY_MS,
     logger,
   }),

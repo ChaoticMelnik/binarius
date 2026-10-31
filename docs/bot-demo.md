@@ -911,8 +911,11 @@ card's text after its refused photo, a new wait after the old one's freeze); the
 before the housekeeping ones, first come first served inside each; an edit whose entry ended
 before its turn is dropped without a slot. **The fan-out bound:** the signal edits of
 `SIGNAL_WAIT_FANOUT_ENTRIES` (20) waiting users are sent within `SIGNAL_WAIT_FANOUT_MS` (4 s) of the
-tick's reads — the twentieth at about +3 s, whatever Telegram and the backend take to answer
-(`(20 − burst) × 200 ms < 4 s < SIGNALS_LIST_TTL_MS`, a link of the chain); faster only with a
+first of them asking for its slot, when they ask together and the bucket is full — the twentieth
+at about +3 s, whatever Telegram takes to answer (`(20 − burst) × 200 ms < 4 s <
+SIGNALS_LIST_TTL_MS`, a link of the chain); an edit asks once its entry's reads end (the access
+read; for an analysis the signal and the access read), at most `SIGNAL_WAIT_RESOLVE_CONCURRENCY`
+(10) reads at once, so with a slow backend the second ten ask one backend round later; faster only with a
 bigger share of the token. With the session recovery's 4 and the backend's 20 + 9 a second on the
 same token the worst coincidence is about 43 a second for a moment (38 steady), above Telegram's
 ~30 ([bot-session.md](bot-session.md)), so a 429 pauses every edit of the wait for its
@@ -943,12 +946,13 @@ waiting message, and every wait left on the animation whose still has not gone y
 100 messages), none after a 429 — of the stop, of the last tick, nor of a freeze in flight: the
 edits wait for its `retry_after` inside the window, and a pause past the window leaves every
 message «⏳…» — the launched ones awaited
-(each within `TELEGRAM_API_TIMEOUT_MS`). The step is `signal waiter` of `runBot`'s drain
+(each within `TELEGRAM_API_TIMEOUT_MS`). An edit that got its slot before the stop finishes, and
+the drain draws its entry after it, unless it drew the final screen (W48). The step is `signal waiter` of `runBot`'s drain
 (`lifecycle.ts`); the chain holds `SIGNAL_WAIT_SHUTDOWN_BUDGET_MS + TELEGRAM_API_TIMEOUT_MS <
 SHUTDOWN_BUDGET_MS` and `SIGNAL_WAIT_INFLIGHT_MS < SHUTDOWN_BUDGET_MS` at import.
 
 Enforced by `signal-wait.test.ts` W1–W18, W6f, W19–W22 (#829: the records), W6g, W23–W41 (#859: the
-live wait), W42–W47 (#869: the fan-out and the pace), `edit-pacer.test.ts` EP1–EP8, `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
+live wait), W42–W48 (#869: the fan-out and the pace), `edit-pacer.test.ts` EP1–EP8, `demo.test.ts` → the wait for signals, W-media1–6, W-door1–5, W-door3′, W-an1 and
 W-shown1–6 (#829), `shown-signals.test.ts` SS1–SS7, `timing.test.ts` → the wait's bounds,
 `lifecycle.test.ts`. Stated: how the animation looks in Telegram's light and dark themes (the
 media has its own opaque ground) and that it loops and autoplays — the owner's check on a stand.

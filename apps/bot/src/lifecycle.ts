@@ -143,7 +143,7 @@ export function runBot({
     },
   });
   // an invalid token fails here: getMe answers 401, which grammY's init does not retry; so does a
-  // 401 or a 409 of a getUpdates
+  // 401 or a 409 of a getUpdates, once the handlers in work are done
   started.catch((error: unknown) => {
     // once a drain owns this promise, only closeAll decides the exit code — exiting here would
     // kill the middleware the drain is deliberately waiting for

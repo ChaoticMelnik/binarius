@@ -153,6 +153,7 @@ import {
   INTENT_TRACK_POLL_MS,
   POLLING_CONCURRENCY,
   POLLING_RETRY_MS,
+  POLLING_WAITING_MAX,
   SESSION_RESUME_DRAIN_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
@@ -4077,6 +4078,11 @@ describe("the polling loop's bounds", () => {
   it('T2 retries a failed poll after 3 s, inside the shutdown budget', () => {
     expect(POLLING_RETRY_MS).toBe(3_000);
     expect(POLLING_RETRY_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+
+  it('T3 lets 16 fetched updates wait behind their users’ handlers', () => {
+    expect(POLLING_WAITING_MAX).toBe(16);
+    expect(POLLING_WAITING_MAX).toBeGreaterThanOrEqual(1);
   });
 });
 

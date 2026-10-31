@@ -283,8 +283,10 @@ with the audit row `stars_refund_requests_viewed`.
 ## Accepted risks
 
 1. **A queued pre-checkout.** The bot runs one user's updates one after another (#869,
-   `apps/bot/src/polling.ts`), other users' side by side; a query that waits behind the same user's
-   handler longer than about 5 s may miss Telegram's 10 s. Falsifiable: at pilot
+   `apps/bot/src/polling.ts`), other users' side by side; a query waits behind the same user's
+   handlers, and behind others' only when 8 other users' handlers run or 16 updates already wait
+   behind their users' handlers (polling pauses). A query that waits longer than about 5 s may miss
+   Telegram's 10 s. Falsifiable: at pilot
    volume the update queue stays under 5 s; a lost query costs the user a retry, never money.
 2. **The scan ceiling.** A tick reads at most 5 000 transactions. Falsifiable: the bot has fewer
    than 5 000 Stars transactions in all; the ceiling's error line comes first, and a cursor is the
