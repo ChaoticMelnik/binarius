@@ -224,7 +224,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 13. **bot → backend** — общий bearer, сравнение за постоянное время; чтения и остановки проверяют владельца по `telegramUserId` → `rules/auth.md`
 14. **Env** — пустое значение — ошибка; отсутствующее — ошибка для обязательной, default из кода для необязательной → `rules/core.md`
 15. **Executor** — `rejected` только при точно не открытом ордере, throw → `unknown`, `accepted` только с совпадающей `OpenTrade` → `rules/trading.md`
-16. **Миграции forward-only** — каждое изменение схемы с миграцией, один runner `pnpm db:migrate` → `rules/core.md`
+16. **Миграции forward-only** — каждое изменение схемы с миграцией, один runner `packages/db/src/cli/migrate.ts`: `pnpm db:migrate` на хосте, `node --import tsx` в compose → `rules/core.md`
 17. **Валидация на границах** — zod в роутах, внутренний код доверяет провалидированному; внешний id — `UUID_PATTERN` → `rules/core.md`
 18. **Тексты пользователю в Telegram** — только `TelegramHtml`, `parse_mode: 'HTML'` ставят seam'ы → `rules/bot-ui.md`
 19. **Доставляемость и уровень уведомлений** — блокировка бота — одна колонка `users.telegram_blocked_at`, уровень уведомлений и рассылки → `rules/bot-ui.md`
@@ -260,7 +260,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 49. **Роли кнопок** — каждая inline-кнопка строится с ролью из `ButtonRole`, цвет и ширина — только из таблиц ролей → `rules/bot-ui.md`
 50. **Домен строки broker_trades** — значение брокера, которое колонка не вмещает, не отклоняет запись принятой сделки → `rules/trading.md`
 51. **Отметки против created_at** — колонка, упорядоченная CHECK'ом относительно `created_at`, пишется через `statementNow` → `rules/core.md`
-52. **Prod-профиль Compose** — `compose.prod.yaml` только override (command/logging/restart), app-сервис — один `node` на бандле `tooling/build.ts`, файлы пакета — от корня пакета → `rules/core.md`
+52. **Prod-профиль Compose** — `compose.prod.yaml` только override (command/logging/restart/build.target), образ — стадии dev/prod, app-сервис — один `node` на бандле `tooling/build.ts`, файлы пакета — от корня пакета → `rules/core.md`
 53. **Реестр процессов worker'а** — сокеты брокера держит только процесс, которого rendezvous по живым `worker_processes` называет владельцем аккаунта → `rules/trading.md`
 54. **Маршрутизация заявки к владельцу** — `queued` заявка чужого живого владельца перекладывается в его очередь один раз и до `takeIntent`; страховка в очереди перекладчика → `rules/trading.md`
 55. **Сканер H1 и показанный сигнал** — список сигналов и `h1` анализа — из новейшего решения R1 пары на текущей секунде, в памяти; направление в боте — только из `h1` → `rules/signal-h1.md`
@@ -281,6 +281,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 <!-- generated: node tooling/rules-for.ts --map -->
 | Путь | Правила |
 |---|---|
+| `.dockerignore` | core 52 |
 | `.env.example` | trading 27 |
 | `.github` | core 14, 16 |
 | `Dockerfile` | core 52 |
@@ -332,6 +333,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/broker-rest.md` | trading 24 |
 | `docs/broker-session.md` | trading 22, 27, 32 |
 | `docs/broker-socket.md` | trading 15, 27 |
+| `docs/deploy.md` | core 52 |
 | `docs/deposit.md` | payments 37, 38 |
 | `docs/h1.md` | signal-h1 42, 44, 48, 55, 56 |
 | `docs/kill-switch.md` | trading 22 |
@@ -373,7 +375,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `packages/signal/src/fixtures` | signal-h1 20 |
 | `packages/stake/src` | core 2, 10, 51; trading 23, 25, 27, 28, 33; signal-h1 43, 44, 45, 48; bot-ui 18 |
 | `scripts` | trading 27, 28; bot-ui 47 |
-| `tooling` | core 1, 52; bot-ui 58 |
+| `tooling` | core 1, 16, 52; bot-ui 58 |
 <!-- /generated -->
 
 ## Forbidden Actions

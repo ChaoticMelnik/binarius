@@ -23,7 +23,7 @@ services of the owner.
 
 `compose.prod.yaml` is an override, never a file on its own: Compose merges it over
 `compose.yaml`, and refuses it when it names a service `compose.yaml` does not have. It changes
-three things and nothing else (`tooling/compose-prod.test.ts` P1-P5, Rule 52):
+four things and nothing else (`tooling/compose-prod.test.ts` P1-P6, Rule 52):
 
 | | dev (`compose.yaml` alone) | prod (`compose.yaml` + `compose.prod.yaml`) |
 |---|---|---|
@@ -31,14 +31,19 @@ three things and nothing else (`tooling/compose-prod.test.ts` P1-P5, Rule 52):
 | a process that exits | the `tsx watch` supervisor survives, the container stays `running` (#65) | the container exits with the process's code; `restart` brings it back |
 | logs | unbounded `json-file` | `json-file`, `max-size: 10m`, `max-file: 3` on every service, `backup` included (profile `backup`, [backups.md](backups.md)) |
 | `postgres`, `redis` restart | none | `${COMPOSE_RESTART:-unless-stopped}`, like the app services |
+| image target ([The build](#the-build)) | the Dockerfile's `dev` stage: every dependency, the sources, the bundles | its `prod` stage: `dependencies` only (`tsx` among them), the sources, the bundles |
 
 Everything else is inherited unchanged: environment, ports, `depends_on`, `init: true`,
 `stop_grace_period` and the shutdown budgets (Rule 10), the backend's healthcheck, the image.
 For `backup` the pair changes the log rotation alone.
-`migrate` keeps its command `pnpm db:migrate` (Rule 16): it exits before the apps start, so it
-holds no memory at idle. The CLIs keep theirs too — `docker compose exec backend pnpm --filter
-@binarius/backend staff create …`, `bot-text`, `h1`, `socket-probe` and the rest run under `tsx`
-inside the same container, because the image still carries `pnpm`, `tsx` and the sources.
+`migrate` runs the same command under both profiles, `node --import tsx
+packages/db/src/cli/migrate.ts` (Rule 16): the runner straight under node, no pnpm in the start
+chain; it exits before the apps start, so it holds no memory at idle. The CLIs keep theirs too —
+`docker compose exec backend pnpm --filter @binarius/backend staff create …`, `bot-text`, `h1`,
+`socket-probe` and the rest run under `tsx` inside the same container, because the prod image
+still carries `pnpm`, `tsx` (a root `dependency` since #877) and the sources. What it no longer
+carries is the dev toolchain: TypeScript, ESLint, Vitest, Prettier, drizzle-kit — a
+`pnpm db:generate` or a test run on the server does not work, and never had a reason to.
 
 `docker compose watch` (or `up --watch`) under the pair is inert: it syncs `src/` into a container
 that runs `dist/`. It is never run on the server.
@@ -49,6 +54,29 @@ that runs `dist/`. It is never run on the server.
 with a source map beside it, for every `apps/*` directory with a `src/index.ts`. The image runs it
 as `RUN pnpm build` after copying the tree; `.dockerignore` keeps the host's `dist/` out, so the
 image runs only what it built itself.
+
+The `Dockerfile` has three stages (#877, `tooling/image.test.ts` D2-D3):
+
+- **`base`**: Node, Corepack's pnpm (downloaded once, into a layer both stages share), the
+  workspace manifests — every workspace package's `package.json`, so a source edit does not
+  re-link the workspace.
+- **`dev`**: `pnpm install --frozen-lockfile`, the tree, `pnpm build`. `compose.yaml` builds it
+  (`target: dev`): `tsx watch` and every devDependency are there.
+- **`prod`**, the last, so a bare `docker build .` builds it: `pnpm install --prod
+  --frozen-lockfile`, the tree, and the four `apps/<app>/dist` copied from `dev`. The pair builds
+  it (`compose.prod.yaml`, `build: *prod-build`).
+
+Both installs take their packages from pnpm's store on a BuildKit cache mount
+(`/pnpm/store`), which is in no layer: the image carries one copy of each package, in
+`node_modules`. On a machine that keeps its build cache (a laptop, the pilot) a lockfile change
+downloads only what the store lacks; `docker builder prune` reclaims the store. `.dockerignore`
+keeps out what no container reads — `docs/`, `audits.md`, `README.md`, `.github/`, `deploy/`,
+every `*.test.ts` and `*.typecheck.ts`, drizzle's `meta/*_snapshot.json` (drizzle-kit's, never the
+migrator's) — and nothing a container does read ([Files a package reads](#files-a-package-reads),
+`tooling/image.test.ts` D1). So a commit that changes only those leaves `COPY . .` and every
+layer after it cached: the CI compose job rebuilds after a docs-only change and compares the
+layers («a docs-only change leaves the image's layers; a source change does not»), and checks the
+prod image's files («the prod image carries the runtime files and not the dev toolchain»).
 
 Why a bundle: the output of `tsc -b` cannot run under Node. The sources import each other without
 extensions (`moduleResolution: Bundler`) and the workspace packages export `./src/*.ts`, so Node's
@@ -229,7 +257,7 @@ The agent does not run these; each is an SSH command from the owner's machine.
    ```
 
    Expected: four app lines `"docker-entrypoint.sh node apps/<app>/dist/index.js"` with `Up`, the
-   backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh pnpm db:migrate"` `Exited (0)`.
+   backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh node --import tsx packages/db/src/cli/migrate.ts"` `Exited (0)`.
 4. **Checks**:
 
    ```bash
@@ -258,7 +286,7 @@ The agent does not run these; each is an SSH command from the owner's machine.
    Expected: the line `long polling stopped with an error`, then `exit=1`.
 
 After the switch every deploy stays `docker compose stop bot && binarius-deploy <ref>`: the
-script's `docker compose build migrate` builds the image with its bundles. The backend and the bot
+script's `docker compose build migrate` builds the `prod` target, with its bundles. The backend and the bot
 come from that one image, and the old bot is stopped before it is built, so no old bot runs beside
 the new backend. That is the whole order a change across the two needs (#859, #860: an old bot
 would answer a «⏹» under the backend's new waiting animation with a new message) — no separate
@@ -267,8 +295,9 @@ would answer a «⏹» under the backend's new waiting animation with a new mess
 ## Rollback
 
 Remove the `COMPOSE_FILE` line from the server's `.env` (or restore `.env.bak-pre-146`) and run
-`docker compose up -d`: the same image still carries `pnpm`, `tsx` and the sources, so the dev
-commands run again. Log rotation goes with it unless `compose.override.yaml` is put back.
+`docker compose up -d`: the prod image still carries `pnpm`, `tsx` and the sources (not the dev
+toolchain), so the dev commands run again on it; the next build under `compose.yaml` alone builds
+the `dev` target. Log rotation goes with it unless `compose.override.yaml` is put back.
 
 ## A prod-shaped run on a laptop
 
@@ -281,6 +310,6 @@ docker compose -f compose.yaml -f compose.prod.yaml down
 ```
 
 Expected from `ps`: four app lines `"docker-entrypoint.sh node apps/<app>/dist/index.js"` with
-`Up`, the backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh pnpm db:migrate"` `Exited (0)`.
+`Up`, the backend's `(healthy)`, and `migrate` `"docker-entrypoint.sh node --import tsx packages/db/src/cli/migrate.ts"` `Exited (0)`.
 
 Without `-v` the volumes are kept; the dev stack started afterwards uses the same ones.
