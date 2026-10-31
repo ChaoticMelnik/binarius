@@ -1,6 +1,7 @@
 import {
   BOT_TEXTS_REFRESH_MS,
   H1_SECOND_CLOSE_MARGIN_MS,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   H1_START_SECOND_MAX_AGE_MS,
   SESSION_MAX_DURATION_MS,
   SESSION_SUMMARY_FALLBACK_MS,
@@ -315,7 +316,8 @@ export const INTENT_TRACK_DRAIN_MS = BACKEND_REQUEST_TIMEOUT_MS + TELEGRAM_API_T
 // intent tracker. A trade's open-to-settle cycle is at least the worker's catch-up grace (10 s),
 // so a poll every 10 s is enough to follow it and bounds the load. The deadline is the worker's
 // session deadline, imported and so checked below, plus the last trade's settle
-// (SESSION_SETTLE_SLACK_SEC) with room.
+// (SESSION_SETTLE_SLACK_SEC) with room. A pressed session's first poll, its message's record, goes
+// at once (#911); SESSION_TRACK_FIRST_POLL_MS is the floor of the recovered entries' slots.
 export const SESSION_TRACK_FIRST_POLL_MS = 3_000;
 export const SESSION_TRACK_POLL_MS = 10_000;
 export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
@@ -430,6 +432,17 @@ export const signalWaitBoundsHold = ({
   captionEditsPerTick * (1000 / editsPerSecond) < pollMs &&
   captionEditsPerTick < editsPerSecond;
 
+// The session's first message waits for the card's record or SESSION_FIRST_NOTICE_GRACE_MS from
+// started_at (#911): started_at is written inside the start route, whose rest is within its
+// budget, and then one sendPhoto within the API timeout puts the card in the chat before the
+// grace ends even with no record. A function so a test can show which value breaks it.
+export const sessionFirstNoticeBoundsHold = ({
+  startBudgetMs = TRADING_SESSION_START_BUDGET_MS,
+  telegramTimeoutMs = TELEGRAM_API_TIMEOUT_MS,
+  graceMs = SESSION_FIRST_NOTICE_GRACE_MS,
+}: { startBudgetMs?: number; telegramTimeoutMs?: number; graceMs?: number } = {}): boolean =>
+  startBudgetMs + telegramTimeoutMs < graceMs;
+
 // TRADING_ACCESS_BUDGET_MS, TRADING_SIGNAL_BUDGET_MS, TRADING_SESSION_START_BUDGET_MS and
 // TRADING_SESSION_VIEW_BUDGET_MS are the backend's upper estimates of POST /trading/access, POST
 // /trading/signal (#126), POST /trading/sessions (#283) and a session's view and stop (#337):
@@ -460,6 +473,7 @@ const TIMING_CHAIN_HOLDS =
   // recovery passes come within its grace
   2 * SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS &&
   signalWaitBoundsHold() &&
+  sessionFirstNoticeBoundsHold() &&
   // the first polls of a full recovery list start within one interval of the bot's start (#567)
   STARTUP_BUDGET_MS +
     SESSION_RESUME_DRAIN_MS +

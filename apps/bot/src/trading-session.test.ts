@@ -39,7 +39,13 @@ import {
   sessionStartCallbackData,
   stakeMenuCallbackData,
 } from './demo';
-import { sessionDrawing, type SessionTrackRequest } from './session-tracker';
+import {
+  createSessionTracker,
+  sessionDrawing,
+  type SessionTracker,
+  type SessionTrackRequest,
+} from './session-tracker';
+import { SESSION_RESUME_GAP_MS, SESSION_TRACK_DEADLINE_MS, SESSION_TRACK_POLL_MS } from './timing';
 import {
   ACCESS_VIEW,
   BOT_INFO,
@@ -143,6 +149,8 @@ function setup(
     languages?: UserLanguages;
     // the record of the shown directions (#829): a stub that takes none by default
     shownSignals?: ShownSignals;
+    // a real tracker in place of the stub (#911)
+    sessionTracker?: Pick<SessionTracker, 'track'>;
   } = {},
 ) {
   const evaluateSignal = vi.fn<BackendClient['evaluateSignal']>(
@@ -199,7 +207,7 @@ function setup(
     logger,
     botInfo: BOT_INFO,
     intentTracker: stubTracker(),
-    sessionTracker,
+    sessionTracker: options.sessionTracker ?? sessionTracker,
     sessionResumer,
     signalWaiter,
     shownSignals: options.shownSignals ?? stubShownSignals(),
@@ -2153,6 +2161,43 @@ describe('the session picture (#568)', () => {
     scene.apiErrors.delete('sendPhoto');
     await scene.press(START);
     expect(photos(scene.calls)).toEqual(['setup-bull.png', CARD_FILE_ID, 'setup-bull.png']);
+  });
+
+  // #911: the session's first message waits for the card's record, so the record goes at once
+  describe('the card recorded at once (#911)', () => {
+    const tracked = async (refusePhoto: boolean, messageId: number) => {
+      const recordSessionMessage = vi.fn<BackendClient['recordSessionMessage']>(() =>
+        Promise.resolve(UP),
+      );
+      // a first poll past the wait's ceiling: the record can come only at once
+      const tracker = createSessionTracker({
+        backend: fakeBackend({ recordSessionMessage, readSession: () => Promise.resolve(UP) }),
+        logger: fakeLogger(),
+        firstPollMs: SESSION_TRACK_POLL_MS * 6,
+        pollMs: SESSION_TRACK_POLL_MS,
+        deadlineMs: SESSION_TRACK_DEADLINE_MS,
+        resumeGapMs: SESSION_RESUME_GAP_MS,
+      });
+      try {
+        const scene = setup({
+          startSession: () => Promise.resolve({ started: UP }),
+          sessionTracker: tracker,
+        });
+        if (refusePhoto) scene.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+        await scene.press(START);
+        expect(methods(scene.calls).at(-1)).toBe(refusePhoto ? 'sendMessage' : 'sendPhoto');
+        await until('the record', () => recordSessionMessage.mock.calls.length > 0);
+        expect(recordSessionMessage.mock.calls).toEqual([[SESSION_ID, String(USER.id), messageId]]);
+      } finally {
+        await tracker.stop();
+      }
+    };
+
+    it('S-rec1 the photo card is recorded at once after its sendPhoto', () =>
+      tracked(false, CARD_MESSAGE_ID));
+
+    it('S-rec2 a refused photo: the text card is recorded at once after its sendMessage', () =>
+      tracked(true, TEXT_CARD_MESSAGE_ID));
   });
 
   it('S-photo4 a photo failed in transport: thrown, no second message, nothing tracked', async () => {

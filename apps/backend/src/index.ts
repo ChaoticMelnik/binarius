@@ -291,6 +291,8 @@ const app = buildApp({
               },
             adopt: (session, start) => marketData?.h1Driver.adopt(session, start),
           },
+    // the sender is built after the app: read at the request, as marketData above (#911)
+    notices: { wake: (sessionId) => sessionNotices.wake(sessionId) },
   },
   signal: {
     feed: signalFeed,

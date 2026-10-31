@@ -70,6 +70,7 @@ import {
   type H1Start,
 } from '../h1/driver';
 import { TRADING_ACCESS_REFRESH_BUDGET_MS } from '../timing';
+import type { SessionNoticeSender } from './session-notices';
 import { readFinishedSessionView } from './session-view';
 
 export interface TradingSessionRoutesDeps {
@@ -87,6 +88,9 @@ export interface TradingSessionRoutesDeps {
   // starts waiting and is traded by no one until its hour. A start with a shown direction (#829)
   // needs no reading, but without the driver nothing adopts it either
   h1Driver: Pick<H1Driver, 'current' | 'adopt'> | undefined;
+  // the session notices' sender, woken once a status message is recorded (#911): the session's
+  // first message waits for it
+  notices: Pick<SessionNoticeSender, 'wake'> | undefined;
   now?: () => number;
 }
 
@@ -153,6 +157,7 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     stakeStrategy,
     decisions,
     h1Driver,
+    notices,
     now = Date.now,
   },
 ) => {
@@ -421,10 +426,12 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
     return reply.send({ session });
   });
 
-  // The bot's first poll of a status message (#567): records its id, the newest one wins (#587:
-  // message ids grow within a chat, so a relaunch's message replaces the first), and answers the
-  // view GET /trading/sessions/:id gives. The owner is in the CAS and in the read, so another
-  // user's id writes nothing and answers as a missing one (Rule 13).
+  // The bot's first poll of a status message (#567), at once after its send (#911): records its id,
+  // the newest one wins (#587: message ids grow within a chat, so a relaunch's message replaces the
+  // first), wakes the notice sender for the session when it wrote - the session's first message
+  // waits for the record (#911) - and answers the view GET /trading/sessions/:id gives. The owner
+  // is in the CAS and in the read, so another user's id writes nothing and answers as a missing
+  // one (Rule 13).
   const statusMessagePath = `${TRADING_SESSIONS_PATH}/:id${SESSION_STATUS_MESSAGE_SUFFIX}`;
   app.post(statusMessagePath, async (request, reply) => {
     const id = idParamSchema.safeParse((request.params as { id?: unknown }).id);
@@ -434,7 +441,8 @@ export const tradingSessionRoutes: FastifyPluginAsync<TradingSessionRoutesDeps> 
       return reply.code(400).send({ error: 'validation', issues: body.error.issues });
     }
     const { telegramUserId, messageId } = body.data;
-    await recordSessionStatusMessage(db, { id: id.data, telegramUserId, messageId });
+    const wrote = await recordSessionStatusMessage(db, { id: id.data, telegramUserId, messageId });
+    if (wrote) notices?.wake(id.data);
     const session = await viewForReply(id.data, telegramUserId);
     if (session === undefined) return refuse(reply, TradingSessionErrorCode.NotFound);
     return reply.send({ session });

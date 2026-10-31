@@ -30,6 +30,7 @@ import {
   H1_SECOND_CLOSE_MARGIN_MS,
   H1_START_SECOND_MAX_AGE_MS,
   MAILING_MIN_OFFSET_MS,
+  SESSION_FIRST_NOTICE_GRACE_MS,
   SESSION_SUMMARY_FALLBACK_MS,
   STARS_PRECHECKOUT_BUDGET_MS,
 } from '@binarius/shared';
@@ -173,6 +174,14 @@ export const sessionNoticeWakeBoundsHold = ({
   wakeGapMs = SESSION_NOTICE_WAKE_GAP_MS,
 }: { listenRetryMs?: number; wakeGapMs?: number } = {}): boolean =>
   listenRetryMs <= SESSION_NOTICE_TICK_MS && wakeGapMs < SESSION_NOTICE_CHAT_GAP_MS;
+
+// The first message's hold (#911): a held session is seen by at least one tick before the grace
+// ends, which arms its timer even when no wake came - the tick is the safety net. A function so a
+// test can show which value breaks it.
+export const sessionFirstNoticeBoundsHold = ({
+  tickMs = SESSION_NOTICE_TICK_MS,
+  graceMs = SESSION_FIRST_NOTICE_GRACE_MS,
+}: { tickMs?: number; graceMs?: number } = {}): boolean => tickMs < graceMs;
 
 // The waiting message's caption (#860, docs/bot-session.md → The waiting message): the sender's
 // pass that edits it to the scanner's newer figures, this often - the owner's «every 3 to 5 s»
@@ -578,6 +587,7 @@ const TIMING_CHAIN_HOLDS =
   SESSION_NOTICE_CHAT_GAP_MS <= SESSION_NOTICE_TICK_MS &&
   SESSION_NOTICE_TICK_MS < SESSION_NOTICE_HOLD_MS &&
   sessionNoticeWakeBoundsHold() &&
+  sessionFirstNoticeBoundsHold() &&
   sessionWaitCaptionBoundsHold() &&
   // the fallback summary's balance refresh is not waited for (#870): one started in a tick has
   // normally answered, or its signal aborted it, before the tick after next starts: the budget

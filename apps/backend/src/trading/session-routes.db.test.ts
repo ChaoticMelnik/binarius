@@ -177,6 +177,8 @@ function appWith(
     decisions?: TradingSessionRoutesDeps['decisions'];
     // the H1 start's reading and hand-over (#796); none by default
     h1Driver?: TradingSessionRoutesDeps['h1Driver'];
+    // the notice sender woken by a recorded status message (#911); none by default
+    notices?: TradingSessionRoutesDeps['notices'];
   } = {},
 ): FastifyInstance {
   const catalog = 'catalog' in options ? options.catalog : freshCatalog();
@@ -217,6 +219,7 @@ function appWith(
         record: (input) => recordSignalDecision(tmp.db, input),
       },
       h1Driver: options.h1Driver,
+      notices: options.notices,
       now: () => NOW,
     },
     signal: unusedSignalDeps(),
@@ -2060,6 +2063,27 @@ describe('the recovery routes (#567)', () => {
       'validation',
     ]);
     expect(await recordedOf(seed.sessionId)).toBe(41);
+  });
+
+  // #911: the session's first message waits for the record, so the record wakes the sender
+  // without a sender (T1-T10's appWith) a record answers as before
+  it('T11 a record that wrote wakes the notice sender for the session; one that wrote nothing does not', async () => {
+    const seed = await seedSession();
+    const other = await seedUser(tmp.db);
+    const woken: (string | undefined)[] = [];
+    const target = appWith({ notices: { wake: (sessionId) => void woken.push(sessionId) } });
+    const body = { telegramUserId: seed.telegramUserId };
+    const foreign = await record(target, seed.sessionId, {
+      telegramUserId: other.telegramUserId,
+      messageId: 41,
+    });
+    expect(foreign.statusCode).toBe(404);
+    expect(woken).toEqual([]);
+    expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
+    expect(woken).toEqual([seed.sessionId]);
+    expect((await record(target, seed.sessionId, { ...body, messageId: 41 })).statusCode).toBe(200);
+    expect((await record(target, seed.sessionId, { ...body, messageId: 40 })).statusCode).toBe(200);
+    expect(woken).toEqual([seed.sessionId]);
   });
 });
 
