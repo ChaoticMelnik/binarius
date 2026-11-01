@@ -5207,3 +5207,28 @@ Docs PR этого аудита — без Codex и ревьюера (решен
 
 ### Предложения по процессу
 нет
+
+---
+
+## Сессия 2026-11-01 14:44 — manager: #875 (PR #936, 2 круга, In Review)
+
+Дневной запуск `/manager` (14:44-22:44 MSK, 8 ч по умолчанию) из VSCode-сессии после `/clear`. Пул — одна задача: Todo #875. Архитектор (Fable) разбил её по размеру: этот PR — пункты 1-6 и 8, пункт 9 — #934, пункт 7 — #935 (обе Backlog, созданы этой сессией, ночью не брались). Круг 1 — Major F1, Plan Update на Opus, свежий implementer; круг 2 — Minor-only (m1-m4), CI зелёный на одобренном head `9e5db601`, `MERGEABLE`. Clarify-вопросов ни у одной фазы не было — решений менеджера нет. Codex не запускался (PR сессии менеджера). Миграций в ветке нет; общая тестовая БД не мигрировалась (94 записи = main). Сервисы `backend`/`trading-worker`/`bot`/`web` ни одной фазой не запускались.
+
+### Отклонения процесса
+| Задача | Роль | Шаг | Отклонение | Severity |
+|--------|------|-----|------------|----------|
+| #875 | architect | Step 2 (CodeGraph) | `codegraph_context`/`codegraph_callers` дали слабые и ложные совпадения: индекс основной копии держит файлы `.claude/worktrees/rosy-singing-fiddle`; факты подтверждены Read по главной копии и grep, названо в плане | Minor |
+| #875 | architect | Plan Update r1 | Новые мутации названы M22-M28, хотя таблица ветки уже держала M22-M42; implementer переименовал их в PU22-PU28 и поправил `old` ещё у пяти мутаций | Minor |
+
+### Находки ревью
+| Задача | Finding | Severity | Класс | Root cause | Missed at step |
+|--------|---------|----------|-------|------------|----------------|
+| #875 | F1: два закрепа одного чата через `detached.run` могли перемешаться — старая карточка закреплена поверх новой (https://github.com/ChaoticMelnik/binarius/pull/936#pullrequestreview-5728163100) | Major | instance-vs-class | Вынос закрепа из цепочки пользователя (Rule 70) снял порядок; принятый риск 3 плана покрыл только сброс на остановке, не порядок двух работ одного чата | architect Step 4 |
+| #875 | F2: id промо-карты забывался на любой 400 `answerInlineQuery`, включая «query is too old» (там же) | Minor | instance-vs-class | `fileRefusal` взят как есть, его классы ответов не сверены с вызовом inline-ответа | architect Step 4 |
+| #875 | F3: кэш промо-карты по sessionId при тексте, зависящем от языка и переопределений (там же) | Minor | single-source | Ключ кэша не выведен из того, что видно на картинке (backend уже делает sha256 SVG, Rule 69) | architect Step 4 |
+| #875 | F4 круга 1 (просроченный fallback языка не удаляется) — ложная находка: удаление на `language.ts:58` до проверки `until`; подтверждено архитектором и ревьюером круга 2 | — | unverified-claim | Находка не сверена со строкой выше | reviewer Step 3 |
+| #875 | m1-m4 круга 2: устаревшие комментарии (`telegram-file-ids.ts:19` «by session», `timing.ts`/`language.ts` «only by POST /users/start» при вставке OAuth `upsertUser`, `pairs-cache.ts:4`), недостижимая ветка `begin` в `detached.ts:34-40` (https://github.com/ChaoticMelnik/binarius/pull/936#pullrequestreview-5728289631) | Minor | other | — | implementer Step 5 |
+
+### Предложения по процессу
+1. Исключить `.claude/worktrees/**` из индекса CodeGraph основной копии (конфиг `.codegraph`): worktree прошлых сессий дают ложные совпадения `codegraph_callers`/`codegraph_context` (#875) — **открыто (2026-11-01, владелец)**
+2. architect → Plan Update: номера новых мутаций продолжают последнюю таблицу мутаций PR, а не список исходного плана (#875 M22-M28 против M22-M42 ветки) — **открыто (2026-11-01, владелец)**
