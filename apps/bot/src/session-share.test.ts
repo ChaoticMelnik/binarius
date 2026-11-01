@@ -1,8 +1,16 @@
 import type { ApiError } from 'grammy/types';
-import { describe, expect, it, vi } from 'vitest';
-import { referralLinkOf, TradeIntentStatus, TradingSessionStatus } from '@binarius/shared';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  BOT_TEXT_DEFAULT_SOURCES,
+  BotLanguage,
+  referralLinkOf,
+  TradeIntentStatus,
+  TradingSessionStatus,
+} from '@binarius/shared';
+import { botTextSourcesWith } from '@binarius/shared/testing';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import { createBot } from './bot';
+import type { UserLanguages } from './language';
 import { INLINE_QUERY_LIMIT, SHARE_PATTERN, shareFallbackLink, shareQuery } from './session-share';
 import {
   BOT_INFO,
@@ -24,9 +32,11 @@ import {
   stubTracker,
   type ApiCall,
   stubShownSignals,
+  stubTextSource,
   detachedWork,
+  userLanguagesWith,
 } from './testing';
-import { sessionShareCaption } from './texts';
+import { sessionShareCaption, setBotTextSources } from './texts';
 
 const STORAGE_CHAT_ID = -1001234567890;
 const QUERY = shareQuery(SESSION_ID);
@@ -37,7 +47,11 @@ const DONE = sessionShare();
 const CAPTION = sessionShareCaption(referralLinkOf(BOT_INFO.username, SHARE_REFERRAL_CODE)).value;
 
 function setup(
-  options: { readSessionShare?: BackendClient['readSessionShare']; storageOff?: true } = {},
+  options: {
+    readSessionShare?: BackendClient['readSessionShare'];
+    storageOff?: true;
+    languages?: UserLanguages;
+  } = {},
 ) {
   const readSessionShare = vi.fn<BackendClient['readSessionShare']>(
     options.readSessionShare ?? (() => Promise.resolve(DONE)),
@@ -54,6 +68,7 @@ function setup(
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
     detached: detachedWork(),
+    ...(options.languages === undefined ? {} : { languages: options.languages }),
     ...(options.storageOff === true ? {} : { shareStorageChatId: STORAGE_CHAT_ID }),
   });
   const api = captureApi(bot);
@@ -86,6 +101,21 @@ const photoResult = (fileId: string, caption = CAPTION) => ({
   is_personal: true,
 });
 
+// the file id each answer carried
+const answeredIds = (calls: readonly ApiCall[]) =>
+  answersOf(calls).map(
+    (answer) => (answer.results as { photo_file_id?: string }[] | undefined)?.[0]?.photo_file_id,
+  );
+
+// every post answered with a file id of its own: promo-1, promo-2, …
+function numberedPosts(scene: ReturnType<typeof setup>) {
+  let posted = 0;
+  scene.answers.set('sendPhoto', (payload) => {
+    posted += 1;
+    return photoAnswer(900 + posted, [`promo-${String(posted)}`])(payload);
+  });
+}
+
 describe('the share query (#321, #538)', () => {
   it('carries the session id alone, well under the inline query limit', () => {
     expect(QUERY).toBe(`share:${SESSION_ID}`);
@@ -101,6 +131,8 @@ describe('the share query (#321, #538)', () => {
 });
 
 describe('the inline share answer (#538)', () => {
+  afterEach(() => setBotTextSources(BOT_TEXT_DEFAULT_SOURCES));
+
   it('S1 draws the promo card, posts it to the storage channel and answers with its file id', async () => {
     const scene = setup();
     await scene.ask(QUERY);
@@ -289,7 +321,7 @@ describe('the inline share answer (#538)', () => {
     expect(answersOf(scene.calls)).toEqual([photoResult(PROMO_FILE_ID)]);
   });
 
-  // #875, Rule 72: one drawing and one post per session and process
+  // #875, Rule 72: one drawing and one post per picture and process
   it('S11 a second query of the same session is answered by the kept file id, nothing drawn or posted', async () => {
     const scene = setup();
     await scene.ask(QUERY);
@@ -316,6 +348,44 @@ describe('the inline share answer (#538)', () => {
     await scene.ask(QUERY);
     expect(postsOf(scene.calls)).toHaveLength(2);
     expect(answersOf(scene.calls)).toHaveLength(3);
+    expect(warnings(scene.logger)).toEqual(['inline query not answered']);
+  });
+
+  it('S14 the same session after a language change is drawn and posted again', async () => {
+    const languages = userLanguagesWith();
+    const scene = setup({ languages });
+    numberedPosts(scene);
+    await scene.ask(QUERY);
+    languages.set(USER.id, BotLanguage.En);
+    await scene.ask(QUERY);
+    expect(postsOf(scene.calls)).toHaveLength(2);
+    expect(answeredIds(scene.calls)).toEqual(['promo-1', 'promo-2']);
+  });
+
+  it('S15 the same session after a text override of the card is drawn and posted again', async () => {
+    const scene = setup();
+    numberedPosts(scene);
+    await scene.ask(QUERY);
+    setBotTextSources(botTextSourcesWith(BotLanguage.Ru, stubTextSource('sessionPromoResult')));
+    await scene.ask(QUERY);
+    expect(postsOf(scene.calls)).toHaveLength(2);
+    expect(answeredIds(scene.calls)).toEqual(['promo-1', 'promo-2']);
+  });
+
+  it('S16 a kept file id refused for an expired query stays kept: nothing posted again', async () => {
+    const scene = setup();
+    await scene.ask(QUERY);
+    scene.apiErrors.set('answerInlineQuery', {
+      ok: false,
+      error_code: 400,
+      description:
+        'Bad Request: query is too old and response timeout expired or query ID is invalid',
+    });
+    await scene.ask(QUERY);
+    scene.apiErrors.delete('answerInlineQuery');
+    await scene.ask(QUERY);
+    expect(postsOf(scene.calls)).toHaveLength(1);
+    expect(answeredIds(scene.calls)).toEqual([PROMO_FILE_ID, PROMO_FILE_ID, PROMO_FILE_ID]);
     expect(warnings(scene.logger)).toEqual(['inline query not answered']);
   });
 

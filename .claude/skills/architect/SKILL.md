@@ -280,7 +280,8 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 69. **Карточка итогов дня** — сутки по поясу и часу из `mailing.ts`, цифры только SQL раздельно по режимам, итоги одним InitPlan; рендер вне event loop, одна загрузка на хеш SVG → `rules/bot-ui.md`
 70. **Опрос бота — параллельно по пользователям** — свой цикл над grammY: обработчиков не больше `POLLING_CONCURRENCY` (по одному на пользователя), ждущих за ними не больше `POLLING_WAITING_MAX`, порядок внутри пользователя по `from.id`, offset следующим `getUpdates` и на стопе; правки ожидания через token bucket с приоритетом сигнала → `rules/core.md`
 71. **Окно бюджета GET worker'а при старте процесса** — бюджет создаётся с окном, занятым на `carriedOver` GET (production — весь потолок), первый GET циклов нового процесса не раньше 60 с; окно, пересекающее рестарт, ≤ потолка → `rules/trading.md`
-72. **Повторные медиа бота и карточки вне event loop** — картинка или анимация, которую бот шлёт повторно, — `createMediaFiles`: файл до первого `file_id`, отказ файла забывает id; карточки сессии и промо — `renderAsync`; `file_id` промо — LRU по сессии после чтения владельца → `rules/bot-ui.md`
+72. **Повторные медиа бота и карточки вне event loop** — картинка или анимация, которую бот шлёт повторно, — `createMediaFiles`: файл до первого `file_id`, отказ файла забывает id; карточки сессии и промо — `renderAsync`; `file_id` промо — LRU по хешу SVG после чтения владельца → `rules/bot-ui.md`
+73. **Закрепление карточки по чату** — unpin+pin — `detached.run(chatId, …)`: одна работа чата за раз, новая заменяет ждущую, последней закрепляется новейшая карточка → `rules/bot-ui.md`
 
 ### Map: path → rules
 
@@ -312,7 +313,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `apps/backend/src/trading` | core 3, 5, 7, 17, 26, 52; trading 21, 22, 23, 28, 33, 36; signal-h1 20, 42, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 58, 59, 62, 66; auth 12, 13, 60 |
 | `apps/backend/src/users` | core 3, 5, 7, 17; trading 22, 33, 36; bot-ui 19, 29, 30; auth 12, 13 |
 | `apps/bot` | core 26, 52; signal-h1 20, 43 |
-| `apps/bot/src` | core 8, 10, 14, 26, 51, 52, 65, 70; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62, 66, 67, 72; payments 39; auth 12, 13 |
+| `apps/bot/src` | core 8, 10, 14, 26, 51, 52, 65, 70; trading 22, 23, 27, 28, 33, 36, 50; signal-h1 20, 41, 44, 45, 48, 55; bot-ui 18, 19, 29, 30, 31, 46, 47, 49, 58, 59, 62, 66, 67, 72, 73; payments 39; auth 12, 13 |
 | `apps/trading-worker` | signal-h1 20, 43 |
 | `apps/trading-worker/src` | core 10, 16, 51; trading 22, 23, 27, 28, 32, 33, 53, 54, 64, 71; signal-h1 44, 45; bot-ui 18, 67 |
 | `apps/trading-worker/src/broker` | core 10, 26; trading 21, 22, 27, 32, 53, 64, 71; auth 12, 60 |
@@ -332,7 +333,7 @@ N. **Название (#issue, `путь/к/коду.ts`; docs/<domain>.md → �
 | `docs/bonus-rules.md` | payments 40 |
 | `docs/bot-demo-trade.md` | bot-ui 29 |
 | `docs/bot-demo.md` | bot-ui 46, 58 |
-| `docs/bot-menu.md` | bot-ui 72 |
+| `docs/bot-menu.md` | bot-ui 72, 73 |
 | `docs/bot-navigation.md` | bot-ui 31, 49, 61 |
 | `docs/bot-session.md` | trading 28; bot-ui 47, 59, 61, 62, 66, 72 |
 | `docs/bot-start.md` | core 70 |

@@ -95,7 +95,8 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
 - `apps/bot/src/session-share.ts` (#321, #538) — `shareQuery`, `SHARE_PATTERN`,
   `INLINE_QUERY_LIMIT`, `shareFallbackLink`, `shareButton` (the row the summary's send carries,
   #875) and `createSessionShareComposer({ backend, logger, storageChatId })`: the inline query, its
-  promo card's `file_id` kept by session (`PROMO_FILE_IDS_MAX`), and the chosen result.
+  promo card's `file_id` kept by the picture's sha256 (`PROMO_FILE_IDS_MAX`), and the chosen
+  result.
   `bot.ts` mounts it on the bot itself, not under the private-chat filter: inline updates carry
   no chat.
 - `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
@@ -1824,11 +1825,13 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 - **The storage channel.** `sendPhotoToStorage(api, SHARE_STORAGE_CHAT_ID, png)` posts the PNG
   without sound, without a caption or a keyboard; the answer names the largest size's `file_id`
   (`photo.at(-1)`). Posts are never deleted: Bot API does not document that a `file_id` outlives
-  its message, so nothing relies on it. Since #875 the `file_id` is kept by session in the process
-  (an LRU of `PROMO_FILE_IDS_MAX`, 10 000): a second query for the same session, after the owner's
-  read (Rule 13: always first), is answered by it with nothing drawn or posted; an answer refused
-  for its file forgets it, so the next query draws and posts again; a restart draws again. One
-  post per session and process after Telegram's 300 s cache; a refused
+  its message, so nothing relies on it. Since #875 the `file_id` is kept in the process by the
+  SVG's sha256 (an LRU of `PROMO_FILE_IDS_MAX`, 10 000), so a language or a text override changes
+  the key and the card is drawn anew: a second query for the same picture, after the owner's read
+  (Rule 13: always first), is answered by it with nothing posted (the SVG is built again, the PNG
+  is not); an answer refused for its file forgets it, so the next query draws and posts again,
+  while one refused as an expired query («query is too old…») keeps it; a restart draws again. One
+  post per picture and process after Telegram's 300 s cache; a refused
   post (403 the bot is not an admin, 400 the chat is wrong, 429 the channel's ≈ 20 messages a
   minute) → `trading session promo not uploaded` and the empty answer, no retry.
 - **The result** is `InlineQueryResultCachedPhoto` with `id` = the session's id, the posted

@@ -141,9 +141,12 @@ Then `pinCard`: `unpinAllChatMessages`, then `pinChatMessage` without a notifica
 failure is one `warn` (`the old pins were not cleared`, `the status card was not pinned`) and
 nothing else changes. Since #875 the two run off the user's chain (`detached.ts`): they start on
 a timer once the handler has returned, so the user's next update does not wait for them; a throw
-out of them is `error` `detached work failed`. The shutdown stops that work beside the drain of the
-handlers: a pin not started yet, or handed off after the stop, is dropped (the next `/start` pins),
-one started is waited for, at most `DETACHED_DRAIN_MS` (2 × 8 000).
+out of them is `error` `detached work failed`. One chat's pins run one at a time, in the order
+handed off, and a newer one replaces a pin still waiting for that chat (Rule 73): two `/start` in
+a row, or a `/start` right after the login's account card, end with the newer card pinned last.
+The shutdown stops that work beside the drain of the handlers: a pin not started yet (a waiting
+one too), or handed off after the stop, is dropped (the next `/start` pins), one started is waited
+for, at most `DETACHED_DRAIN_MS` (2 × 8 000).
 
 So the pinned message is the latest card with the balance. The account card stays in the chat
 history but loses its pin; a lost or unpinned account card is replaced by `/start` or `/menu`.

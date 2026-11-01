@@ -729,6 +729,78 @@ describe('the status card', () => {
     expect(sentPayload(scene.calls, 'pinChatMessage')?.message_id).toBe(CARD_MESSAGE_ID);
   });
 
+  // two cards in a row with the first unpin held (#875 review F1): message ids 601, 602, … and the
+  // first unpinAllChatMessages answered when the test says so
+  function heldPinScene() {
+    const scene = setup({ user: ACTIVE });
+    let nextId = 601;
+    scene.answers.set('sendPhoto', (payload) => photoAnswer(nextId++, CARD_FILE_IDS)(payload));
+    let release: (() => void) | undefined;
+    let held = false;
+    scene.answers.set('unpinAllChatMessages', () => {
+      if (held) return true;
+      held = true;
+      return new Promise<true>((resolve) => {
+        release = () => {
+          resolve(true);
+        };
+      });
+    });
+    const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+    const pinMethods = () =>
+      scene.calls
+        .filter(
+          (call) => call.method === 'unpinAllChatMessages' || call.method === 'pinChatMessage',
+        )
+        .map((call) =>
+          call.method === 'pinChatMessage' ? `pin ${String(call.payload.message_id)}` : 'unpin',
+        );
+    const pinned = () =>
+      scene.calls
+        .filter((call) => call.method === 'pinChatMessage')
+        .map((call) => call.payload.message_id);
+    return { scene, release: () => release?.(), tick, pinMethods, pinned };
+  }
+
+  it('H-pin4 two /start with the first unpin held: the second card is pinned last', async () => {
+    const { scene, release, tick, pinMethods, pinned } = heldPinScene();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    expect(pinMethods()).toEqual(['unpin']);
+    release();
+    await scene.detached.settled();
+    expect(pinMethods()).toEqual(['unpin', 'pin 601', 'unpin', 'pin 602']);
+    expect(pinned().at(-1)).toBe(602);
+  });
+
+  it('H-pin5 three /start with the first unpin held: the middle card is never pinned', async () => {
+    const { scene, release, tick, pinned } = heldPinScene();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    release();
+    await scene.detached.settled();
+    expect(pinned()).toEqual([601, 603]);
+  });
+
+  it('H-pin6 the account card after a login, then /start: the status card is pinned last', async () => {
+    const { scene, release, tick, pinned } = heldPinScene();
+    await scene.handleOnly(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)));
+    await tick();
+    await scene.handleOnly(textUpdate('/start'));
+    await tick();
+    release();
+    await scene.detached.settled();
+    // 601 is the account card, 602 the status card: one chat, one queue, whatever the card
+    expect(scene.calls.filter((call) => call.method === 'sendPhoto')).toHaveLength(2);
+    expect(pinned()).toEqual([601, 602]);
+  });
+
   it('names the status card when the pin is refused', async () => {
     const scene = setup({ user: ACTIVE });
     scene.apiErrors.set('pinChatMessage', {
