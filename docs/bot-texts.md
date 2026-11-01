@@ -503,7 +503,8 @@ language: an English override changes the English text only, and a Russian one t
   users, oldest out, no TTL: the two writers above are the INSERT and this bot), filled by every
   `/users/start` answer and by the language screen; a user not cached is read once per process
   with `GET /users/language` in `LANGUAGE_READ_TIMEOUT_MS` (2 s). No row yet: the client's language
-  by the rule, not cached; a failed read: the same, a `warn` `user language not read`, not cached,
+  by the rule, kept `LANGUAGE_MISSING_TTL_MS` (60 s, #875) so the updates before the first `/start`
+  do not read again — the `/users/start` answer replaces it with no TTL; a failed read: the same, a `warn` `user language not read`, not cached,
   so the next update reads again. Only an update the bot can answer is read — a private chat's
   message, button or chat-member update, an inline query, a pre-checkout query; a group's or
   channel's update and `chosen_inline_result` take the client's language with no read (manager's

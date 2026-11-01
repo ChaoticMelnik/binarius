@@ -56,6 +56,10 @@ export const LANGUAGE_READ_TIMEOUT_MS = 2_000;
 // The cache of users' languages: one entry per user who wrote since the start, the oldest out
 // first past this many.
 export const LANGUAGE_CACHE_MAX = 10_000;
+// A user with no language row (#875, language.ts): the Telegram client's language kept this long,
+// so updates before the first /start do not read again. Rows are made only by POST /users/start of
+// this same bot, which fills the cache itself; the bound is for a second process.
+export const LANGUAGE_MISSING_TTL_MS = 60_000;
 
 // The Bot API calls onStart makes one after another before the first getUpdates: the command
 // menu, the description, the short description (lifecycle.ts). Not a handler path — no update is
@@ -76,14 +80,14 @@ export const STARTUP_BUDGET_MS =
 // calls the handlers actually make. A new handler, or a new terminal branch of one, has to be
 // added here and to that test by hand: grammY keeps no registry of handlers to enumerate.
 export const HANDLER_CALLS = {
-  // recordStart, readTradingAccess for an active account, then the status card: sendPhoto
-  // refused by Telegram (GrammyError) → sendMessage, unpinAllChatMessages, pinChatMessage. The
-  // welcome (sendVideo refused → sendMessage) is shorter.
-  start: { backend: 2, telegram: 4 },
+  // recordStart ∥ readTradingAccess (#875) — counted as sequential, as in confirm — then the
+  // status card: sendPhoto refused by Telegram (GrammyError) → sendMessage; its unpin and pin run
+  // off the chain (detached.ts, DETACHED_DRAIN_MS). The welcome (sendVideo refused → sendMessage)
+  // is the same.
+  start: { backend: 2, telegram: 2 },
   // /menu: /start's path without a payload
-  menu: { backend: 2, telegram: 4 },
-  // «🏠 В меню» (#350): answerCallbackQuery, then /menu's path without the unpin and the pin, which
-  // would make it 2 / 5 = 50 s, the shutdown budget itself
+  menu: { backend: 2, telegram: 2 },
+  // «🏠 В меню» (#350): answerCallbackQuery, then /menu's path; the card is not pinned
   menuButton: { backend: 2, telegram: 3 },
   // «🔄 Повторить» of /account, /settings or /invite (#350, #115): answerCallbackQuery, then the
   // command
@@ -123,13 +127,16 @@ export const HANDLER_CALLS = {
   legacyKeyboard: { backend: 0, telegram: 2 },
   // «📊 Анализ» (#126): answerCallbackQuery ∥ readPairs ∥ readTradingAccess — the reads counted
   // as sequential, as in confirm; the access read gives the mode the session row and the card's
-  // amounts depend on (#121, #482) — then «⏳», evaluateSignal and the result. The longest paths
-  // (#482): «⏳» edited (or sent at once under a photo), the card's sendPhoto, «⏳»'s deleteMessage;
-  // «⏳» edited, the photo refused, «⏳» edited into the text card; «⏳» sent under a photo, the
-  // text result's edit refused as gone → sendMessage; without a signal (#859) «⏳» edited, its
-  // editMessageMedia into the animation refused as gone → sendAnimation, or for its file → «⏳»'s
-  // editMessageText. A gone «⏳» is not sent anew, which would make the card's path 3 / 5 = 55 s.
-  // All are 3 / 4, 47 s: the longest handler, with sessionStart (#418), under SHUTDOWN_BUDGET_MS.
+  // amounts depend on (#121, #482), and runs beside «⏳» since #875 — then «⏳», evaluateSignal and
+  // the result. The card is «⏳» edited into it (editMessageMedia, #875), 3 / 3. The longest paths:
+  // «⏳» edited (or sent at once under a photo), its edit into the card refused (for its file or a
+  // 429) → «⏳» edited into the text card, or refused as gone → the card's sendPhoto (refused:
+  // nothing more), or failing in transport → «⏳» says the analysis is unavailable; «⏳» gone, the
+  // card's sendPhoto refused → sendMessage; «⏳» sent under a photo, the text result's edit refused
+  // as gone → sendMessage; without a signal (#859) «⏳» edited, its editMessageMedia into the
+  // animation refused as gone → sendAnimation, or for its file → «⏳»'s editMessageText. A gone «⏳»
+  // is not sent anew, which would make the card's path 3 / 5 = 55 s. All are 3 / 4, 47 s: the
+  // longest handler, with sessionStart (#418), under SHUTDOWN_BUDGET_MS.
   demoAnalysis: { backend: 3, telegram: 4 },
   // «➕ Ещё» (#360): answerCallbackQuery ∥ readTradingAccess — counted as sequential, as in
   // confirm — then editMessageReplyMarkup; a refused edit sends nothing more
@@ -205,14 +212,14 @@ export const HANDLER_CALLS = {
   oauth: { backend: 0, telegram: 2 },
   // answerCallbackQuery ∥ confirmLogin — the parallel pair is counted as sequential, so this bound
   // is loose by BACKEND_REQUEST_TIMEOUT_MS (accepted) — then the account card:
-  // sendPhoto refused by Telegram (GrammyError) → sendMessage, unpinAllChatMessages, pinChatMessage
-  confirm: { backend: 1, telegram: 5 },
+  // sendPhoto refused by Telegram (GrammyError) → sendMessage; its pin off the chain (#875)
+  confirm: { backend: 1, telegram: 3 },
   // a text on the address step: sendEmailCode, then sendMessage
   emailStep: { backend: 1, telegram: 1 },
   // a text on the code step: emailLogin, the recheck through recordStart when its outcome is
   // not a definite refusal and the recheck finds the account active, then the account card as
-  // in confirm: sendPhoto refused → sendMessage, unpinAllChatMessages, pinChatMessage
-  codeStep: { backend: 2, telegram: 4 },
+  // in confirm: sendPhoto refused → sendMessage, its pin off the chain (#875)
+  codeStep: { backend: 2, telegram: 2 },
   // answerCallbackQuery ∥ sendEmailCode, then sendMessage — counted the same way as confirm
   resend: { backend: 1, telegram: 2 },
   // my_chat_member in a private chat: recordChatMember; nothing is sent
@@ -293,6 +300,15 @@ export const handlerBudgetMs = ({
 export const HANDLER_BUDGET_MS = Math.max(...Object.values(HANDLER_CALLS).map(handlerBudgetMs));
 // bot.stop() plus whatever middleware is still in flight.
 export const SHUTDOWN_BUDGET_MS = 50_000;
+// The cards' unpin and pin handed off the users' chains (#875, detached.ts): what its stop() can
+// be waiting for, one of each. It runs beside the drain of the handlers.
+export const DETACHED_DRAIN_MS = 2 * TELEGRAM_API_TIMEOUT_MS;
+// The pairs catalog kept for every reader of the process (#875, pairs-cache.ts): one GET
+// /trading/pairs a second at most, however many press or wait. The wait for a signal's tick reads
+// it once a period, so a kept answer is never older than one tick (the chain below); on top of the
+// backend's own snapshot age (MAX_BROKER_PAIRS_TTL_MS, 60 s, packages/broker-rest — not a
+// dependency of the bot, so stated, not checked).
+export const PAIRS_CACHE_TTL_MS = 1_000;
 // The polling loop's sleep after a failed getUpdates or deleteWebhook (polling.ts): a transport
 // failure or a refusal other than 401, 409 and 429 — those stop the loop, and a 429 sleeps its own
 // retry_after. The stop interrupts the sleep; the link below covers a call that does not.
@@ -327,13 +343,12 @@ export const SESSION_TRACK_DEADLINE_MS = SESSION_MAX_DURATION_MS + 600_000;
 // its one retry, Telegram's retry_after capped at this.
 export const SESSION_SUMMARY_RETRY_WAIT_MS = 5_000;
 // What sessionTracker.stop() can be waiting for: an attempt's readSession and edit, then for a
-// finished session its summary's claim and sendPhoto (#318, #537), on a 429 the wait and the
-// photo again, and the editMessageReplyMarkup that puts «📤 Поделиться» on it (#321); a photo
-// refused for good goes as a text instead of the retry, the same count less the wait. A lost
-// message (#567) is shorter: the read, the poll's failed edit, the deadline's last edit refused
-// for good and the report of it, 2B + 2T.
+// finished session its summary's claim and sendPhoto (#318, #537) with «📤 Поделиться» in it
+// (#321, #875), on a 429 the wait and the photo again; a photo refused for good goes as a text
+// instead of the retry, the same count less the wait. A lost message (#567) is shorter: the read,
+// the poll's failed edit, the deadline's last edit refused for good and the report of it, 2B + 2T.
 export const SESSION_TRACK_DRAIN_MS =
-  2 * BACKEND_REQUEST_TIMEOUT_MS + 4 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS;
+  2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS;
 
 // The recovery of session tracking after a restart (#567, session-resume.ts): a pass at the
 // start and one every 10 minutes, each one list request and one catalog read per bot process.
@@ -344,7 +359,7 @@ export const SESSION_RESUME_INTERVAL_MS = 600_000;
 export const SESSION_RESUME_DRAIN_MS = 2 * BACKEND_REQUEST_TIMEOUT_MS;
 // The pace of the recovered entries' first polls (session-tracker.ts → resumeGapMs): each is one
 // readSession, at most one editMessageText and, for a session whose card is due, its sendPhoto
-// and editMessageReplyMarkup. 4 a second lays a full list (TRACKED_SESSIONS_MAX) out within one
+// (#875: «📤 Поделиться» in it). 4 a second lays a full list (TRACKED_SESSIONS_MAX) out within one
 // interval of the bot's start, the task's 10 minutes; it comes on top of the backend's 20 + 9 a
 // second on the same token (docs/bot-session.md → Accepted risks, 47).
 export const SESSION_RESUME_PER_SECOND = 4;
@@ -511,6 +526,8 @@ const TIMING_CHAIN_HOLDS =
   SESSION_MAX_DURATION_MS < SESSION_TRACK_DEADLINE_MS &&
   SESSION_TRACK_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
   SESSION_RESUME_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  DETACHED_DRAIN_MS < SHUTDOWN_BUDGET_MS &&
+  PAIRS_CACHE_TTL_MS <= SIGNAL_WAIT_POLL_MS &&
   // a live bot claims a tracked session's summary before the backend's fallback may (#537): two
   // recovery passes come within its grace
   2 * SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS &&

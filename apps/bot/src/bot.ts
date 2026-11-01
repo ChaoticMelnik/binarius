@@ -1,9 +1,10 @@
-import { Bot, GrammyError, HttpError, InputFile, type Context } from 'grammy';
+import { Bot, GrammyError, HttpError, type Context } from 'grammy';
 import type { Message, User, UserFromGetMe } from 'grammy/types';
 import {
   ButtonRole,
   callbackButton,
   editRefusal,
+  fileRefusal,
   keyboardOf,
   BrokerAccountStatus,
   BrokerBalanceUnavailableReason,
@@ -31,6 +32,7 @@ import {
   type EmailSendCodeResponse,
   type LinkedAccountView,
   type PendingBrokerAccountView,
+  type TradingAccessResponse,
   type UserStartRequest,
   COMMAND_RETRY_PATTERN,
   commandRetryCallbackData,
@@ -70,6 +72,9 @@ import { createPaysupportComposer } from './paysupport';
 import { createPreCheckoutComposer, createStarsComposer } from './stars';
 import { createTradingModeComposer } from './trading-mode';
 import { createLanguageScreenComposer } from './language-screen';
+import type { DetachedWork } from './detached';
+import { createMediaFiles } from './media-files';
+import { settle, type Settled } from './settled';
 import { createScanMedia } from './scan-media';
 import { createSetupCardPhotos } from './setup-card';
 import { createTradingSessionComposer } from './trading-session';
@@ -130,6 +135,10 @@ interface RichSend {
   send: () => Promise<Message>;
   method: 'sendVideo' | 'sendPhoto';
   what: string;
+  // whether the rich call named its file by file_id: a field of the refusal's warn
+  byFileId?: boolean;
+  // told of a refusal before the text goes
+  refused?: (error: GrammyError) => void;
 }
 
 export interface CreateBotOptions {
@@ -166,6 +175,9 @@ export interface CreateBotOptions {
   languages?: UserLanguages;
   // the wait before the summary's photo again after a 429 (#537); a test records it
   sleep?: (ms: number) => Promise<void>;
+  // the unpin and the pin of a card, off the user's chain (#875, detached.ts); required, so no
+  // test arms timers unasked
+  detached: Pick<DetachedWork, 'run'>;
 }
 
 export function createBot({
@@ -187,6 +199,7 @@ export function createBot({
   shownSignals,
   languages = createUserLanguages(),
   sleep,
+  detached,
 }: CreateBotOptions): Bot {
   const backend = rememberingLanguages(client, languages);
   const bot = new Bot(token, {
@@ -198,6 +211,11 @@ export function createBot({
     },
   });
   const retryLog = createTelegramRetryLog({ logger });
+  const accountCardPhoto = createMediaFiles(
+    { card: ACCOUNT_CARD_PHOTO_PATH },
+    logger,
+    'the account card picture',
+  );
   bot.api.config.use((prev, method, payload, signal) =>
     retryLog.call(method, () => prev(method, payload, signal), signal),
   );
@@ -258,8 +276,8 @@ export function createBot({
     await answerHome(ctx, from, startRequestOf(from), '/menu');
   });
 
-  // «🏠 В меню» (#350): /menu's path, but the card is not pinned. The answer and the pin would put
-  // the path at the shutdown budget (timing.ts); the card pinned stays the last /start or /menu.
+  // «🏠 В меню» (#350): /menu's path, but the card is not pinned: the card pinned stays the last
+  // /start or /menu.
   privateChats.callbackQuery(MENU_CALLBACK_DATA, async (ctx) => {
     await ctx.answerCallbackQuery().catch(logAnswerFailure);
     await answerHome(ctx, ctx.from, startRequestOf(ctx.from), 'the menu button', { pin: false });
@@ -287,7 +305,9 @@ export function createBot({
   });
 
   // /start, /menu and «🏠 В меню»: blocked, then a waiting link, then the status card for an
-  // active account, otherwise the welcome. `command` only names the warn line.
+  // active account, otherwise the welcome. `command` only names the warn line. The card's access
+  // read goes beside the record (#875): its answer is read only for an active account, and dropped
+  // unlogged otherwise — a new user's 404 included.
   async function answerHome(
     ctx: Context,
     from: User,
@@ -295,6 +315,7 @@ export function createBot({
     command: '/start' | '/menu' | 'the menu button',
     { pin }: { pin: boolean } = { pin: true },
   ): Promise<void> {
+    const access = settle(backend.readTradingAccess(String(from.id)));
     let user;
     try {
       user = await backend.recordStart(request);
@@ -320,7 +341,7 @@ export function createBot({
       return;
     }
     if (user.hasActiveBrokerAccount) {
-      await sendStatusCard(ctx, from, pin);
+      await sendStatusCard(ctx, from, pin, await access);
       return;
     }
     await sendWelcome(ctx);
@@ -328,20 +349,23 @@ export function createBot({
 
   // The numbers are read on every /start and /menu and cached nowhere, so the card is at most
   // the backend's freshness SLA old or says how old it is (docs/bot-menu.md).
-  async function sendStatusCard(ctx: Context, from: User, pin: boolean): Promise<void> {
-    let access;
-    try {
-      access = await backend.readTradingAccess(String(from.id));
-    } catch (error) {
-      // user_not_found included: /users/start has just upserted the row, so it is not "no
+  async function sendStatusCard(
+    ctx: Context,
+    from: User,
+    pin: boolean,
+    read: Settled<TradingAccessResponse>,
+  ): Promise<void> {
+    if (!read.ok) {
+      // user_not_found included: /users/start answered an active account, so it is not "no
       // account" but a backend that contradicts itself
       logger.warn(
-        { ...errorLogFields(error), ...backendErrorFields(error) },
+        { ...errorLogFields(read.error), ...backendErrorFields(read.error) },
         'trading access not read',
       );
       await replyHtml(ctx, TEXTS.unavailable, { reply_markup: homeRetryKeyboard() });
       return;
     }
+    const access = read.value;
     if (access.status === UserStatus.Blocked) {
       await replyHtml(ctx, TEXTS.blocked, { reply_markup: supportKeyboard() });
       return;
@@ -363,16 +387,13 @@ export function createBot({
     const reply_markup = statusCardKeyboard(access.tradingMode, cashierUrl);
     const sent = await sendWithTextFallback(
       ctx,
-      {
-        send: () =>
-          replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card, { reply_markup }),
-        method: 'sendPhoto',
-        what: 'the status card photo',
-      },
+      accountCardSend('the status card photo', () =>
+        replyWithPhotoHtml(ctx, accountCardPhoto.file('card'), card, { reply_markup }),
+      ),
       () => replyHtml(ctx, card, { reply_markup }),
     );
     if (sent === undefined || !pin) return;
-    await pinCard(ctx, sent.message_id, 'the status card');
+    detached.run(() => pinCard(ctx, sent.message_id, 'the status card'));
   }
 
   // Reads only: the users row is not refreshed and nothing is recorded, so the row is written only
@@ -864,9 +885,14 @@ export function createBot({
     } catch (error) {
       if (error instanceof GrammyError) {
         logger.warn(
-          { ...errorLogFields(error), ...telegramErrorFields(error) },
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error),
+            ...(rich.byFileId === undefined ? {} : { byFileId: rich.byFileId }),
+          },
           `${rich.what} was refused, sending the text instead`,
         );
+        rich.refused?.(error);
       } else if (error instanceof HttpError) {
         logTransportFailure(ctx, error, rich.method, `${rich.what} call`);
         return undefined;
@@ -894,6 +920,27 @@ export function createBot({
     );
   }
 
+  // The status card and the account card share one picture, sent by its file_id once an answer
+  // brings one (Rule 72); a refused file forgets the id, a 429 or a 403 keeps it.
+  function accountCardSend(
+    what: 'the status card photo' | 'the account card photo',
+    send: () => Promise<Message>,
+  ): RichSend {
+    return {
+      byFileId: typeof accountCardPhoto.file('card') === 'string',
+      send: async () => {
+        const sent = await send();
+        accountCardPhoto.remember('card', sent);
+        return sent;
+      },
+      method: 'sendPhoto',
+      what,
+      refused: (error) => {
+        if (fileRefusal(error)) accountCardPhoto.forget('card');
+      },
+    };
+  }
+
   // The account card (#200), sent where an account becomes usable and pinned as the only pin of
   // the chat until the next /start or /menu pins the status card in its place; nothing is pinned
   // when delivery is unknown.
@@ -901,18 +948,15 @@ export function createBot({
     const card = accountCard(input);
     const sent = await sendWithTextFallback(
       ctx,
-      {
-        send: () =>
-          replyWithPhotoHtml(ctx, new InputFile(ACCOUNT_CARD_PHOTO_PATH), card, {
-            reply_markup: demoKeyboard(),
-          }),
-        method: 'sendPhoto',
-        what: 'the account card photo',
-      },
+      accountCardSend('the account card photo', () =>
+        replyWithPhotoHtml(ctx, accountCardPhoto.file('card'), card, {
+          reply_markup: demoKeyboard(),
+        }),
+      ),
       () => replyHtml(ctx, card, { reply_markup: demoKeyboard() }),
     );
     if (sent === undefined) return;
-    await pinCard(ctx, sent.message_id, 'the account card');
+    detached.run(() => pinCard(ctx, sent.message_id, 'the account card'));
   }
 
   // The /settings message re-rendered in place after a press (#120). Unlike a refused send, a

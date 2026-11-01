@@ -38,6 +38,7 @@ import {
   inlineRows,
   inlineStyles,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   MODE_CONFIRM_CALLBACK_DATA,
@@ -91,6 +92,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

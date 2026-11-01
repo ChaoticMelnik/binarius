@@ -82,6 +82,7 @@ import {
   stubSessionTracker,
   stubTracker,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { settingsText, TEXTS } from './texts';
 import {
@@ -178,6 +179,8 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     requestStarsRefund: () => Promise.reject(new Error('not used by these scenes')),
   };
   const loginDialog = createLoginDialog();
+  // the cards' pins off the chain (#875): their lines are read once they ran
+  const detached = detachedWork();
   if (scenario.dialog !== undefined) loginDialog.set(USER.id, scenario.dialog);
   const bot = createBot({
     intentTracker: stubTracker(),
@@ -185,6 +188,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached,
     token: TOKEN,
     backend,
     logger,
@@ -208,6 +212,7 @@ async function linesFrom(scenario: Scenario): Promise<{ lines: string[]; calls: 
       thrown as BotError,
     );
   }
+  await detached.settled();
   return { lines, calls: api.calls };
 }
 
@@ -1419,6 +1424,7 @@ describe('what the bot writes when a drain step fails', () => {
       sessionTracker: { stop: () => Promise.resolve() },
       sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
       signalWaiter: { stop: () => Promise.resolve() },
+      detached: { stop: () => Promise.resolve() },
       botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
       logger,
       exit: vi.fn(),
@@ -1478,6 +1484,7 @@ describe('what the bot writes when a part of the profile is not registered', () 
         sessionTracker: { stop: () => Promise.resolve() },
         sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
         signalWaiter: { stop: () => Promise.resolve() },
+        detached: { stop: () => Promise.resolve() },
         botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
         logger,
         exit: vi.fn(),
@@ -2068,6 +2075,7 @@ describe('what the bot writes about a Bot API call grammY retries (#67)', () => 
       sessionResumer: stubSessionResumer(),
       signalWaiter: stubSignalWaiter(),
       shownSignals: stubShownSignals(),
+      detached: detachedWork(),
       token: TOKEN,
       backend: fakeBackend(),
       logger,
@@ -2176,6 +2184,7 @@ describe('what the bot writes about a Bot API call grammY retries (#67)', () => 
       sessionTracker: { stop: () => Promise.resolve() },
       sessionResumer: { start: () => {}, stop: () => Promise.resolve() },
       signalWaiter: { stop: () => Promise.resolve() },
+      detached: { stop: () => Promise.resolve() },
       botTexts: { stop: () => Promise.resolve(), loaded: () => Promise.resolve() },
       logger,
       exit,

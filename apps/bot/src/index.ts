@@ -7,9 +7,11 @@ import {
 } from '@binarius/shared';
 import { backendErrorFields, createBackendClient } from './backend-client';
 import { createBot } from './bot';
+import { createDetachedWork } from './detached';
 import { parseEnv } from './env';
 import { createIntentTracker } from './intent-tracker';
 import { runBot } from './lifecycle';
+import { withPairsCache } from './pairs-cache';
 import { createPollingLoop } from './polling';
 import { createSessionResumer } from './session-resume';
 import { createSessionTracker } from './session-tracker';
@@ -21,6 +23,7 @@ import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  PAIRS_CACHE_TTL_MS,
   POLLING_CONCURRENCY,
   POLLING_RETRY_MS,
   POLLING_WAITING_MAX,
@@ -57,7 +60,11 @@ if (env.shareStorageChatId === undefined) {
   logger.warn('share button off: SHARE_STORAGE_CHAT_ID is not set');
 }
 
-const backend = createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken });
+// one catalog read for every reader of the process at a time, kept PAIRS_CACHE_TTL_MS (#875)
+const backend = withPairsCache(
+  createBackendClient({ baseUrl: env.backendUrl, token: env.internalApiToken }),
+  { ttlMs: PAIRS_CACHE_TTL_MS },
+);
 
 // A text read outside any update's language is shown in Russian (#508, language.ts): logged once
 // per process, the canary for a sender this bot does not yet run under runWithLanguage.
@@ -116,6 +123,9 @@ const signalWaiter = createSignalWaiter({
   shutdownBudgetMs: SIGNAL_WAIT_SHUTDOWN_BUDGET_MS,
 });
 
+// the cards' unpin and pin, off the users' chains (#875)
+const detached = createDetachedWork({ logger });
+
 // the texts with their overrides, from the first load on (docs/bot-texts.md → Loading)
 const botTexts = createBotTextRefresher({
   load: () => backend.readBotTexts(),
@@ -139,6 +149,7 @@ const bot = createBot({
   sessionResumer,
   signalWaiter,
   shownSignals,
+  detached,
 });
 
 runBot({
@@ -156,6 +167,7 @@ runBot({
     stop: () => sessionResumer.stop(),
   },
   signalWaiter,
+  detached,
   botTexts,
   logger,
   exit: (code) => process.exit(code),

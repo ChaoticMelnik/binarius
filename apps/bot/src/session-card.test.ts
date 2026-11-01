@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   BOT_TEXT_CATALOG,
@@ -12,6 +14,7 @@ import {
 import { botTextSourcesWith } from '@binarius/shared/testing';
 import {
   renderSessionCard,
+  SESSION_CARD_FONT_FILES,
   SESSION_CARD_HEIGHT,
   SESSION_CARD_WIDTH,
   sessionCardModel,
@@ -219,8 +222,8 @@ describe('the summary card in English (#633)', () => {
 });
 
 describe('renderSessionCard', () => {
-  it('R1 draws a PNG of the card size under 1 MB', () => {
-    const png = renderSessionCard(sessionCardSvg(sessionCardModel(MIXED, LABEL, 42)));
+  it('R1 draws a PNG of the card size under 1 MB', async () => {
+    const png = await renderSessionCard(sessionCardSvg(sessionCardModel(MIXED, LABEL, 42)));
     expect(IHDR(png)).toEqual({
       signature: '89504e470d0a1a0a',
       chunk: 'IHDR',
@@ -232,11 +235,39 @@ describe('renderSessionCard', () => {
 
   // resvg drops text it has no font for without an error: without the card's own fonts the same
   // SVG renders with no text, so equal bytes would mean the fonts are not used
-  it('R2 draws the text with the bundled fonts: without them the image differs and is smaller', () => {
+  it('R2 draws the text with the bundled fonts: without them the image differs and is smaller', async () => {
     const svg = sessionCardSvg(sessionCardModel(MIXED, LABEL, 42));
-    const withFonts = renderSessionCard(svg);
-    const withoutFonts = renderSessionCard(svg, []);
+    const withFonts = await renderSessionCard(svg);
+    const withoutFonts = await renderSessionCard(svg, []);
     expect(withoutFonts.equals(withFonts)).toBe(false);
     expect(withoutFonts.length).toBeLessThan(withFonts.length);
+  });
+
+  it('R3 renders off the event loop: a 1 ms timer ticks while the card is drawn', async () => {
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+    }, 1);
+    try {
+      await renderSessionCard(
+        sessionCardSvg(sessionCardModel(MIXED, LABEL, 42)),
+        SESSION_CARD_FONT_FILES,
+      );
+    } finally {
+      clearInterval(timer);
+    }
+    expect(ticks).toBeGreaterThanOrEqual(1);
+  });
+
+  // the class of R3 (Rule 72): no card of the bot is drawn on the event loop
+  it('R4 no code of the bot draws with the synchronous Resvg', () => {
+    const src = fileURLToPath(new URL('.', import.meta.url));
+    const drawing = readdirSync(src, { recursive: true, encoding: 'utf8' }).filter(
+      (file) =>
+        file.endsWith('.ts') &&
+        !file.endsWith('.test.ts') &&
+        readFileSync(`${src}/${file}`, 'utf8').includes('new Resvg('),
+    );
+    expect(drawing).toEqual([]);
   });
 });

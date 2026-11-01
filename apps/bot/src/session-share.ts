@@ -1,13 +1,11 @@
-import { Composer, InputFile, type Api, type Context } from 'grammy';
-import type { Message } from 'grammy/types';
+import { Composer, GrammyError, InputFile, type Context } from 'grammy';
 import {
   ButtonRole,
+  createTelegramFileIds,
   errorLogFields,
-  keyboardOf,
+  fileRefusal,
   referralLinkOf,
-  stackKeyboards,
   switchInlineButton,
-  type BotKeyboard,
   type SessionShare,
   telegramErrorFields,
   type TelegramHtml,
@@ -57,33 +55,8 @@ export const shareButton = (query: string) =>
     allow_channel_chats: true,
   });
 
-type SentCard = Pick<Message.PhotoMessage, 'chat' | 'message_id'>;
-
-// After the card is sent: the share row on top of the card's own keyboard, which the edit
-// replaces whole. A failure is a warning and nothing more — the card is already there with its
-// #318 keyboard, and a done session sends no card again, so there is no later moment to retry at.
-export async function attachShareButton(
-  api: Pick<Api, 'editMessageReplyMarkup'>,
-  logger: Logger,
-  sessionId: string,
-  sent: SentCard,
-  cardKeyboard: BotKeyboard,
-): Promise<void> {
-  try {
-    await api.editMessageReplyMarkup(sent.chat.id, sent.message_id, {
-      reply_markup: stackKeyboards(keyboardOf([shareButton(shareQuery(sessionId))]), cardKeyboard),
-    });
-  } catch (error) {
-    logger.warn(
-      {
-        ...errorLogFields(error),
-        ...telegramErrorFields(error, 'editMessageReplyMarkup'),
-        sessionId,
-      },
-      'trading session share button not attached',
-    );
-  }
-}
+// the promo cards' file_ids kept by session (#875): a bound on memory, as the session tracker's
+export const PROMO_FILE_IDS_MAX = 10_000;
 
 export interface SessionShareDeps {
   backend: Pick<BackendClient, 'readSessionShare'>;
@@ -112,6 +85,9 @@ export function createSessionShareComposer<C extends Context>({
 }: SessionShareDeps): Composer<C> {
   const composer = new Composer<C>();
   const notShared = 'trading session not shared';
+  // a card drawn and posted once per session and process; read after the owner's read, never
+  // instead of it (Rule 13, Rule 72)
+  const promoIds = createTelegramFileIds<string>({ maxEntries: PROMO_FILE_IDS_MAX });
 
   composer.inlineQuery(SHARE_PATTERN, async (ctx) => {
     const sessionId = ctx.match[1] ?? '';
@@ -150,9 +126,14 @@ export function createSessionShareComposer<C extends Context>({
       await answer(ctx, sessionId, null);
       return;
     }
+    const known = promoIds.get(sessionId);
+    if (known !== undefined) {
+      await answer(ctx, sessionId, { fileId: known, caption });
+      return;
+    }
     let fileId: string | undefined;
     try {
-      const png = renderSessionCard(
+      const png = await renderSessionCard(
         sessionPromoSvg(sessionPromoModel(share, share.session, assetId)),
       );
       const posted = await sendPhotoToStorage(
@@ -160,8 +141,8 @@ export function createSessionShareComposer<C extends Context>({
         storageChatId,
         new InputFile(png, 'promo.png'),
       );
-      // the largest size is last; any size names the same photo to Telegram
-      fileId = posted.photo.at(-1)?.file_id;
+      promoIds.remember(sessionId, posted);
+      fileId = promoIds.get(sessionId);
     } catch (error) {
       // no retry: an inline query is answered once, and the user can press again
       logger.warn(
@@ -198,7 +179,11 @@ export function createSessionShareComposer<C extends Context>({
         await answerInlineQueryPhotoHtml(ctx, { id: sessionId, fileId: card.fileId }, card.caption);
       }
     } catch (error) {
-      // a forged or foreign file id is refused here too (400): Telegram is its validator
+      // a forged or foreign file id is refused here too (400): Telegram is its validator; a stale
+      // kept id is forgotten, so the next query draws the card again
+      if (sessionId !== undefined && error instanceof GrammyError && fileRefusal(error)) {
+        promoIds.forget(sessionId);
+      }
       logger.warn(
         {
           ...errorLogFields(error),

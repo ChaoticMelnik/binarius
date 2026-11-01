@@ -46,7 +46,8 @@ demo:more:<assetId>:<sec>:<up|down>:<d|r>   («➕ Ещё» under the analysis, 
   bot → answerCallbackQuery ∥ POST /trading/access
   bot → editMessageReplyMarkup: the stake button (a new nonce, the amount's fingerprint) and «💵 Сумма»
 demo:stake:<assetId>:<sec>:<up|down>:<nonce>:<fingerprint>
-  bot → answerCallbackQuery ∥ GET /trading/pairs (readDemoTrade) ∥ POST /trading/access
+  bot → answerCallbackQuery ∥ GET /trading/pairs (readDemoTrade; through the process's 1 s cache,
+        #875, bot-demo.md → Fresh) ∥ POST /trading/access
   bot → POST /trading/intents { telegramUserId, mode: tradingMode, assetId,
                                 amount: (demoStake | realStake by mode) ?? broker.minTradeAmount,
                                 action, durationSec, clientRequestId: <mode>:<telegramUserId>:<nonce> }

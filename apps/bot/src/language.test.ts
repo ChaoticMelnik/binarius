@@ -16,6 +16,7 @@ import {
   type UserLanguages,
 } from './language';
 import { TEXTS } from './texts';
+import { LANGUAGE_MISSING_TTL_MS } from './timing';
 import {
   BOT_INFO,
   USER,
@@ -33,6 +34,7 @@ import {
   userLanguagesWith,
   userView,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 
 const EN_USER: User = { ...USER, language_code: 'en' };
@@ -56,6 +58,7 @@ const setup = (
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     languages,
   });
   const api = captureApi(bot);
@@ -92,24 +95,56 @@ describe('the language of an update (#508)', () => {
     expect(languages.get(USER.id)).toBe(BotLanguage.En);
   });
 
-  it('M3 a user with no row yet gets the language of the Telegram client, not cached, no warning', async () => {
-    const readLanguage = vi.fn<BackendClient['readLanguage']>(() =>
-      Promise.reject(
-        new BackendError(BackendErrorCode.HttpStatus, {
-          status: 404,
-          reason: UserErrorCode.UserNotFound,
-        }),
-      ),
+  const NO_ROW = () =>
+    Promise.reject(
+      new BackendError(BackendErrorCode.HttpStatus, {
+        status: 404,
+        reason: UserErrorCode.UserNotFound,
+      }),
     );
-    const { bot, api, languages, logger } = setup({ readLanguage });
+
+  it("M3' a user with no row yet gets the Telegram client's language, kept a while, no warning", async () => {
+    const readLanguage = vi.fn<BackendClient['readLanguage']>(NO_ROW);
+    const { bot, api, logger } = setup({ readLanguage });
 
     await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
     await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
 
     expect(helpText(api)).toContain(HELP_EN_HEADER);
-    expect(readLanguage).toHaveBeenCalledTimes(2);
-    expect(languages.get(USER.id)).toBeUndefined();
+    expect(readLanguage).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('M10 past LANGUAGE_MISSING_TTL_MS the language of a user with no row is read again', async () => {
+    const clock = { at: 0 };
+    const readLanguage = vi.fn<BackendClient['readLanguage']>(NO_ROW);
+    const { bot } = setup({ readLanguage }, createUserLanguages({ now: () => clock.at }));
+
+    await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
+    clock.at = LANGUAGE_MISSING_TTL_MS - 1;
+    await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
+    expect(readLanguage).toHaveBeenCalledTimes(1);
+    clock.at = LANGUAGE_MISSING_TTL_MS;
+    await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
+    expect(readLanguage).toHaveBeenCalledTimes(2);
+  });
+
+  it("M11 /start's answer replaces the kept fallback, with no TTL", async () => {
+    const clock = { at: 0 };
+    const readLanguage = vi.fn<BackendClient['readLanguage']>(NO_ROW);
+    const recordStart = vi.fn<BackendClient['recordStart']>(() =>
+      Promise.resolve(userView({ language: BotLanguage.Ru })),
+    );
+    const { bot, languages } = setup(
+      { readLanguage, recordStart },
+      createUserLanguages({ now: () => clock.at }),
+    );
+
+    await bot.handleUpdate(textUpdate('/help', 'private', EN_USER));
+    await bot.handleUpdate(textUpdate('/start', 'private', EN_USER));
+    clock.at = 10 * LANGUAGE_MISSING_TTL_MS;
+    expect(languages.get(USER.id)).toBe(BotLanguage.Ru);
+    expect(readLanguage).toHaveBeenCalledTimes(1);
   });
 
   it('M4 a failed read falls back to the Telegram client, warns with the identity and reads again next time', async () => {

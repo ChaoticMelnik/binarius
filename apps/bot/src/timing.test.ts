@@ -140,6 +140,7 @@ import {
   stubTracker,
   userLanguagesWith,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   BACKEND_REQUEST_TIMEOUT_MS,
@@ -155,6 +156,9 @@ import {
   POLLING_RETRY_MS,
   POLLING_WAITING_MAX,
   SESSION_RESUME_DRAIN_MS,
+  DETACHED_DRAIN_MS,
+  LANGUAGE_MISSING_TTL_MS,
+  PAIRS_CACHE_TTL_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_RESUME_PER_SECOND,
@@ -304,22 +308,23 @@ interface CardOutcome {
   scene: Pick<Branch, 'apiErrors' | 'answers'>;
 }
 
+// the card's unpin and pin run off the chain (#875, detached.ts): no outcome counts them
 const PHOTO_REFUSED_OUTCOME: CardOutcome = {
-  label: 'the photo is refused and the text card is sent and pinned instead',
-  telegram: 4,
+  label: 'the photo is refused and the text card is sent instead',
+  telegram: 2,
   scene: { apiErrors: [['sendPhoto', PHOTO_REFUSED]] },
 };
 
 const CARD_OUTCOMES: readonly CardOutcome[] = [
-  { label: 'the card is sent and pinned', telegram: 3, scene: {} },
+  { label: 'the card is sent', telegram: 1, scene: {} },
   {
     label: 'the old pins are not cleared',
-    telegram: 3,
+    telegram: 1,
     scene: { apiErrors: [['unpinAllChatMessages', PIN_REFUSED]] },
   },
   {
     label: 'the card is not pinned',
-    telegram: 3,
+    telegram: 1,
     scene: { apiErrors: [['pinChatMessage', PIN_REFUSED]] },
   },
   // delivery is unknown, so nothing is sent or pinned after it
@@ -525,6 +530,7 @@ async function observe(branch: Branch): Promise<Calls> {
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     token: '123456:AA-bot-token',
     backend: client,
     logger: fakeLogger(),
@@ -622,13 +628,13 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
       label: 'the backend refuses the start',
       update: update(),
       recordStart: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'the user is blocked',
       update: update(),
       recordStart: () => Promise.resolve({ ...USER_VIEW, status: UserStatus.Blocked }),
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'a link waits for confirmation',
@@ -638,7 +644,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
           ...USER_VIEW,
           pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: 'ada@example.test' }],
         }),
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'a link without an email waits for confirmation beside an active account',
@@ -648,7 +654,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
           ...ACTIVE_VIEW,
           pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }],
         }),
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     worst,
     ...CARD_OUTCOMES.map((outcome): Branch => ({
@@ -689,7 +695,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
         broker: null,
         brokerUnavailable: BrokerBalanceUnavailableReason.BrokerUnavailable,
       }),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'the snapshot is stale',
@@ -697,25 +703,25 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
       readTradingAccess: access({
         broker: brokerBalance({ restSnapshotAgeSec: 600, fresh: false }),
       }),
-      expected: { backend: 2, telegram: 3 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'no video is configured',
       update: update(),
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'the video is sent',
       update: update(),
       welcomeVideoFileId: 'BAACAgIAAxkB',
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       label: 'the video is refused and the text replaces it',
       update: update(),
       welcomeVideoFileId: 'not-a-file-id',
       apiErrors: [['sendVideo', VIDEO_REFUSED]],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       label: 'the video is refused and the text fails in transport',
@@ -725,7 +731,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
         ['sendVideo', VIDEO_REFUSED],
         ['sendMessage', textTimedOut()],
       ],
-      expected: { backend: 1, telegram: 2 },
+      expected: { backend: 2, telegram: 2 },
     },
     {
       // delivery is unknown, so nothing is sent after it
@@ -733,7 +739,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
       update: update(),
       welcomeVideoFileId: 'BAACAgIAAxkB',
       apiErrors: [['sendVideo', videoTimedOut()]],
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
     {
       // neither a refusal nor the transport: the branch rethrows into bot.catch, and whatever it
@@ -749,7 +755,7 @@ function homeBranches(command: '/start' | '/menu'): { branches: Branch[]; worst:
           },
         ],
       ],
-      expected: { backend: 1, telegram: 1 },
+      expected: { backend: 2, telegram: 1 },
     },
   ];
   return { branches, worst };
@@ -1160,9 +1166,15 @@ const DELETE_FORBIDDEN: ApiError = {
 const analysisUpdate = () => callbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
 const analysisOnPhoto = () => photoCallbackUpdate(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
 const noSignal = () => Promise.resolve(SIGNAL_NO_SIGNAL);
+const CARD_EDIT_TRANSPORT = new HttpError(
+  "Network request for 'editMessageMedia' failed!",
+  new Error('The operation was aborted due to timeout'),
+);
 const DEMO_ANALYSIS_WORST_CASE: Branch = {
-  label: 'under a photo «⏳» is sent, then the card, then «⏳» is deleted',
+  label:
+    'under a photo «⏳» is sent, its edit into the card refused for its file, then the text card',
   update: analysisOnPhoto(),
+  apiErrors: [['editMessageMedia', PHOTO_REFUSED]],
   expected: { backend: 3, telegram: 4 },
 };
 const DEMO_ANALYSIS = {
@@ -1186,27 +1198,37 @@ const DEMO_ANALYSIS = {
       }),
     ),
     {
-      label: '«⏳» is edited, then the card is sent and «⏳» deleted',
+      label: '«⏳» is edited, then edited into the card (#875)',
       update: analysisUpdate(),
-      expected: { backend: 3, telegram: 4 },
+      expected: { backend: 3, telegram: 3 },
     },
     DEMO_ANALYSIS_WORST_CASE,
     {
-      label: 'the delete of «⏳» is refused, and nothing more is done',
+      label:
+        'the edit into the card is refused for its file, and «⏳» is edited into the text card',
       update: analysisUpdate(),
-      apiErrors: [['deleteMessage', DELETE_FORBIDDEN]],
+      apiErrors: [['editMessageMedia', PHOTO_REFUSED]],
       expected: { backend: 3, telegram: 4 },
     },
     {
-      label: 'the photo is refused, and «⏳» is edited into the text card',
+      label: 'the edit into the card fails in transport, and «⏳» says the analysis is unavailable',
       update: analysisUpdate(),
-      apiErrors: [['sendPhoto', PHOTO_REFUSED]],
+      apiErrors: [['editMessageMedia', CARD_EDIT_TRANSPORT]],
       expected: { backend: 3, telegram: 4 },
     },
     {
-      label: 'the photo fails in transport, and «⏳» says the analysis is unavailable',
+      label: '«⏳» is gone by the card, which is sent as a new message',
       update: analysisUpdate(),
-      apiErrors: [['sendPhoto', photoTimedOut()]],
+      apiErrors: [['editMessageMedia', EDIT_REFUSED]],
+      expected: { backend: 3, telegram: 4 },
+    },
+    {
+      label: '«⏳» is gone by the card, and the new card is refused: nothing more',
+      update: analysisUpdate(),
+      apiErrors: [
+        ['editMessageMedia', EDIT_REFUSED],
+        ['sendPhoto', PHOTO_REFUSED],
+      ],
       expected: { backend: 3, telegram: 4 },
     },
     {
@@ -1347,9 +1369,14 @@ const DEMO_ANALYSIS = {
       expected: { backend: 3, telegram: 4 },
     },
     {
-      label: 'under a photo the photo is refused, and «⏳» is edited into the text card',
+      label: 'under a photo «⏳» is sent, then edited into the card',
       update: analysisOnPhoto(),
-      apiErrors: [['sendPhoto', PHOTO_REFUSED]],
+      expected: { backend: 3, telegram: 3 },
+    },
+    {
+      label: 'under a photo the edit into the card fails in transport, and «⏳» says so',
+      update: analysisOnPhoto(),
+      apiErrors: [['editMessageMedia', CARD_EDIT_TRANSPORT]],
       expected: { backend: 3, telegram: 4 },
     },
     {
@@ -2277,20 +2304,20 @@ const CONFIRM_BRANCHES: readonly Branch[] = [
     update: CONFIRM_UPDATE,
     confirmLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'not_partner_client' } }),
-    expected: { backend: 1, telegram: 4 },
+    expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'the link is confirmed without a pack already paid',
     update: CONFIRM_UPDATE,
     confirmLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
-    expected: { backend: 1, telegram: 4 },
+    expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'answering the query is refused and the card still goes',
     update: CONFIRM_UPDATE,
     apiErrors: [['answerCallbackQuery', QUERY_TOO_OLD]],
-    expected: { backend: 1, telegram: 4 },
+    expected: { backend: 1, telegram: 2 },
   },
   {
     label: 'the backend no longer finds the link',
@@ -2449,7 +2476,7 @@ const CODE_STEP_BRANCHES: readonly Branch[] = [
     dialog: ON_CODE_STEP,
     emailLogin: () =>
       Promise.resolve({ ...CONFIRMED, grant: { granted: false, reason: 'already_granted' } }),
-    expected: { backend: 1, telegram: 3 },
+    expected: { backend: 1, telegram: 1 },
   },
   ...[
     OAuthErrorCode.TooManyAttempts,
@@ -2487,7 +2514,7 @@ const CODE_STEP_BRANCHES: readonly Branch[] = [
     dialog: ON_CODE_STEP,
     emailLogin: unreachable,
     recordStart: () => Promise.resolve({ ...USER_VIEW, hasActiveBrokerAccount: true }),
-    expected: { backend: 2, telegram: 3 },
+    expected: { backend: 2, telegram: 1 },
   },
   {
     label: 'a failed login is rechecked and no account is active',
@@ -2929,10 +2956,10 @@ const MENU_BUTTON_BRANCHES: readonly Branch[] = [
   },
   menuButton(
     'the backend refuses the start',
-    { backend: 1, telegram: 2 },
+    { backend: 2, telegram: 2 },
     { recordStart: unreachable },
   ),
-  menuButton('the welcome is sent', { backend: 1, telegram: 2 }),
+  menuButton('the welcome is sent', { backend: 2, telegram: 2 }),
   menuButton('the card is sent', { backend: 2, telegram: 2 }, MENU_BUTTON_ACTIVE),
   menuButton(
     'the access read fails',
@@ -4033,13 +4060,13 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_MAX_DURATION_MS).toBeLessThan(SESSION_TRACK_DEADLINE_MS);
   });
 
-  it("drains a read, an edit, the summary's claim, its photo, a 429's wait and the photo again, and its share button inside the shutdown budget (#537)", () => {
-    // readSession + edit, then the claim + sendPhoto + wait + sendPhoto + editMessageReplyMarkup
+  it("drains a read, an edit, the summary's claim, its photo with the share button, a 429's wait and the photo again inside the shutdown budget (#537, #875)", () => {
+    // readSession + edit, then the claim + sendPhoto + wait + sendPhoto: the share row is in the photo
     expect(SESSION_SUMMARY_RETRY_WAIT_MS).toBe(5_000);
     expect(SESSION_TRACK_DRAIN_MS).toBe(
-      2 * BACKEND_REQUEST_TIMEOUT_MS + 4 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS,
+      2 * BACKEND_REQUEST_TIMEOUT_MS + 3 * TELEGRAM_API_TIMEOUT_MS + SESSION_SUMMARY_RETRY_WAIT_MS,
     );
-    expect(SESSION_TRACK_DRAIN_MS).toBe(47_000);
+    expect(SESSION_TRACK_DRAIN_MS).toBe(39_000);
     expect(SESSION_TRACK_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
   });
 
@@ -4051,6 +4078,20 @@ describe("the demo session tracker's bounds", () => {
     expect(SESSION_RESUME_DRAIN_MS).toBe(2 * BACKEND_REQUEST_TIMEOUT_MS);
     expect(SESSION_RESUME_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
     expect(SESSION_RESUME_INTERVAL_MS).toBe(600_000);
+  });
+
+  it("drains the cards' unpin and pin inside the shutdown budget (#875)", () => {
+    expect(DETACHED_DRAIN_MS).toBe(2 * TELEGRAM_API_TIMEOUT_MS);
+    expect(DETACHED_DRAIN_MS).toBeLessThan(SHUTDOWN_BUDGET_MS);
+  });
+
+  it("keeps the pairs catalog no longer than the wait's tick (#875)", () => {
+    expect(PAIRS_CACHE_TTL_MS).toBe(1_000);
+    expect(PAIRS_CACHE_TTL_MS).toBeLessThanOrEqual(SIGNAL_WAIT_POLL_MS);
+  });
+
+  it('keeps the fallback language of a user with no row a minute (#875)', () => {
+    expect(LANGUAGE_MISSING_TTL_MS).toBe(60_000);
   });
 
   it("paces the recovery's first polls inside one interval of the start (#567)", () => {

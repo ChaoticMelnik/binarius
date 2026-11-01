@@ -44,16 +44,20 @@ language their `/users/start` answer carries into the bot's cache. The language 
 ```text
 /start [payload] | /menu [anything]
   bot  → POST /users/start { telegramUserId, displayName, languageCode?, startPayload? }
+         ∥ POST /trading/access { telegramUserId }   (#875: side by side)
          (/menu sends no payload, so it never spends the acquisition slot)
   bot  → blocked                → "🔒 Доступ ограничен"
          pendingBrokerAccounts  → the confirm prompt and its buttons
          no active account      → the welcome and its connect button
-         an active account      → POST /trading/access { telegramUserId }
-                                  → the outcome below
+         an active account      → the access answer → the outcome below
 ```
 
 The request carries no `brokerAccountId`: the card is about the user's only active account. The
-bot caches nothing; every `/start` and `/menu` reads the route again.
+bot caches nothing; every `/start` and `/menu` reads the route again. Since #875 the access read
+starts beside `POST /users/start`, not after it: its answer is read only for an active account and
+dropped unlogged otherwise — a new user's 404 included. A new, blocked or pending user so costs one
+`POST /trading/access` more, a SELECT on the backend with no broker GET (`brokerSection` refuses
+`pending` and `user_blocked` before its request).
 
 ## The card
 
@@ -126,12 +130,20 @@ status and the bare reason) — no Telegram id and nothing of the answer (`loggi
 ## Delivery and the pin
 
 The card goes the account card's way ([bot-start.md → The account card](bot-start.md#the-account-card)),
-through `sendWithTextFallback` with `account-card.jpg`. The photo refused → the same caption as a
+through `sendWithTextFallback` with `account-card.jpg`. The picture is uploaded once per process,
+then sent by the `file_id` of the first answer's largest size (#875, `media-files.ts`, Rule 72);
+the status card and the account card share that one id. A photo refused for its file
+(`fileRefusal`, a stale id among them) forgets the id, so the next card uploads the file; a 429 or
+a 403 keeps it. The refusal's warn carries `byFileId`. The photo refused → the same caption as a
 text message with the same button, and that message is pinned. A transport failure of the photo
 or of the text → nothing more is sent and nothing is pinned, logged at `error` with the method.
 Then `pinCard`: `unpinAllChatMessages`, then `pinChatMessage` without a notification; each
 failure is one `warn` (`the old pins were not cleared`, `the status card was not pinned`) and
-nothing else changes.
+nothing else changes. Since #875 the two run off the user's chain (`detached.ts`): they start on
+a timer once the handler has returned, so the user's next update does not wait for them; a throw
+out of them is `error` `detached work failed`. The shutdown stops that work beside the drain of the
+handlers: a pin not started yet, or handed off after the stop, is dropped (the next `/start` pins),
+one started is waited for, at most `DETACHED_DRAIN_MS` (2 × 8 000).
 
 So the pinned message is the latest card with the balance. The account card stays in the chat
 history but loses its pin; a lost or unpinned account card is replaced by `/start` or `/menu`.
@@ -156,16 +168,16 @@ the command handlers are registered before the text handler and do not call `nex
 ## «🏠 В меню» and «🔄 Повторить» (#350)
 
 «🏠 В меню» (`menu`) under the bot's messages answers the press and runs `/menu`'s path, but sends
-the card without the unpin and the pin: with the answer they would put the path at the shutdown
-budget. `/start` and `/menu` failing offer «🔄 Повторить» with the same `menu`; `/account` and
+the card without the unpin and the pin: the card pinned stays the last `/start` or `/menu`. `/start` and `/menu` failing offer «🔄 Повторить» with the same `menu`; `/account` and
 `/settings` failing offer `cmd:account` / `cmd:settings`, which run the command again
 ([bot-navigation.md](bot-navigation.md)).
 
 ## Timing
 
-`HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart`, `readTradingAccess`) and up
-to four Bot API calls (the photo refused, the text, the unpin, the pin): 2 × 5 000 + 4 × 8 000 =
-42 s, under `demoAnalysis`'s 47 s, so `HANDLER_BUDGET_MS` and the shutdown budget do not move.
+`HANDLER_CALLS.start` and `.menu` are two backend calls (`recordStart` ∥ `readTradingAccess`,
+counted as sequential) and up to two Bot API calls (the photo refused, the text; the unpin and the
+pin run off the chain, #875): 2 × 5 000 + 2 × 8 000 = 26 s, under `demoAnalysis`'s 47 s, so
+`HANDLER_BUDGET_MS` and the shutdown budget do not move.
 `HANDLER_CALLS.demo` is two backend calls (the signals and the catalog, #320) and two Bot API
 calls ([bot-demo.md](bot-demo.md#timing)).
 `HANDLER_CALLS.menuButton` is 2 / 3 (34 s) and `.commandRetry` 1 / 2 (21 s), #350.
@@ -197,5 +209,5 @@ pnpm test --project unit apps/bot/src
   user's mode.
 - A «🔄 Обновить» button that edits the caption in place — not asked; `/menu` sends a new card.
   The account card carries «🎮 Демо-торговля» since #350 ([bot-navigation.md](bot-navigation.md)).
-- The picture is uploaded on every `/start` and `/menu` (no `file_id` cache), as for the account
-  card.
+- The picture's `file_id` is memory of the process (#875): a restart, or a picture replaced on
+  disk, uploads it again on the next card.

@@ -270,8 +270,8 @@ const IHDR = (png: Buffer) => ({
 });
 
 describe('rendering the promo card', () => {
-  it('R1 a PNG of the card size under 1 MB', () => {
-    const png = renderSessionCard(sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42)));
+  it('R1 a PNG of the card size under 1 MB', async () => {
+    const png = await renderSessionCard(sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42)));
     expect(IHDR(png)).toEqual({
       signature: '89504e470d0a1a0a',
       width: SESSION_PROMO_WIDTH,
@@ -280,18 +280,18 @@ describe('rendering the promo card', () => {
     expect(png.length).toBeLessThan(1024 * 1024);
   });
 
-  it('R2 the text is drawn with the bundled fonts: without them the image differs and is smaller', () => {
+  it('R2 the text is drawn with the bundled fonts: without them the image differs and is smaller', async () => {
     const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
-    const withFonts = renderSessionCard(svg);
-    const withoutFonts = renderSessionCard(svg, []);
+    const withFonts = await renderSessionCard(svg);
+    const withoutFonts = await renderSessionCard(svg, []);
     expect(withoutFonts.equals(withFonts)).toBe(false);
     expect(withoutFonts.length).toBeLessThan(withFonts.length);
   });
 
-  it('R3 the logo is drawn: without its element the PNG differs and is smaller', () => {
+  it('R3 the logo is drawn: without its element the PNG differs and is smaller', async () => {
     const svg = sessionPromoSvg(sessionPromoModel(MIXED, viewOf('1'), 42));
-    const withLogo = renderSessionCard(svg);
-    const without = renderSessionCard(withoutLogo(svg));
+    const withLogo = await renderSessionCard(svg);
+    const without = await renderSessionCard(withoutLogo(svg));
     expect(without.equals(withLogo)).toBe(false);
     expect(withLogo.length).toBeGreaterThan(without.length);
   });

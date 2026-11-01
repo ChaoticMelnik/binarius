@@ -188,13 +188,22 @@ it('runs /start → the email login → a demo session → its result', async ()
   const screen = botCalls.filter((call) => call.method === 'editMessageText').at(-1);
   if (screen === undefined) throw new Error('no summary screen');
   await bot.press(LABELS.demoAnalysisButton);
-  const analysis = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
-  if (analysis === undefined || analysis === card) throw new Error('no analysis card');
+  // #875: «⏳», the summary screen edited, becomes the card in the same message
+  const analysis = botCalls
+    .filter(
+      (call) =>
+        call.method === 'editMessageMedia' &&
+        (call.payload.media as { type?: unknown }).type === 'photo',
+    )
+    .at(-1);
+  if (analysis === undefined) throw new Error('no analysis card');
   // the H1 signal (#828: the card exists because the scanner holds one on the pumped series): the
   // card offers the broker's minimum as the amount in effect; the chart GET still draws its rows
   expect(labelsOf(analysis.payload)).toContain(cycleStakeLabel(MIN_STAKE, true));
-  expect(String(analysis.payload.caption)).toContain('Сильный сигнал на рост');
-  expect(lastOf(botCalls, 'deleteMessage')?.message_id).toBe(bot.telegram.messageIdOf(screen));
+  expect(String((analysis.payload.media as { caption?: unknown }).caption)).toContain(
+    'Сильный сигнал на рост',
+  );
+  expect(bot.telegram.messageIdOf(analysis)).toBe(bot.telegram.messageIdOf(screen));
   expect(
     broker.rest.journal.filter((record) => record.endpoint === 'chart').map((r) => r.query),
   ).toContainEqual(expect.objectContaining({ asset_id: String(E2E_PAIR.id), interval: '5s' }));
@@ -212,7 +221,7 @@ it('runs /start → the email login → a demo session → its result', async ()
   );
   await bot.press(cycleStakeLabel(MIN_STAKE, true));
   const status = botCalls.filter((call) => call.method === 'sendPhoto').at(-1);
-  if (status === undefined || status === analysis) throw new Error('no status message');
+  if (status === undefined || status === card) throw new Error('no status message');
   expect(String(status.payload.caption)).toMatch(/(?<!\d)5 с/);
   expect(lastOf(botCalls, 'deleteMessage')?.message_id).toBe(bot.telegram.messageIdOf(analysis));
   const started = await reads.sessionOf(account.id);

@@ -45,6 +45,7 @@ import {
   type ApiCall,
   inlineRows,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { LABELS, sessionStatusText, TEXTS, textOf } from './texts';
 import { START_REFUSALS } from './trading-session';
@@ -111,6 +112,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter,
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

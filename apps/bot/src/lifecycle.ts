@@ -45,6 +45,8 @@ export interface RunBotOptions {
   sessionResumer: { start(): void; stop(): Promise<void> };
   // the wait for a signal (#664): its tick in flight drained, the waiting messages edited
   signalWaiter: { stop(): Promise<void> };
+  // the cards' unpin and pin (#875, detached.ts): the work running drained, the rest dropped
+  detached: { stop(): Promise<void> };
   // the text overrides' refresher (#299): its load in flight waited for, and its first load
   // awaited before the menu and the profile are published (#301)
   botTexts: { stop(): Promise<void>; loaded(): Promise<void> };
@@ -66,6 +68,7 @@ export function runBot({
   sessionTracker,
   sessionResumer,
   signalWaiter,
+  detached,
   botTexts,
   logger,
   exit,
@@ -184,6 +187,7 @@ export function runBot({
       step('session tracker', () => sessionTracker.stop()),
       step('session resume', () => sessionResumer.stop()),
       step('signal waiter', () => signalWaiter.stop()),
+      step('detached work', () => detached.stop()),
       step('bot texts', () => botTexts.stop()),
     ];
 

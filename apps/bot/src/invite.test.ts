@@ -25,6 +25,7 @@ import {
   textUpdate,
   USER,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { inviteShareText, LABELS, TEXTS } from './texts';
 
@@ -41,6 +42,7 @@ function setup(readReferral: BackendClient['readReferral']) {
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     token: '123456:AA-bot-token',
     backend,
     logger,

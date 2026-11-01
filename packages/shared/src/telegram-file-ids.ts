@@ -16,15 +16,29 @@ export interface TelegramFileIds<K> {
   forget: (key: K) => void;
 }
 
-export function createTelegramFileIds<K>(): TelegramFileIds<K> {
+// `maxEntries` bounds the memory of a cache keyed by an unbounded set (#875, the promo cards by
+// session): a read makes its key the newest, and a remember past the bound drops the oldest.
+export function createTelegramFileIds<K>(options?: { maxEntries?: number }): TelegramFileIds<K> {
   const ids = new Map<K, string>();
+  const maxEntries = options?.maxEntries;
   return {
-    get: (key) => ids.get(key),
+    get: (key) => {
+      const fileId = ids.get(key);
+      if (fileId !== undefined && maxEntries !== undefined) {
+        ids.delete(key);
+        ids.set(key, fileId);
+      }
+      return fileId;
+    },
     remember: (key, result) => {
       if (result === true || ids.has(key)) return true;
       const fileId = result.animation?.file_id ?? result.photo?.at(-1)?.file_id;
       if (fileId === undefined) return false;
       ids.set(key, fileId);
+      if (maxEntries !== undefined && ids.size > maxEntries) {
+        const oldest = ids.keys().next();
+        if (oldest.done !== true) ids.delete(oldest.value);
+      }
       return true;
     },
     forget: (key) => {

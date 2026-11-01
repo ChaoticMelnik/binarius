@@ -1,6 +1,7 @@
 import { BotError, GrammyError, HttpError, InputFile } from 'grammy';
 import type { ApiError } from 'grammy/types';
 import { describe, expect, it, vi } from 'vitest';
+import { until } from '@binarius/shared/testing';
 import {
   BOT_TEXT_SOURCES_EN,
   BotLanguage,
@@ -112,6 +113,7 @@ import {
   inlineRows,
   inlineStyles,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   DEMO_DURATION_LABELS,
@@ -169,6 +171,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter,
     shownSignals,
+    detached: detachedWork(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       readPairs,
@@ -186,6 +189,12 @@ function setup(
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   api.answers.set('sendAnimation', animationAnswer(SCAN_MESSAGE_ID, SCAN_FILE_ID));
   api.answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, ['card-small', CARD_FILE_ID]));
+  // «⏳» become the card answers with the card's sizes (#875); an animation's edit answers `true`
+  api.answers.set('editMessageMedia', (payload, signal) =>
+    (payload.media as { type?: unknown } | undefined)?.type === 'photo'
+      ? photoAnswer(Number(payload.message_id), ['card-small', CARD_FILE_ID])(payload, signal)
+      : true,
+  );
   const press = (data: string, chatType?: string) =>
     bot.handleUpdate(callbackUpdate(data, chatType));
   const pressOnPhoto = (data: string) => bot.handleUpdate(photoCallbackUpdate(data));
@@ -209,6 +218,24 @@ function setup(
 const CARD_FILE_ID = 'card-file-id';
 
 const methods = (calls: readonly ApiCall[]) => calls.map((call) => call.method);
+// the analysis card (#482) as the last photo sent or edited in (#875: «⏳» becomes it), read as a
+// sendPhoto's payload: its photo, caption and parse mode out of the edit's media
+const isCardCall = (call: ApiCall) =>
+  call.method === 'sendPhoto' ||
+  (call.method === 'editMessageMedia' &&
+    (call.payload.media as { type?: unknown } | undefined)?.type === 'photo');
+const cardCallsOf = (calls: readonly ApiCall[]) =>
+  calls.filter(isCardCall).map(({ method, payload }) => {
+    if (method === 'sendPhoto') return payload;
+    const media = payload.media as { media: unknown; caption: unknown; parse_mode: unknown };
+    return {
+      ...payload,
+      photo: media.media,
+      caption: media.caption,
+      parse_mode: media.parse_mode,
+    } as Record<string, unknown>;
+  });
+const cardOf = (calls: readonly ApiCall[]) => cardCallsOf(calls).at(-1);
 const payloadOf = (calls: readonly ApiCall[], method: string) =>
   calls.find((call) => call.method === method)?.payload;
 const rowsOf = (payload: Record<string, unknown> | undefined): Button[][] =>
@@ -1304,14 +1331,14 @@ describe('the amount screen (#476)', () => {
         Promise.resolve(accessView({ broker: null, brokerUnavailable: 'refreshing' })),
     });
     await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-    expect(rowsOf(payloadOf(demo.calls, 'sendPhoto'))[0]).toEqual([
+    expect(rowsOf(cardOf(demo.calls))[0]).toEqual([
       button('🚀 Сессия из 5 циклов', `demo:l:${String(PAIR_EURUSD.id)}:5:a`),
     ]);
     const real = setup({
       readTradingAccess: () => Promise.resolve(accessView({ tradingMode: TradeMode.Real })),
     });
     await real.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-    expect(rowsOf(payloadOf(real.calls, 'sendPhoto'))[0]).toEqual([
+    expect(rowsOf(cardOf(real.calls))[0]).toEqual([
       button(
         '🚀 Сессия из 5 циклов · REAL',
         sessionStartCallbackData(TradeMode.Real, PAIR_EURUSD.id, 5),
@@ -1822,7 +1849,6 @@ describe('the analysis', () => {
     }).text.value;
   const edits = (calls: readonly ApiCall[]) =>
     calls.filter((call) => call.method === 'editMessageText');
-  const cardOf = (calls: readonly ApiCall[]) => payloadOf(calls, 'sendPhoto');
   // the wait (#859): «⏳» turned into the scanner's animation, or one sent anew
   const waitOf = (calls: readonly ApiCall[]) =>
     calls.filter((call) => ['editMessageMedia', 'sendAnimation'].includes(call.method)).at(-1)
@@ -1848,20 +1874,15 @@ describe('the analysis', () => {
     };
   };
 
-  // #482: a signal is a card under «⏳», which goes once the card is there; in demo the amounts
-  // first, the single trade behind «➕ Ещё»; the amount is read at the expansion
-  it('reads the catalog, shows «⏳», asks for the signal, then sends the card and deletes «⏳»', async () => {
+  // #482, #875: a signal is a card that «⏳» becomes; in demo the amounts first, the single trade
+  // behind «➕ Ещё»; the amount is read at the expansion
+  it('AN2 reads the catalog, shows «⏳», asks for the signal, then edits «⏳» into the card', async () => {
     const scene = setup();
     const { calls, readPairs, evaluateSignal, readTradingAccess } = scene;
     const press = pressed(scene);
     await press.run();
 
-    expect(methods(calls)).toEqual([
-      'answerCallbackQuery',
-      'editMessageText',
-      'sendPhoto',
-      'deleteMessage',
-    ]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageMedia']);
     const [waiting] = edits(calls);
     expect(waiting?.payload.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value);
     // without a keyboard the edit removes the summary's, so «📊 Анализ» cannot be pressed twice
@@ -1872,10 +1893,7 @@ describe('the analysis', () => {
     expect(card?.photo).toBeInstanceOf(InputFile);
     expect((card?.photo as InputFile).filename).toBe('setup-bull.png');
     expect(rowsOf(card)).toEqual([...AMOUNTS, [CUSTOM, MORE], TAIL_ROW]);
-    expect(payloadOf(calls, 'deleteMessage')).toEqual({
-      chat_id: USER.id,
-      message_id: press.messageId,
-    });
+    expect(card).toMatchObject({ chat_id: USER.id, message_id: press.messageId });
     expect(readPairs).toHaveBeenCalledTimes(1);
     // the analysis of this user and duration, which the backend records for the reminder (#484)
     expect(evaluateSignal.mock.calls).toEqual([
@@ -2278,7 +2296,7 @@ describe('the analysis', () => {
       evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY),
     });
     await press(DATA);
-    const card = calls.filter((call) => call.method === 'sendPhoto').at(-1)?.payload;
+    const card = cardOf(calls);
     expect(String(card?.caption)).toContain('Сильный сигнал на падение');
     expect(signalWaiter.waitPair).not.toHaveBeenCalled();
     const more = rowsOf(card)
@@ -2696,7 +2714,7 @@ describe('«➕ Ещё» under the analysis', () => {
       const demo = setup();
       await demo.press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
       const moreOf = (calls: readonly ApiCall[]) =>
-        rowsOf(payloadOf(calls, 'sendPhoto'))
+        rowsOf(cardOf(calls))
           .flat()
           .find((b) => b.text === LABELS.analysisMoreButton)?.callback_data;
       expect(moreOf(real.calls)).toBe(datum(':r'));
@@ -3079,21 +3097,17 @@ describe('a press under the session card (a photo)', () => {
     );
   });
 
-  // #482: under a photo «⏳» goes as a new message at once, with no edit tried first
-  it('C3 «📊 Анализ» sends «⏳» as a new message, then the card under it, and deletes «⏳»', async () => {
+  // #482: under a photo «⏳» goes as a new message at once, with no edit tried first; #875: the
+  // card is that «⏳» edited by its id
+  it('C3 «📊 Анализ» sends «⏳» as a new message, then edits it into the card by its id', async () => {
     const { pressOnPhoto: press, calls, evaluateSignal } = setup();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
-    expect(methods(calls)).toEqual([
-      'answerCallbackQuery',
-      'sendMessage',
-      'sendPhoto',
-      'deleteMessage',
-    ]);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'sendMessage', 'editMessageMedia']);
     expect(evaluateSignal).toHaveBeenCalledTimes(1);
     const waiting = payloadOf(calls, 'sendMessage');
     expect(waiting?.text).toBe(TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value);
     expect(waiting?.reply_markup).toBeUndefined();
-    const card = payloadOf(calls, 'sendPhoto');
+    const card = cardOf(calls);
     expect(card?.caption).toBe(
       analysisScreen({
         mode: TradeMode.Demo,
@@ -3106,10 +3120,7 @@ describe('a press under the session card (a photo)', () => {
     expect(rowsOf(card).flat()).toContainEqual(
       button(LABELS.repeatAnalysisButton, demoAnalysisCallbackData(PAIR_EURUSD.id, 5)),
     );
-    expect(payloadOf(calls, 'deleteMessage')).toEqual({
-      chat_id: USER.id,
-      message_id: TEXT_CARD_MESSAGE_ID,
-    });
+    expect(card).toMatchObject({ chat_id: USER.id, message_id: TEXT_CARD_MESSAGE_ID });
   });
 
   it("C3b the wait under a photo becomes the scanner's animation in place of the new «⏳», by its id", async () => {
@@ -3208,7 +3219,7 @@ describe('a press under the analysis card (a photo, #761)', () => {
   const cardData = async (options: Parameters<typeof setup>[0] = {}) => {
     const scene = setup(options);
     await scene.press(ANALYSIS);
-    const card = callbackData(payloadOf(scene.calls, 'sendPhoto'));
+    const card = callbackData(cardOf(scene.calls));
     const before = scene.calls.length;
     await scene.pressOnPhoto(MORE);
     const expanded = callbackData(payloadOf(scene.calls.slice(before), 'editMessageReplyMarkup'));
@@ -3314,8 +3325,7 @@ describe('the analysis card', () => {
     error_code: 400,
     description: 'Bad Request: wrong file identifier/HTTP URL specified',
   };
-  const photos = (calls: readonly ApiCall[]) =>
-    calls.filter((call) => call.method === 'sendPhoto').map((call) => call.payload.photo);
+  const photos = (calls: readonly ApiCall[]) => cardCallsOf(calls).map((payload) => payload.photo);
   const fileName = (photo: unknown) => (photo instanceof InputFile ? photo.filename : photo);
   const card = (chooseAmount = true) =>
     analysisScreen({
@@ -3328,8 +3338,34 @@ describe('the analysis card', () => {
   const UNAVAILABLE_ROWS = [
     [button(LABELS.repeatAnalysisButton, DATA), BACK_EURUSD_PAIR, BACK_GROUPS],
   ];
+  const RATE_LIMITED: ApiError = {
+    ok: false,
+    error_code: 429,
+    description: 'Too Many Requests: retry after 3',
+    parameters: { retry_after: 3 },
+  };
 
-  it('uploads each picture once, then sends it by the file_id Telegram answered with', async () => {
+  // #875: «⏳» goes before the access read answers; the card waits for it
+  it('AN1 shows «⏳» while the access read is still on its way', async () => {
+    let answer: (() => void) | undefined;
+    const { press, calls } = setup({
+      readTradingAccess: () =>
+        new Promise((resolve) => {
+          answer = () => resolve(ACCESS_VIEW);
+        }),
+    });
+    const pressing = press(DATA);
+    await until('«⏳»', () => methods(calls).includes('editMessageText'));
+    expect(calls.find((call) => call.method === 'editMessageText')?.payload.text).toBe(
+      TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value,
+    );
+    expect(methods(calls)).not.toContain('editMessageMedia');
+    answer?.();
+    await pressing;
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageMedia']);
+  });
+
+  it('AN3 uploads each picture once, then sends it by the file_id Telegram answered with', async () => {
     const responses = [SIGNAL_DECIDED, DOWN, SIGNAL_DECIDED, DOWN];
     const { press, calls } = setup({
       evaluateSignal: () => Promise.resolve(responses.shift() ?? SIGNAL_DECIDED),
@@ -3343,20 +3379,20 @@ describe('the analysis card', () => {
     ]);
   });
 
-  it('forgets a refused file_id, sends the caption as text in place of «⏳», and uploads next time', async () => {
+  it('AN4 forgets a file_id refused on the edit, sends the caption as text in place of «⏳», and uploads next time', async () => {
     const { press, calls, apiErrors, logger } = setup();
     await press(DATA);
-    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     const before = calls.length;
     await press(DATA);
     const second = calls.slice(before);
     expect(methods(second)).toEqual([
       'answerCallbackQuery',
       'editMessageText',
-      'sendPhoto',
+      'editMessageMedia',
       'editMessageText',
     ]);
-    expect(second[2]?.payload.photo).toBe(CARD_FILE_ID);
+    expect((second[2]?.payload.media as { media?: unknown }).media).toBe(CARD_FILE_ID);
     // [В1] the same caption and the same keyboard, the amounts and «Выбери сумму…» with them
     const text = second[3]?.payload;
     expect(text?.text).toBe(card());
@@ -3366,12 +3402,58 @@ describe('the analysis card', () => {
         .flat()
         .some((key) => key.callback_data?.startsWith('demo:sa:')),
     ).toBe(true);
-    expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
-      'the analysis card photo was refused, sending its text',
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ telegramErrorCode: 400, byFileId: true }),
+        'the analysis card photo was refused, sending its text',
+      ],
     ]);
-    apiErrors.delete('sendPhoto');
+    apiErrors.delete('editMessageMedia');
     await press(DATA);
     expect(photos(calls).map(fileName)).toEqual(['setup-bull.png', CARD_FILE_ID, 'setup-bull.png']);
+  });
+
+  it('AN4b a 429 on the edit sends the text in place of «⏳» and keeps the file_id', async () => {
+    const { press, calls, apiErrors } = setup();
+    await press(DATA);
+    apiErrors.set('editMessageMedia', RATE_LIMITED);
+    await press(DATA);
+    apiErrors.delete('editMessageMedia');
+    await press(DATA);
+    expect(photos(calls).map(fileName)).toEqual(['setup-bull.png', CARD_FILE_ID, CARD_FILE_ID]);
+    expect(calls.filter((call) => call.method === 'editMessageText').at(-1)?.payload.text).toBe(
+      TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value,
+    );
+  });
+
+  it('AN5 a «⏳» gone by the card sends the card as a new message; refused, nothing more', async () => {
+    const sent = setup();
+    sent.apiErrors.set('editMessageMedia', EDIT_GONE);
+    await sent.press(DATA);
+    expect(methods(sent.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'editMessageMedia',
+      'sendPhoto',
+    ]);
+    expect(cardOf(sent.calls)?.caption).toBe(card());
+    expect(sent.logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'the analysis «⏳» is gone, the card goes as a new message',
+    ]);
+    const refused = setup();
+    refused.apiErrors.set('editMessageMedia', EDIT_GONE);
+    refused.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await refused.press(DATA);
+    expect(methods(refused.calls)).toEqual([
+      'answerCallbackQuery',
+      'editMessageText',
+      'editMessageMedia',
+      'sendPhoto',
+    ]);
+    expect(refused.logger.warn.mock.calls.map((call) => call[1])).toEqual([
+      'the analysis «⏳» is gone, the card goes as a new message',
+      'the analysis card photo was refused',
+    ]);
   });
 
   it('sends the text card as a new message when the photo is refused and no «⏳» stands', async () => {
@@ -3390,13 +3472,13 @@ describe('the analysis card', () => {
 
   it('logs a refused edit of «⏳» into the text card and does nothing more', async () => {
     const { press, calls, apiErrors, logger, ...api } = setup();
-    apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     failFromSecondCall({ apiErrors, ...api }, 'editMessageText', EDIT_GONE);
     await press(DATA);
     expect(methods(calls)).toEqual([
       'answerCallbackQuery',
       'editMessageText',
-      'sendPhoto',
+      'editMessageMedia',
       'editMessageText',
     ]);
     expect(logger.warn.mock.calls.map((call) => call[1])).toEqual([
@@ -3407,7 +3489,7 @@ describe('the analysis card', () => {
 
   it('remembers nothing when the answer lists no size, and uploads again', async () => {
     const { press, calls, answers, logger } = setup();
-    answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, []));
+    answers.set('editMessageMedia', photoAnswer(CARD_MESSAGE_ID, []));
     await press(DATA);
     await press(DATA);
     expect(photos(calls).map(fileName)).toEqual(['setup-bull.png', 'setup-bull.png']);
@@ -3417,21 +3499,24 @@ describe('the analysis card', () => {
     ]);
   });
 
-  it('says the analysis is unavailable in «⏳» when the photo fails in transport', async () => {
+  it('AN6 says the analysis is unavailable in «⏳» when the edit into the card fails in transport', async () => {
     const { press, calls, apiErrors, logger } = setup();
-    apiErrors.set('sendPhoto', TRANSPORT('sendPhoto'));
+    apiErrors.set('editMessageMedia', TRANSPORT('editMessageMedia'));
     await press(DATA);
     expect(methods(calls)).toEqual([
       'answerCallbackQuery',
       'editMessageText',
-      'sendPhoto',
+      'editMessageMedia',
       'editMessageText',
     ]);
     const edited = calls.at(-1)?.payload;
     expect(edited?.text).toBe(analysisUnavailableScreen(PAIR_EURUSD, 5).text.value);
     expect(rowsOf(edited)).toEqual(UNAVAILABLE_ROWS);
-    expect(logger.error.mock.calls.map((call) => call[1])).toEqual([
-      'the analysis card failed in transport',
+    expect(logger.error.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'editMessageMedia' }),
+        'the analysis card failed in transport',
+      ],
     ]);
   });
 
@@ -3443,45 +3528,27 @@ describe('the analysis card', () => {
     expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendPhoto']);
   });
 
-  it.each([
-    [
-      'gone',
-      { ok: false, error_code: 400, description: 'Bad Request: message to delete not found' },
-      'info',
-      'the analysis «⏳» was already gone',
-    ],
-    [
-      'forbidden',
-      { ok: false, error_code: 400, description: "Bad Request: message can't be deleted" },
-      'warn',
-      'the analysis «⏳» was not deleted',
-    ],
-    ['in transport', TRANSPORT('deleteMessage'), 'warn', 'the analysis «⏳» was not deleted'],
-  ] as const)(
-    'logs a delete of «⏳» refused as %s once, and does nothing more',
-    async (_case, failure, level, message) => {
-      const { press, calls, apiErrors, logger } = setup();
-      apiErrors.set('deleteMessage', failure);
-      await press(DATA);
-      expect(methods(calls)).toEqual([
-        'answerCallbackQuery',
-        'editMessageText',
-        'sendPhoto',
-        'deleteMessage',
-      ]);
-      expect(logger[level].mock.calls.map((call) => call[1])).toEqual([message]);
-      expect(logger.error).not.toHaveBeenCalled();
-    },
-  );
+  it('AN7 a refused catalog shows its refusal and no «⏳», whatever the access read does', async () => {
+    const { press, calls, readTradingAccess } = setup({
+      readPairs: () => Promise.reject(new BackendError(BackendErrorCode.Unreachable)),
+      readTradingAccess: () => new Promise(() => undefined),
+    });
+    await press(DATA);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText']);
+    expect(calls.at(-1)?.payload.text).not.toBe(
+      TEXTS.analyzing({ subject: 'EUR/USD · ⏱ 5 с' }).value,
+    );
+    expect(readTradingAccess).toHaveBeenCalledTimes(1);
+  });
 
-  it('hands a photo call that fails for a reason the transport cannot produce to bot.catch', async () => {
+  it('hands an edit into the card that fails for a reason the transport cannot produce to bot.catch', async () => {
     const { press, calls, answers } = setup();
-    answers.set('sendPhoto', () => {
+    answers.set('editMessageMedia', () => {
       throw new TypeError('sentinel');
     });
     const thrown = await rejectionOf(press(DATA));
     expect(thrown).toBeInstanceOf(BotError);
-    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'sendPhoto']);
+    expect(methods(calls)).toEqual(['answerCallbackQuery', 'editMessageText', 'editMessageMedia']);
   });
 });
 
@@ -3609,7 +3676,7 @@ ${BOT_TEXT_SOURCES_EN.cycleStakeChoose}`,
     const { press, calls } = english();
     await press(demoAnalysisCallbackData(PAIR_EURUSD.id, 5));
 
-    const card = payloadOf(calls, 'sendPhoto');
+    const card = cardOf(calls);
     expect(card?.caption).toBe(
       en(
         () =>
@@ -3704,15 +3771,15 @@ describe('the record of the shown directions (#829)', () => {
       [USER.id, 'analysis', NOW, [{ ...h1, decidedAt: 1_790_000_044_320 }]],
     ]);
     const text = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
-    text.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    text.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     await text.press(ANALYSIS);
     expect(text.shownSignals.remember.mock.calls).toEqual(photo.shownSignals.remember.mock.calls);
     const lost = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
-    lost.apiErrors.set('sendPhoto', TRANSPORT('sendPhoto'));
+    lost.apiErrors.set('editMessageMedia', TRANSPORT('editMessageMedia'));
     await lost.press(ANALYSIS);
     expect(lost.shownSignals.remember).not.toHaveBeenCalled();
     const unedited = setup({ evaluateSignal: () => Promise.resolve(SIGNAL_H1_ONLY) });
-    unedited.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    unedited.apiErrors.set('editMessageMedia', PHOTO_REFUSED);
     failFromSecondCall(unedited, 'editMessageText', EDIT_GONE);
     await unedited.press(ANALYSIS);
     expect(unedited.shownSignals.remember).not.toHaveBeenCalled();

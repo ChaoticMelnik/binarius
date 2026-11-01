@@ -1,39 +1,21 @@
-import { InputFile } from 'grammy';
+import type { InputFile } from 'grammy';
 import type { Message } from 'grammy/types';
 import type { TradeAction } from '@binarius/shared';
 import { SETUP_CARD_PHOTO_PATHS } from './assets';
 import type { Logger } from './logging';
+import { createMediaFiles } from './media-files';
 
 // The pictures of a signal's direction (#482, #568): the analysis card's and the session
-// message's. Each is uploaded per process and direction until an answer brings its file_id, then
-// sent by that file_id (a «not modified» answer brings none). Memory only, so a restart, or a
-// second bot process, uploads each again; a refused photo forgets its file_id, so the next one
-// uploads the file.
+// message's, each sent by its file_id once an answer brings one (media-files.ts, Rule 72; a «not
+// modified» answer brings none).
 export interface SetupCardPhotos {
   // the file_id when one is known, else the file
   photo: (action: TradeAction) => string | InputFile;
-  // reads the file_id from a sendPhoto's or an editMessageMedia's answer; an inline edit's `true`
-  // carries none and is ignored
   remember: (action: TradeAction, result: Message | true) => void;
   forget: (action: TradeAction) => void;
 }
 
 export function createSetupCardPhotos(logger: Logger): SetupCardPhotos {
-  const ids = new Map<TradeAction, string>();
-  return {
-    photo: (action) => ids.get(action) ?? new InputFile(SETUP_CARD_PHOTO_PATHS[action]),
-    remember: (action, result) => {
-      if (result === true || ids.has(action)) return;
-      // the largest size is last; any size names the same photo to Telegram
-      const fileId = result.photo?.at(-1)?.file_id;
-      if (fileId === undefined) {
-        logger.warn({ reason: 'no_file_id' }, 'the setup card picture is not remembered');
-        return;
-      }
-      ids.set(action, fileId);
-    },
-    forget: (action) => {
-      ids.delete(action);
-    },
-  };
+  const files = createMediaFiles(SETUP_CARD_PHOTO_PATHS, logger, 'the setup card picture');
+  return { photo: files.file, remember: files.remember, forget: files.forget };
 }

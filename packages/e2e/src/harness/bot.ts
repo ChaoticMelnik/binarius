@@ -3,6 +3,7 @@ import {
   BOT_INFO,
   createBackendClient,
   createBot,
+  createDetachedWork,
   createIntentTracker,
   createSessionResumer,
   createSessionTracker,
@@ -11,6 +12,7 @@ import {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  PAIRS_CACHE_TTL_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,
@@ -30,6 +32,7 @@ import {
   startUpdate,
   textUpdate,
   USER,
+  withPairsCache,
 } from '@binarius/bot/e2e';
 import type { ShownSignalStart } from '@binarius/shared';
 import { BOT_TOKEN, INTERNAL_API_TOKEN } from './env';
@@ -65,7 +68,14 @@ export function startE2eBot(deps: {
   telegram: ReturnType<typeof createTelegram>;
 }): E2eBot {
   const logger = deps.logs.logger;
-  const backend = createBackendClient({ baseUrl: deps.backendUrl, token: INTERNAL_API_TOKEN });
+  // the catalog's cache as index.ts builds it (#875)
+  const backend = withPairsCache(
+    createBackendClient({ baseUrl: deps.backendUrl, token: INTERNAL_API_TOKEN }),
+    { ttlMs: PAIRS_CACHE_TTL_MS },
+  );
+  // the pins off the chain, as index.ts; each handled update waits for its own, so a scene reads
+  // the pin right after the update
+  const detached = createDetachedWork({ logger });
   const intentTracker = createIntentTracker({
     backend,
     logger,
@@ -128,10 +138,12 @@ export function startE2eBot(deps: {
     sessionResumer,
     signalWaiter,
     shownSignals,
+    detached,
   });
   const telegram = deps.telegram.bot(bot);
   const handle = async (update: Update) => {
     await bot.handleUpdate(update);
+    await detached.settled();
     return update;
   };
   const startText = (payload?: string) => (payload === undefined ? '/start' : `/start ${payload}`);
@@ -151,12 +163,14 @@ export function startE2eBot(deps: {
     },
     async replay(update) {
       await bot.handleUpdate(update);
+      await detached.settled();
     },
     async stop() {
       await sessionTracker.stop();
       await intentTracker.stop();
       await sessionResumer.stop();
       await signalWaiter.stop();
+      await detached.stop();
     },
   };
 }

@@ -469,7 +469,8 @@ Before #708 the entry was «🌐 Язык/Language» (`lang`) on the status card
 deploy, a pinned one included, keeps that button until the next `/start`, `/menu` or «🏠 В меню»,
 and `lang` still opens the screen the same way. `/language` before the first `/start` opens the
 screen in the client's language (the language read answers 404, `botLanguageOf` of the update's
-`language_code`), and a choice there gets `languageNeedsStart` (`language-screen.test.ts` LS10).
+`language_code`, kept `LANGUAGE_MISSING_TTL_MS` since #875), and a choice there gets
+`languageNeedsStart` (`language-screen.test.ts` LS10).
 `HANDLER_CALLS.languageCommand` = 0 / 1, as `/help`; the language read is the middleware's.
 
 ## Timing

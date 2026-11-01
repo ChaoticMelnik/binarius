@@ -115,13 +115,14 @@ demo:t:<group>:<page>     (a type, «◀️», «▶️») → the type's open p
 demo:a:<assetId>          (a pair, «↩️ К паре»)  → readDemoTrade(5), then the summary with «📊 Анализ»
 demo:d:<assetId>:5        (the summary's data before #685) → the same summary
 demo:an:<assetId>:<sec>   («📊 Анализ», «🔄 Заново», the reminder's «📊 Анализ»)
-  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade ∥ POST /trading/access (the mode)
+  bot  → answerCallbackQuery ∥ GET /trading/pairs → readDemoTrade; POST /trading/access (the
+         mode) from the press on, awaited only before the screen (#875)
   bot  → editMessageText: «⏳ Анализирую EUR/USD · ⏱ 5 с…», no keyboard (under a photo —
          the analysis card, the session's summary card — sendMessage at once, #482)
   bot  → POST /trading/signal { assetId, interval: intervalForDuration(sec),
                                analysis: { telegramUserId, durationSec: sec } } (#484)
-  bot  → on a signal: sendPhoto, the card (#482) — the bull or the bear, the caption with its
-         block, in demo the amounts under it — then deleteMessage of «⏳»
+  bot  → on a signal: editMessageMedia, «⏳» becomes the card (#482, #875) — the bull or the
+         bear, the caption with its block, in demo the amounts under it
   bot  → a fetch_failed or a failed call: editMessageText of «⏳» into the analysis screen with its
          keyboard; no signal: «⏳» into the wait for one, «🧭» / «🏠», and the wait (#664)
 demo:more:<assetId>:<sec>:<up|down>:<d|r>     («➕ Ещё», #360; the mode's token, #121)
@@ -416,6 +417,16 @@ BROKER_REST_TIMEOUT_MS < BROKER_PAIRS_MAX_STALE_MS` is a conjunct of `PAIRS_CATA
 `fresh` is a required field: a backend older than #125 makes `readPairs` a contract violation,
 not a fresh catalog.
 
+**One read for the process** (#875, `apps/bot/src/pairs-cache.ts`). Every reader of the catalog —
+the demo's screens, the stake press, the wait's tick, the session start and its recovery — goes
+through `withPairsCache` (`index.ts`; the e2e harness builds the same): a read in flight is shared
+by every caller meanwhile, and its answer, `fresh: false` included, is given again for
+`PAIRS_CACHE_TTL_MS` (1 000) from the moment it came. A failure is not kept: callers at that moment
+share it, the next one reads again. So a press is at most one second behind the backend's snapshot,
+and during an outage the backend gets one failing read a second, not one per press.
+`PAIRS_CACHE_TTL_MS <= SIGNAL_WAIT_POLL_MS` is a link of the bot's chain: the tick never reads an
+answer older than its own period.
+
 ## Keyboards
 
 - **Types.** One button per type the catalog holds, two per row, in the order of
@@ -520,17 +531,18 @@ gate on every types screen of the English scenes).
 ## The analysis
 
 The card records its direction for the start (#829, [the record](#the-signals-screen-320)): once
-`sendCard` sent the photo, or its caption as text in place of «⏳» (or as a new message where «⏳»
-is gone), the bot writes `{ action, second, decidedAt }` of the answer's `h1` with `source:
+`sendCard` put the photo into «⏳», or its caption as text in place of «⏳» (or as a new message
+where «⏳» is gone), the bot writes `{ action, second, decidedAt }` of the answer's `h1` with `source:
 analysis`; a photo failed in transport, a text edit of «⏳» refused, and the analysis that waits
 (`h1` null) write nothing.
 
 `demo:an` keeps the order «check, then the screen». `readDemoTrade` runs on the catalog read at
 this press; any refusal is the table in [The check](#the-check), with no «⏳» and no signal asked
-for. On `ok` «⏳ Анализирую {symbol} · {duration}…» stands (`showWaiting`), then
-`evaluateSignal(assetId, intervalForDuration(5))` asks the backend's `POST /trading/signal`
-([signal.md](signal.md#post-tradingsignal-258)), then a text screen replaces «⏳», or an H1
-signal's card goes as a photo and «⏳» is deleted (#482). The answer carries both sources (#828,
+for. The access read (the mode and the card's amounts) starts with the press and is awaited only
+once the signal has answered (#875): «⏳» does not wait for it. On `ok` «⏳ Анализирую {symbol} ·
+{duration}…» stands (`showWaiting`), then `evaluateSignal(assetId, intervalForDuration(5))` asks
+the backend's `POST /trading/signal` ([signal.md](signal.md#post-tradingsignal-258)), then a text
+screen replaces «⏳», or «⏳» becomes an H1 signal's card by `editMessageMedia` (#482, #875). The answer carries both sources (#828,
 decisions 2 and 3): `h1`, the pair's H1 signal on the current second, is the direction — the card,
 its picture, its title, «➕ Ещё» and the session row — and the candle decision is information only,
 the card's rows. The interval is
@@ -546,19 +558,25 @@ shutdown budget ([Timing](#timing)):
 
 | «⏳» | Then |
 |---|---|
-| the pressed message edited, or «message is not modified» | the signal; a text result through `editOrReply`; a card as a photo, then «⏳» deleted |
-| under a photo: sent as a new message | the signal; a text result edited into «⏳» by its id (gone → sent anew, a transport failure → nothing more, `editByIdOrReply`); a card as a photo, then «⏳» deleted |
+| the pressed message edited, or «message is not modified» | the signal; a text result through `editOrReply`; a card edited into «⏳» |
+| under a photo: sent as a new message | the signal; a text result edited into «⏳» by its id (gone → sent anew, a transport failure → nothing more, `editByIdOrReply`); a card edited into «⏳» by its id |
 | the pressed message gone or not editable | no «⏳» anew (`warn` `the demo screen was not edited, the analysis goes as a new message`); the signal, then the result — text or card — as a new message |
 | failed in transport (the edit, or the new «⏳») | nothing more, and no signal asked for: a second message after an unknown delivery is worse than none |
 | any other refusal | `bot.catch`, nothing more |
 
-The card's photo and «⏳» after it (`sendCard`; the budget leaves one call after the photo):
+The card «⏳» becomes (`sendCard`, #875: `editMessageMedia` by «⏳»'s id, a text message becoming
+a photo as the wait's card does; the budget leaves one call after it):
 
 | Outcome | Then |
 |---|---|
-| sent | the `file_id` of its largest size remembered for the direction (none in the answer: `warn` `the setup card picture is not remembered`, `no_file_id`); «⏳» deleted: «message to delete not found» → `info`, anything else, a transport failure too → `warn` `the analysis «⏳» was not deleted`, nothing more |
-| refused by Telegram (`GrammyError`, a stale `file_id` among them) | the direction's `file_id` forgotten (`warn` `the analysis card photo was refused, sending its text`); the same caption and keyboard as text in place of «⏳» (any refusal → `warn`, nothing more), or as a new message where «⏳» is gone; the next press uploads the file |
-| failed in transport | the outcome unknown (`error` `the analysis card failed in transport`): «⏳» says «⚠️ Не удалось получить свечи…» with «🔄 Заново» and the way back (its refusal → nothing more); without «⏳» nothing more. A repeat after a card that did arrive gives a second card (accepted) |
+| edited | the `file_id` of its largest size remembered for the direction (none in the answer: `warn` `the setup card picture is not remembered`, `no_file_id`) |
+| refused for its file (`fileRefusal`, a stale `file_id` among them) | the direction's `file_id` forgotten (`warn` `the analysis card photo was refused, sending its text`, `byFileId`); the same caption and keyboard as text in place of «⏳» (any refusal → `warn`, nothing more); the next press uploads the file |
+| refused otherwise (a 429, a 403) | the same text in place of «⏳», the `file_id` kept |
+| «⏳» gone meanwhile (`editRefusal` gone) | `warn` `the analysis «⏳» is gone, the card goes as a new message`; the card by `sendPhoto`; its refusal → `warn` `the analysis card photo was refused` (the id forgotten when it is the file's), nothing more |
+| failed in transport | the outcome unknown (`error` `the analysis card failed in transport`): «⏳» says «⚠️ Не удалось получить свечи…» with «🔄 Заново» and the way back (its refusal → nothing more). A repeat after a card that did arrive gives a second card (accepted) |
+
+Without «⏳» (the pressed message gone) the card goes by `sendPhoto`: refused, its caption as a new
+text message; failed in transport, nothing more.
 
 The pictures are `apps/bot/src/assets/setup-bull.png` and `setup-bear.png` (1280×640,
 `SETUP_CARD_PHOTO_PATHS`; `assets.test.ts` holds each a PNG within the Bot API's photo limits):
@@ -714,10 +732,12 @@ run between updates, like the trackers, so they are no handler path
 `demo:d:<id>:5`) is one backend call and up to three Bot API calls (the edit refused as gone,
 then the message sent anew; under a photo two, #761): 5 000 + 3 × 8 000 = 29 s. `.demoAnalysis` is three backend calls
 (the catalog and the access read beside the answer, then the signal) and up to four Bot API calls:
-3 × 5 000 + 4 × 8 000 = 47 s. Its four-call paths (#482): the answer, «⏳» edited or sent under a
-photo, the card's photo, «⏳» deleted; the answer, «⏳», the photo refused, «⏳» edited into the
-text card; the answer, «⏳» sent under a photo, the text result's edit refused as gone, the result
-sent anew; the answer, the summary gone, the photo refused, the text card sent. A gone summary
+3 × 5 000 + 4 × 8 000 = 47 s. The card itself is three: the answer, «⏳», «⏳» edited into the card
+(#875). Its four-call paths: the answer, «⏳» edited or sent under a photo, its edit into the card
+refused → «⏳» edited into the text card, or refused as gone → the card sent anew, or failed in
+transport → «⏳» says the analysis is unavailable; the answer, «⏳» sent under a photo, the text
+result's edit refused as gone, the result sent anew; the answer, the summary gone, the photo
+refused, the text card sent. A gone summary
 gets no «⏳» anew: with it the card's path would be 3 × 5 000 + 5 × 8 000 = 55 s, past the
 shutdown budget. `.analysisMore` (#360) is one backend call (access beside the
 answer) and two Bot API calls (the answer, the keyboard's edit; a refused edit sends nothing
@@ -831,7 +851,7 @@ end label `f`, by the bot's clock: a quiet pair's second closes by the clock
 `H1_SECOND_CLOSE_MARGIN_MS` (500 ms, shared) after `f`, and the next poll still finds it current
 (`H1_SECOND_CLOSE_MARGIN_MS < OFFSET < POLL ≤ H1_START_SECOND_MAX_AGE_MS − H1_SECOND_CLOSE_MARGIN_MS`,
 links of the bot's chain), so no second's decision is missed. A tick reads `GET /trading/signals`
-and `GET /trading/pairs` once and decides every entry on that snapshot: two in-memory reads a
+and `GET /trading/pairs` (through the process's cache, [Fresh](#fresh)) once and decides every entry on that snapshot: two in-memory reads a
 second whatever the number of waiting users (accepted risk 3 of #828). A pair has a signal now when
 it is in the `5s` list and `checkDemoTrade` takes it — the list's own definition. Since #869 a tick
 first decides every entry on the snapshot (`decide`, before any await), then runs the **signal

@@ -27,6 +27,7 @@ import {
   textUpdate,
   type ApiCall,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { LABELS, TEXTS } from './texts';
 
@@ -62,6 +63,7 @@ function setup({
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     languages,
   });
   const api = captureApi(bot);
@@ -246,6 +248,7 @@ describe('/language (#708)', () => {
         [{ text: LABELS.menuButton, callback_data: MENU_CALLBACK_DATA }],
       ]),
     );
-    expect(languages.get(USER.id)).toBeUndefined();
+    // the choice is not kept; the client's language is, a while (#875, LANGUAGE_MISSING_TTL_MS)
+    expect(languages.get(USER.id)).toBe(BotLanguage.En);
   });
 });
