@@ -38,6 +38,11 @@ describe('fileRefusal (#859)', () => {
     [400, 'Bad Request: message to edit not found', false],
     [403, 'Forbidden: bot was blocked by the user', false],
     [429, 'Too Many Requests: retry after 3', false],
+    [
+      400,
+      'Bad Request: query is too old and response timeout expired or query ID is invalid',
+      false,
+    ],
   ] as const)('T-file a %i «%s» is a file refusal: %s', (code, description, expected) => {
     expect(fileRefusal(refusal(code, description))).toBe(expected);
   });

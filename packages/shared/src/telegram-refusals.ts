@@ -35,10 +35,18 @@ export function editRefusal(error: TelegramRefusal): 'shown' | 'gone' | undefine
 }
 
 // A media edit or send refused for its file (#859): a bad file or a stale file_id, which Telegram
-// does not tell apart; neither a 429, a 403 nor a refusal editRefusal reads. Its file_id is to be
-// forgotten, so the next send uploads the file.
+// does not tell apart; neither a 429, a 403, a refusal editRefusal reads nor an expired inline or
+// callback query. Its file_id is to be forgotten, so the next send uploads the file. The expired
+// query is telegram-bot-api's wording for answerInlineQuery/answerCallbackQuery, "query is too old
+// and response timeout expired or query ID is invalid" — one phrase for both causes, taken from
+// public reports, not observed live here, as the wordings above (#875).
+const QUERY_EXPIRED = 'query is too old';
+
 export const fileRefusal = (error: TelegramRefusal): boolean =>
-  error.error_code !== 429 && error.error_code !== 403 && editRefusal(error) === undefined;
+  error.error_code !== 429 &&
+  error.error_code !== 403 &&
+  editRefusal(error) === undefined &&
+  !error.description.includes(QUERY_EXPIRED);
 
 // What a refused deleteMessage means, always as a 400: "message to delete not found" (the server's
 // check_message in telegram-bot-api Client.cpp) is a message already gone; the forbidden delete

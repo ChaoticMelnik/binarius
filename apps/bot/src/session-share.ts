@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { Composer, GrammyError, InputFile, type Context } from 'grammy';
 import {
   ButtonRole,
@@ -55,7 +56,8 @@ export const shareButton = (query: string) =>
     allow_channel_chats: true,
   });
 
-// the promo cards' file_ids kept by session (#875): a bound on memory, as the session tracker's
+// the promo cards' file_ids kept by the picture (the SVG's sha256): session, language and text
+// overrides (#875); a bound on memory, as the session tracker's
 export const PROMO_FILE_IDS_MAX = 10_000;
 
 export interface SessionShareDeps {
@@ -85,7 +87,7 @@ export function createSessionShareComposer<C extends Context>({
 }: SessionShareDeps): Composer<C> {
   const composer = new Composer<C>();
   const notShared = 'trading session not shared';
-  // a card drawn and posted once per session and process; read after the owner's read, never
+  // a card drawn and posted once per picture and process; read after the owner's read, never
   // instead of it (Rule 13, Rule 72)
   const promoIds = createTelegramFileIds<string>({ maxEntries: PROMO_FILE_IDS_MAX });
 
@@ -126,23 +128,24 @@ export function createSessionShareComposer<C extends Context>({
       await answer(ctx, sessionId, null);
       return;
     }
-    const known = promoIds.get(sessionId);
-    if (known !== undefined) {
-      await answer(ctx, sessionId, { fileId: known, caption });
-      return;
-    }
     let fileId: string | undefined;
+    let key: string;
     try {
-      const png = await renderSessionCard(
-        sessionPromoSvg(sessionPromoModel(share, share.session, assetId)),
-      );
-      const posted = await sendPhotoToStorage(
-        ctx.api,
-        storageChatId,
-        new InputFile(png, 'promo.png'),
-      );
-      promoIds.remember(sessionId, posted);
-      fileId = promoIds.get(sessionId);
+      const svg = sessionPromoSvg(sessionPromoModel(share, share.session, assetId));
+      // the whole picture is the key, as the backend's card media (Rule 69): a language or a text
+      // override changes the SVG, so the card is drawn anew
+      key = createHash('sha256').update(svg).digest('hex');
+      fileId = promoIds.get(key);
+      if (fileId === undefined) {
+        const png = await renderSessionCard(svg);
+        const posted = await sendPhotoToStorage(
+          ctx.api,
+          storageChatId,
+          new InputFile(png, 'promo.png'),
+        );
+        promoIds.remember(key, posted);
+        fileId = promoIds.get(key);
+      }
     } catch (error) {
       // no retry: an inline query is answered once, and the user can press again
       logger.warn(
@@ -157,7 +160,7 @@ export function createSessionShareComposer<C extends Context>({
       await answer(ctx, sessionId, null);
       return;
     }
-    await answer(ctx, sessionId, { fileId, caption });
+    await answer(ctx, sessionId, { fileId, caption }, key);
   });
 
   composer.on('inline_query', (ctx) => answer(ctx, undefined, null));
@@ -171,6 +174,8 @@ export function createSessionShareComposer<C extends Context>({
     ctx: Context,
     sessionId: string | undefined,
     card: { fileId: string; caption: TelegramHtml } | null,
+    // the kept file id's key the answer used: only that one is forgotten
+    keptKey?: string,
   ): Promise<void> {
     try {
       if (card === null || sessionId === undefined) {
@@ -180,9 +185,10 @@ export function createSessionShareComposer<C extends Context>({
       }
     } catch (error) {
       // a forged or foreign file id is refused here too (400): Telegram is its validator; a stale
-      // kept id is forgotten, so the next query draws the card again
-      if (sessionId !== undefined && error instanceof GrammyError && fileRefusal(error)) {
-        promoIds.forget(sessionId);
+      // kept id is forgotten, so the next query draws the card again — an expired query is not
+      // the file's fault, so the id stays (fileRefusal)
+      if (keptKey !== undefined && error instanceof GrammyError && fileRefusal(error)) {
+        promoIds.forget(keptKey);
       }
       logger.warn(
         {

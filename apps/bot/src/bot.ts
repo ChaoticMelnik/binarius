@@ -175,8 +175,8 @@ export interface CreateBotOptions {
   languages?: UserLanguages;
   // the wait before the summary's photo again after a 429 (#537); a test records it
   sleep?: (ms: number) => Promise<void>;
-  // the unpin and the pin of a card, off the user's chain (#875, detached.ts); required, so no
-  // test arms timers unasked
+  // the unpin and the pin of a card, off the user's chain and ordered by chat (#875, detached.ts);
+  // required, so no test arms timers unasked
   detached: Pick<DetachedWork, 'run'>;
 }
 
@@ -393,7 +393,7 @@ export function createBot({
       () => replyHtml(ctx, card, { reply_markup }),
     );
     if (sent === undefined || !pin) return;
-    detached.run(() => pinCard(ctx, sent.message_id, 'the status card'));
+    detached.run(sent.chat.id, () => pinCard(ctx, sent.message_id, 'the status card'));
   }
 
   // Reads only: the users row is not refreshed and nothing is recorded, so the row is written only
@@ -956,7 +956,7 @@ export function createBot({
       () => replyHtml(ctx, card, { reply_markup: demoKeyboard() }),
     );
     if (sent === undefined) return;
-    detached.run(() => pinCard(ctx, sent.message_id, 'the account card'));
+    detached.run(sent.chat.id, () => pinCard(ctx, sent.message_id, 'the account card'));
   }
 
   // The /settings message re-rendered in place after a press (#120). Unlike a refused send, a
@@ -1006,9 +1006,10 @@ export function createBot({
   }
 
   // The bot stores no message id, so clearing every pin is what leaves exactly one card pinned
-  // (the user's own pins go too, the owner's choice). Neither failure touches the connection,
-  // which is already committed: the unpin failing still lets the pin run, since two pinned cards
-  // are better than none. The pin is silent because the card itself has just notified.
+  // (the user's own pins go too, the owner's choice); detached.ts runs one chat's pins one at a
+  // time, the newest last, so that one is the latest card (Rule 73). Neither failure touches the
+  // connection, which is already committed: the unpin failing still lets the pin run, since two
+  // pinned cards are better than none. The pin is silent because the card itself has just notified.
   async function pinCard(
     ctx: Context,
     messageId: number,

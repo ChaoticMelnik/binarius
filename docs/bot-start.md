@@ -293,8 +293,8 @@ owner's choice). In a private chat neither call needs rights. Each may fail: one
 the method and the Telegram code, and the next step runs — a failed unpin still pins, a failed
 pin changes nothing about the connection, which is already committed. Neither is retried, and the
 caption does not claim the card is pinned. Since #875 both run off the user's chain, once the
-handler has returned (`detached.ts`), so the confirm button's path is 1 / 3 and the code step's
-2 / 2 in `HANDLER_CALLS`.
+handler has returned — one chat's at a time, the newest last (`detached.ts`, Rule 73) — so the
+confirm button's path is 1 / 3 and the code step's 2 / 2 in `HANDLER_CALLS`.
 
 What is logged is the error's identity, the method and the code (`telegramErrorFields`), never
 the payload: the caption holds the user's address. `logging.test.ts` reads those lines at `trace`

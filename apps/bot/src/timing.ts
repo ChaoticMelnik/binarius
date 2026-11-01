@@ -301,7 +301,8 @@ export const HANDLER_BUDGET_MS = Math.max(...Object.values(HANDLER_CALLS).map(ha
 // bot.stop() plus whatever middleware is still in flight.
 export const SHUTDOWN_BUDGET_MS = 50_000;
 // The cards' unpin and pin handed off the users' chains (#875, detached.ts): what its stop() can
-// be waiting for, one of each. It runs beside the drain of the handlers.
+// be waiting for, one of each — one running work per chat, the chats side by side; a waiting one
+// is dropped at the stop. It runs beside the drain of the handlers.
 export const DETACHED_DRAIN_MS = 2 * TELEGRAM_API_TIMEOUT_MS;
 // The pairs catalog kept for every reader of the process (#875, pairs-cache.ts): one GET
 // /trading/pairs a second at most, however many press or wait. The wait for a signal's tick reads
