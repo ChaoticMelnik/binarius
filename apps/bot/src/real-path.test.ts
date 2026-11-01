@@ -73,6 +73,7 @@ import {
   userView,
   type ApiCall,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 
 // The real path (#121, Plan 5 decision 29): every screen a user in real mode can reach, rendered
@@ -237,6 +238,7 @@ async function shown(scene: Scene, access: TradingAccessResponse): Promise<strin
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     token: '123456:AA-bot-token',
     backend: fakeBackend({
       recordStart: () => Promise.resolve(userView({ hasActiveBrokerAccount: true })),

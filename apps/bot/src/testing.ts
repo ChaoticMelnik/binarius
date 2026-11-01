@@ -7,6 +7,7 @@ import type { Bot, HttpError } from 'grammy';
 import type { ApiError, Update, User, UserFromGetMe } from 'grammy/types';
 import { vi, type Mock } from 'vitest';
 import type { BackendClient } from './backend-client';
+import { createDetachedWork, type DetachedWork } from './detached';
 import { stakeFingerprint } from './demo';
 import type { IntentTracker } from './intent-tracker';
 import type { SessionResumer } from './session-resume';
@@ -608,6 +609,9 @@ export const stubShownSignals = (
   take: Mock<ShownSignals['take']>;
   size: Mock<ShownSignals['size']>;
 } => ({ remember: vi.fn(), take: vi.fn(() => taken), size: vi.fn(() => 0) });
+
+// the cards' unpin and pin off the user's chain (#875): a scene that reads them awaits `settled()`
+export const detachedWork = (): DetachedWork => createDetachedWork({ logger: fakeLogger() });
 
 // a shown direction as the start sends it
 export const shownRecord = (patch: Partial<ShownSignalStart> = {}): ShownSignalStart => ({

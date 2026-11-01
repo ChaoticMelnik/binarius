@@ -7,6 +7,7 @@ import {
   editRefusal,
   fileRefusal,
   keyboardOf,
+  stackKeyboards,
   DEFAULT_SESSION_CYCLES,
   errorLogFields,
   pairLabel,
@@ -81,7 +82,7 @@ import {
   sendPhotoByIdHtml,
 } from './send';
 import { renderSessionCard, sessionCardModel, sessionCardSvg } from './session-card';
-import { attachShareButton } from './session-share';
+import { shareButton, shareQuery } from './session-share';
 import {
   SESSION_NOT_FOUND,
   type SessionDrawing,
@@ -974,14 +975,13 @@ export function createTradingSessionComposer<C extends Context>({
     }
     if (summary === null) return;
     const caption = sessionTexts.sessionSummaryText(symbol, assetId, view);
-    const keyboard = sessionCardKeyboard(view, cashierUrl);
-    // «📤 Поделиться» (#321): catches its own failures; a session without a trade has no card to
-    // share (session-share.ts answers it with nothing), so no button
-    const shareOn = async (sent: Pick<Message, 'chat' | 'message_id'>) => {
-      if (shareEnabled && summary.trades.length > 0) {
-        await attachShareButton(api, logger, view.id, sent, keyboard);
-      }
-    };
+    const cardKeyboard = sessionCardKeyboard(view, cashierUrl);
+    // «📤 Поделиться» (#321, #875) on top, in the send itself: a session without a trade has no
+    // card to share (session-share.ts answers it with nothing), so no button
+    const keyboard =
+      shareEnabled && summary.trades.length > 0
+        ? stackKeyboards(keyboardOf([shareButton(shareQuery(view.id))]), cardKeyboard)
+        : cardKeyboard;
     const notSent = (error: unknown, method: 'sendMessage' | 'sendPhoto') =>
       logger.warn(
         { ...errorLogFields(error), ...telegramErrorFields(error, method), ...fields },
@@ -989,7 +989,7 @@ export function createTradingSessionComposer<C extends Context>({
       );
     const asText = async (): Promise<void> => {
       try {
-        await shareOn(await sendHtmlById(api, chatId, caption, { reply_markup: keyboard }));
+        await sendHtmlById(api, chatId, caption, { reply_markup: keyboard });
       } catch (error) {
         notSent(error, 'sendMessage');
       }
@@ -997,17 +997,15 @@ export function createTradingSessionComposer<C extends Context>({
     if (summary.trades.length === 0) return asText();
     let png: Buffer;
     try {
-      png = renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
+      png = await renderSessionCard(sessionCardSvg(sessionCardModel(summary, symbol, assetId)));
     } catch (error) {
       logger.warn({ ...errorLogFields(error), ...fields }, 'trading session card not drawn');
       return asText();
     }
-    const sendPhoto = async () =>
-      shareOn(
-        await sendPhotoByIdHtml(api, chatId, new InputFile(png, 'session.png'), caption, {
-          reply_markup: keyboard,
-        }),
-      );
+    const sendPhoto = () =>
+      sendPhotoByIdHtml(api, chatId, new InputFile(png, 'session.png'), caption, {
+        reply_markup: keyboard,
+      });
     try {
       await sendPhoto();
       return;

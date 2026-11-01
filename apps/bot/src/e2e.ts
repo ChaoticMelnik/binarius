@@ -3,7 +3,9 @@
 
 export { createBackendClient } from './backend-client';
 export { createBot, type CreateBotOptions } from './bot';
+export { createDetachedWork } from './detached';
 export { createIntentTracker } from './intent-tracker';
+export { withPairsCache } from './pairs-cache';
 export { createSessionResumer } from './session-resume';
 export { createSessionTracker } from './session-tracker';
 export { createShownSignals } from './shown-signals';
@@ -20,6 +22,7 @@ export {
   INTENT_TRACK_DEADLINE_MS,
   INTENT_TRACK_FIRST_POLL_MS,
   INTENT_TRACK_POLL_MS,
+  PAIRS_CACHE_TTL_MS,
   SESSION_RESUME_GAP_MS,
   SESSION_RESUME_INTERVAL_MS,
   SESSION_TRACK_DEADLINE_MS,

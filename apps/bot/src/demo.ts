@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { Composer, GrammyError, HttpError, type Context } from 'grammy';
 import {
-  deleteRefusal,
   editRefusal,
   fileRefusal,
   joinHtmlLines,
@@ -79,6 +78,7 @@ import type { Logger } from './logging';
 import type { ScanMedia } from './scan-media';
 import {
   editMessageAnimationByIdHtml,
+  editMessagePhotoByIdHtml,
   editMessageTextByIdHtml,
   editMessageTextHtml,
   editMessageTextHtmlWithoutNextStep,
@@ -1443,10 +1443,11 @@ export function createDemoComposer<C extends Context>({
   });
 
   // The analysis (#126): the check on the catalog read at this press, never on the one the
-  // summary was drawn from; then «⏳» (showWaiting), the signal, and the screen: a text in place
-  // of «⏳», or a signal's card (#482) as a photo under it, «⏳» deleted after it. The signal is
-  // asked for only once «⏳» was delivered or is known gone: after a send of unknown outcome
-  // nothing more is sent, and a decision nobody sees would cost a broker call.
+  // summary was drawn from; then «⏳» (showWaiting) while the access read is still on its way
+  // (#875), the signal, and the screen: a text in place of «⏳», or a signal's card (#482) that
+  // «⏳» becomes (editMessageMedia). The signal is asked for only once «⏳» was delivered or is
+  // known gone: after a send of unknown outcome nothing more is sent, and a decision nobody sees
+  // would cost a broker call.
   composer.callbackQuery(DEMO_ANALYSIS_PATTERN, async (ctx) => {
     const assetId = assetIdOf(ctx.match[1]);
     const durationSec = durationOf(ctx.match[2]);
@@ -1456,11 +1457,9 @@ export function createDemoComposer<C extends Context>({
     }
     // the mode decides the session row's data and label (#327); a failed access read draws the
     // demo keyboard, whose session press the backend refuses for a real-mode user
-    // (mode_not_allowed)
-    const [read, stake] = await answerAnd(
-      ctx,
-      Promise.all([readDemoTrade(backend, assetId, durationSec, now), stakeAmount(ctx.from.id)]),
-    );
+    // (mode_not_allowed). stakeAmount never rejects: it logs its own failure.
+    const stake = stakeAmount(ctx.from.id);
+    const read = await answerAnd(ctx, readDemoTrade(backend, assetId, durationSec, now));
     if (!read.ok) {
       const screen = tradeFailure(read, ctx.callbackQuery.data);
       await editOrReply(ctx, screen.text, screen.keyboard);
@@ -1471,14 +1470,19 @@ export function createDemoComposer<C extends Context>({
       TEXTS.analyzing({ subject: analysisSubject(read.pair, durationSec) }),
     );
     if (waiting === 'unknown') return;
-    const amounts = cardAmountsOf(stake.access, durationSec, connectButtons);
-    const { screen, response } = await evaluate(
-      ctx.from.id,
-      read.pair,
-      durationSec,
-      stake.mode,
-      amounts !== null,
-    );
+    const response = await evaluate(ctx.from.id, read.pair, durationSec);
+    const { access, mode } = await stake;
+    const amounts = cardAmountsOf(access, durationSec, connectButtons);
+    const screen =
+      response === undefined
+        ? analysisUnavailableScreen(read.pair, durationSec)
+        : analysisScreen({
+            pair: read.pair,
+            durationSec,
+            response,
+            mode,
+            chooseAmount: amounts !== null,
+          });
     if (screen.wait) {
       // no signal now: the wait for one (#664), «⏳» becoming the scanner's animation (#859), its
       // card drawn in this message once it comes. The analysis read no list: the scanner's lines
@@ -1514,7 +1518,7 @@ export function createDemoComposer<C extends Context>({
       });
       return;
     }
-    const keyboard = analysisKeyboard(assetId, durationSec, screen, stake.mode, amounts);
+    const keyboard = analysisKeyboard(assetId, durationSec, screen, mode, amounts);
     if (screen.photo === null) {
       await showResult(ctx, waiting, screen.text, keyboard);
       return;
@@ -1567,14 +1571,12 @@ export function createDemoComposer<C extends Context>({
   // A thrown call (unreachable, a non-2xx, a broken body) and every fetch_failed but
   // rate_limited are logged: rate_limited is the broker's ordinary answer, told to the user. The
   // request names the user's analysis, which the backend records for the analysis reminder (#484).
-  // The answer comes back with the screen, undefined where the call threw.
+  // Undefined where the call threw: the screen is then the analysis unavailable.
   async function evaluate(
     telegramUserId: number,
     pair: PairView,
     durationSec: DemoDurationSec,
-    mode: TradeMode,
-    chooseAmount: boolean,
-  ): Promise<{ screen: AnalysisScreen; response: TradingSignalResponse | undefined }> {
+  ): Promise<TradingSignalResponse | undefined> {
     let response;
     try {
       response = await backend.evaluateSignal(pair.id, intervalForDuration(durationSec), {
@@ -1586,7 +1588,7 @@ export function createDemoComposer<C extends Context>({
         { ...errorLogFields(error), ...backendErrorFields(error) },
         'signal not evaluated',
       );
-      return { screen: analysisUnavailableScreen(pair, durationSec), response: undefined };
+      return undefined;
     }
     if (
       response.outcome === SignalFeedOutcome.FetchFailed &&
@@ -1594,10 +1596,7 @@ export function createDemoComposer<C extends Context>({
     ) {
       logger.warn({ signalCode: response.code }, 'signal not evaluated');
     }
-    return {
-      screen: analysisScreen({ pair, durationSec, response, mode, chooseAmount }),
-      response,
-    };
+    return response;
   }
 
   // «⏳» before the signal is asked for. Under a photo (the analysis card, the session's summary
@@ -1706,12 +1705,14 @@ export function createDemoComposer<C extends Context>({
   }
 
   // A signal's card (#482): the picture of its direction, by the file_id remembered for it or as
-  // the file, under «⏳», which is deleted once the card is there. A photo Telegram refuses — a
-  // stale file_id among them — forgets the id, and the same caption and keyboard go as text in
-  // place of «⏳» (or new, where «⏳» is gone); the next press uploads the file. A transport failure
-  // leaves the card unknown: «⏳» says the analysis is unavailable, with its repeat. Neither edit
-  // is followed by anything: the budget has no call left (timing.ts). True when the card went, as
-  // the photo or as its text (#829: its direction is then on screen).
+  // the file, that «⏳» becomes (editMessageMedia, #875), or a new message where «⏳» is gone. A
+  // photo refused for its file — a stale file_id among them — forgets the id (the next press
+  // uploads the file); refused for its file or otherwise (a 429), the same caption and keyboard go
+  // as text in place of «⏳». A «⏳» gone meanwhile gets the card as a new message, and nothing
+  // more if that is refused. A transport failure leaves the card unknown: «⏳» says the analysis
+  // is unavailable, with its repeat. Nothing follows these: the budget has no call left
+  // (timing.ts). True when the card went, as the photo or as its text (#829: its direction is
+  // then on screen).
   async function sendCard(
     ctx: Context,
     waiting: Waiting,
@@ -1721,13 +1722,33 @@ export function createDemoComposer<C extends Context>({
     pair: PairView,
     durationSec: DemoDurationSec,
   ): Promise<boolean> {
+    if (waiting === null) return replyCard(ctx, action, text, keyboard, { textOnRefusal: true });
     const photo = setupCardPhotos.photo(action);
-    let sent;
+    let edited;
     try {
-      sent = await replyWithPhotoHtml(ctx, photo, text, { reply_markup: keyboard });
+      edited = await editMessagePhotoByIdHtml(
+        ctx.api,
+        waiting.chatId,
+        waiting.messageId,
+        photo,
+        text,
+        { reply_markup: keyboard },
+      );
     } catch (error) {
       if (error instanceof GrammyError) {
-        setupCardPhotos.forget(action);
+        const refusal = editRefusal(error);
+        if (refusal === 'shown') {
+          logger.info({ ...telegramErrorFields(error) }, 'the demo screen already shows this');
+          return true;
+        }
+        if (refusal === 'gone') {
+          logger.warn(
+            { ...errorLogFields(error), ...telegramErrorFields(error) },
+            'the analysis «⏳» is gone, the card goes as a new message',
+          );
+          return replyCard(ctx, action, text, keyboard, { textOnRefusal: false });
+        }
+        if (fileRefusal(error)) setupCardPhotos.forget(action);
         logger.warn(
           {
             ...errorLogFields(error),
@@ -1736,33 +1757,75 @@ export function createDemoComposer<C extends Context>({
           },
           'the analysis card photo was refused, sending its text',
         );
-        if (waiting !== null) return editWaiting(ctx, waiting, text, keyboard);
+        return editWaiting(ctx, waiting, text, keyboard);
+      } else if (error instanceof HttpError) {
+        logCardTransport(ctx, error, 'editMessageMedia');
+        await editWaiting(
+          ctx,
+          waiting,
+          analysisUnavailableScreen(pair, durationSec).text,
+          analysisTailKeyboard(pair.id, durationSec),
+        );
+        return false;
+      }
+      throw error;
+    }
+    setupCardPhotos.remember(action, edited);
+    return true;
+  }
+
+  // The card as a new message: where «⏳» is gone, or was not there. A refusal forgets the id when
+  // it is the file's and, with `textOnRefusal`, sends the same caption and keyboard as text.
+  async function replyCard(
+    ctx: Context,
+    action: TradeAction,
+    text: TelegramHtml,
+    keyboard: BotKeyboard,
+    { textOnRefusal }: { textOnRefusal: boolean },
+  ): Promise<boolean> {
+    const photo = setupCardPhotos.photo(action);
+    let sent;
+    try {
+      sent = await replyWithPhotoHtml(ctx, photo, text, { reply_markup: keyboard });
+    } catch (error) {
+      if (error instanceof GrammyError) {
+        if (fileRefusal(error)) setupCardPhotos.forget(action);
+        logger.warn(
+          {
+            ...errorLogFields(error),
+            ...telegramErrorFields(error),
+            byFileId: typeof photo === 'string',
+          },
+          textOnRefusal
+            ? 'the analysis card photo was refused, sending its text'
+            : 'the analysis card photo was refused',
+        );
+        if (!textOnRefusal) return false;
         await replyHtml(ctx, text, { reply_markup: keyboard });
         return true;
       } else if (error instanceof HttpError) {
-        logger.error(
-          {
-            ...errorLogFields(error),
-            ...telegramErrorFields(error, 'sendPhoto'),
-            updateId: ctx.update.update_id,
-          },
-          'the analysis card failed in transport',
-        );
-        if (waiting !== null) {
-          await editWaiting(
-            ctx,
-            waiting,
-            analysisUnavailableScreen(pair, durationSec).text,
-            analysisTailKeyboard(pair.id, durationSec),
-          );
-        }
+        logCardTransport(ctx, error, 'sendPhoto');
         return false;
       }
       throw error;
     }
     setupCardPhotos.remember(action, sent);
-    if (waiting !== null) await deleteWaiting(ctx, waiting);
     return true;
+  }
+
+  function logCardTransport(
+    ctx: Context,
+    error: HttpError,
+    method: 'sendPhoto' | 'editMessageMedia',
+  ): void {
+    logger.error(
+      {
+        ...errorLogFields(error),
+        ...telegramErrorFields(error, method),
+        updateId: ctx.update.update_id,
+      },
+      'the analysis card failed in transport',
+    );
   }
 
   // «⏳» as the wait's text after its animation was refused (#859): already shown is drawn; any
@@ -1814,32 +1877,6 @@ export function createDemoComposer<C extends Context>({
         'the analysis «⏳» was not edited after the card',
       );
       return false;
-    }
-  }
-
-  // Telegram allows deleting a bot's own message under 48 h old in a private chat, so a refusal is
-  // unexpected: a gone one is logged as info, anything else (a transport failure too) as a
-  // warning, and nothing more — the card is already there.
-  async function deleteWaiting(
-    ctx: Context,
-    { chatId, messageId }: Exclude<Waiting, null>,
-  ): Promise<void> {
-    try {
-      await ctx.api.deleteMessage(chatId, messageId);
-    } catch (error) {
-      if (!(error instanceof GrammyError) && !(error instanceof HttpError)) throw error;
-      if (error instanceof GrammyError && deleteRefusal(error) === 'gone') {
-        logger.info({ ...telegramErrorFields(error) }, 'the analysis «⏳» was already gone');
-        return;
-      }
-      logger.warn(
-        {
-          ...errorLogFields(error),
-          ...telegramErrorFields(error, 'deleteMessage'),
-          updateId: ctx.update.update_id,
-        },
-        'the analysis «⏳» was not deleted',
-      );
     }
   }
 

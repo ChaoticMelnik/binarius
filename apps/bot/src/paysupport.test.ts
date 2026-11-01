@@ -30,6 +30,7 @@ import {
   userLanguagesWith,
   type ApiCall,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { LABELS, paysupportListLabel, paysupportRefundLabel, paysupportText, TEXTS } from './texts';
 
@@ -70,6 +71,7 @@ function setup(patch: Partial<BackendClient> = {}, languages?: UserLanguages) {
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     token: '123456:AA-bot-token',
     backend,
     logger,

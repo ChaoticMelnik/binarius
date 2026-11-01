@@ -32,6 +32,7 @@ import {
   stubSessionTracker,
   stubTracker,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 
 // `bot.start()` resolves only once the polling loop has ended, which is what makes the drain
@@ -163,6 +164,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -220,6 +222,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: fakeLogger(),
@@ -276,6 +279,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: held.texts,
       bot: fake.bot,
       logger: log,
@@ -312,6 +316,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -358,6 +363,7 @@ describe('runBot', () => {
         sessionTracker: idleTracker(),
         sessionResumer: idleResumer(),
         signalWaiter: idleTracker(),
+        detached: idleTracker(),
         botTexts: idleTexts(),
         bot: fake.bot,
         logger: log,
@@ -391,6 +397,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -413,6 +420,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -450,6 +458,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -478,6 +487,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -506,6 +516,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -536,6 +547,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -572,6 +584,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -601,6 +614,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -627,6 +641,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -662,6 +677,7 @@ describe('runBot', () => {
       sessionTracker,
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -694,6 +710,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer,
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: fakeLogger(),
@@ -714,6 +731,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: late,
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: held.texts,
       bot: signalled.bot,
       logger: fakeLogger(),
@@ -743,6 +761,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer,
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -770,6 +789,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter,
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -788,6 +808,69 @@ describe('runBot', () => {
     ]);
   });
 
+  // #875
+  it('L-det1 stops the detached work with the bot: its stop runs at the signal and is drained', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    let finish: (() => void) | undefined;
+    const detached = {
+      stop: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    };
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
+      detached,
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+    });
+    signalSource.emit('SIGTERM');
+    expect(detached.stop).toHaveBeenCalledTimes(1);
+    fake.resolveStop();
+    fake.resolveStart();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(exit).not.toHaveBeenCalled();
+    finish?.();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
+  it('L-det2 names the detached work when its stop fails', async () => {
+    const fake = fakeBot();
+    const log = fakeLogger();
+    const exit = vi.fn();
+    const signalSource = signals();
+    runBot({
+      tracker: idleTracker(),
+      sessionTracker: idleTracker(),
+      sessionResumer: idleResumer(),
+      signalWaiter: idleTracker(),
+      detached: { stop: vi.fn(() => Promise.reject(new Error('pin died'))) },
+      botTexts: idleTexts(),
+      bot: fake.bot,
+      logger: log,
+      exit,
+      signalSource,
+    });
+    signalSource.emit('SIGTERM');
+    fake.resolveStop();
+    fake.resolveStart();
+    await until('the exit', () => exit.mock.calls.length >= 1);
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(errorMessages(log)).toEqual(['shutdown: detached work failed', STEP_LINE]);
+  });
+
   it('names the signal waiter when its stop fails', async () => {
     const fake = fakeBot();
     const log = fakeLogger();
@@ -798,6 +881,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: { stop: vi.fn(() => Promise.reject(new Error('waiter died'))) },
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -823,6 +907,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: {
         stop: vi.fn(() => Promise.reject(new Error('refresher died'))),
         loaded: () => Promise.resolve(),
@@ -850,6 +935,7 @@ describe('runBot', () => {
       sessionTracker: { stop: vi.fn(() => Promise.reject(new Error('tracker died'))) },
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: failing.bot,
       logger: log,
@@ -872,6 +958,7 @@ describe('runBot', () => {
       sessionTracker: { stop: vi.fn(() => new Promise<void>(() => {})) },
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: stuck.bot,
       logger: stuckLog,
@@ -897,6 +984,7 @@ describe('runBot', () => {
       sessionTracker: idleTracker(),
       sessionResumer: idleResumer(),
       signalWaiter: idleTracker(),
+      detached: idleTracker(),
       botTexts: idleTexts(),
       bot: fake.bot,
       logger: log,
@@ -1008,6 +1096,7 @@ function scene(options: SceneOptions = {}) {
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     token: TOKEN,
     backend,
     logger: log,
@@ -1053,6 +1142,7 @@ function scene(options: SceneOptions = {}) {
     sessionTracker: idleTracker(),
     sessionResumer: idleResumer(),
     signalWaiter: idleTracker(),
+    detached: idleTracker(),
     botTexts: idleTexts(),
     bot: createPollingLoop({
       bot,

@@ -16,6 +16,7 @@ import {
   stubSessionTracker,
   stubTracker,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 
 // The list and its Bot API limits are packages/shared/src/bot-commands.test.ts (#301).
@@ -64,6 +65,7 @@ describe('the command menu', () => {
       sessionResumer: stubSessionResumer(),
       signalWaiter: stubSignalWaiter(),
       shownSignals: stubShownSignals(),
+      detached: detachedWork(),
       token: '123456:AA-bot-token',
       backend,
       logger: fakeLogger(),

@@ -31,7 +31,7 @@ import {
   BOT_TEXT_DEFAULT_SOURCES,
 } from '@binarius/shared';
 import { runWithLanguage, type UserLanguages } from './language';
-import { UNIT_WAIT_CEILING_MS, botTextSourcesWith } from '@binarius/shared/testing';
+import { UNIT_WAIT_CEILING_MS, botTextSourcesWith, until } from '@binarius/shared/testing';
 import { ACCOUNT_CARD_PHOTO_PATH } from './assets';
 import { BackendError, BackendErrorCode, type BackendClient } from './backend-client';
 import {
@@ -73,6 +73,7 @@ import {
   inlineStyles,
   listen,
   messageAnswer,
+  photoAnswer,
   rejectionOf,
   sentPayload,
   startUpdate,
@@ -89,6 +90,7 @@ import {
   stubText,
   stubTextSource,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   accountCard,
@@ -104,6 +106,9 @@ import {
   userContextOf,
   type AccountCardInput,
 } from './texts';
+
+// the account card picture's sizes as Telegram answers its sendPhoto, smallest first (#875)
+const CARD_FILE_IDS = ['card-file-s', 'card-file-l'];
 
 // a card line whose default holds none of its variables
 const CARD_CONTEXT = { firstName: 'Ada', email: null };
@@ -183,6 +188,7 @@ function setup(
   const logger = fakeLogger();
   const dialog = createLoginDialog(options.now === undefined ? {} : { now: options.now });
   if (options.dialog !== undefined) dialog.set(USER.id, options.dialog);
+  const detached = detachedWork();
   const bot = createBot({
     languages: options.languages ?? userLanguagesWith(),
     intentTracker: stubTracker(),
@@ -190,6 +196,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached,
     token: '123456:AA-bot-token',
     backend,
     logger,
@@ -202,10 +209,17 @@ function setup(
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
   });
   const { calls, apiErrors, answers } = captureApi(bot);
-  answers.set('sendPhoto', messageAnswer(CARD_MESSAGE_ID));
+  answers.set('sendPhoto', photoAnswer(CARD_MESSAGE_ID, CARD_FILE_IDS));
+  // the cards' pins run off the chain (#875): a scene's update is done once they are too; H-pin
+  // reads the handler alone through `handleOnly`
+  const handleOnly = bot.handleUpdate.bind(bot);
+  bot.handleUpdate = async (...args) => {
+    await handleOnly(...args);
+    await detached.settled();
+  };
   answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));
   capturedCalls.push(calls);
-  return { bot, backend, calls, logger, apiErrors, answers, dialog };
+  return { bot, backend, calls, logger, apiErrors, answers, dialog, detached, handleOnly };
 }
 
 const refused = (status: number, reason?: string) =>
@@ -420,7 +434,8 @@ describe('/start', () => {
     await bot.handleUpdate(startUpdate('/start'));
     expect(calls.map((call) => call.method)).toEqual(['sendMessage']);
     expect(sentPayload(calls, 'sendMessage')?.text).toBe(TEXTS.confirmPrompt.value);
-    expect(backend.readTradingAccess).not.toHaveBeenCalled();
+    // read beside the record since #875, its answer unused here
+    expect(backend.readTradingAccess).toHaveBeenCalledTimes(1);
   });
 
   it('shows a blocked user no confirm button either', async () => {
@@ -520,9 +535,6 @@ describe('the status card', () => {
         disable_notification: true,
       });
       expect(backend.readTradingAccess).toHaveBeenCalledWith('4242');
-      expect(vi.mocked(backend.recordStart).mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(backend.readTradingAccess).mock.invocationCallOrder[0] ?? 0,
-      );
       expect(logger.warn).not.toHaveBeenCalled();
     },
   );
@@ -594,6 +606,127 @@ describe('the status card', () => {
         'the status card photo call failed in transport, sending nothing more',
       ],
     ]);
+  });
+
+  // #875: the picture goes once per process, then by the file_id of its largest size (Rule 72)
+  const photoOf = (calls: readonly { method: string; payload: Record<string, unknown> }[]) =>
+    calls.filter((call) => call.method === 'sendPhoto').map((call) => call.payload.photo);
+  const RATE_LIMITED = {
+    ok: false as const,
+    error_code: 429,
+    description: 'Too Many Requests: retry after 1',
+    parameters: { retry_after: 1 },
+  };
+
+  it('SC-id1 a second /start sends the card picture by the file_id of the first answer', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    await scene.bot.handleUpdate(textUpdate('/menu'));
+    const [first, second] = photoOf(scene.calls);
+    expect(first).toBeInstanceOf(InputFile);
+    expect(second).toBe(CARD_FILE_IDS.at(-1));
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('SC-id2 a file_id refused for its file sends the text once, and the next /start uploads', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    scene.apiErrors.set('sendPhoto', PHOTO_REFUSED);
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    scene.apiErrors.delete('sendPhoto');
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    const photos = photoOf(scene.calls);
+    expect(photos[1]).toBe(CARD_FILE_IDS.at(-1));
+    expect(photos[2]).toBeInstanceOf(InputFile);
+    expect(sentPayload(scene.calls, 'sendMessage')?.text).toBe(cardFor());
+    expect(scene.logger.warn.mock.calls).toEqual([
+      [
+        expect.objectContaining({ method: 'sendPhoto', telegramErrorCode: 400, byFileId: true }),
+        'the status card photo was refused, sending the text instead',
+      ],
+    ]);
+  });
+
+  it('SC-id3 a 429 on the picture sends the text and keeps the file_id', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    scene.apiErrors.set('sendPhoto', RATE_LIMITED);
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    scene.apiErrors.delete('sendPhoto');
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    const photos = photoOf(scene.calls);
+    expect(photos[1]).toBe(CARD_FILE_IDS.at(-1));
+    expect(photos[2]).toBe(CARD_FILE_IDS.at(-1));
+    expect(sentPayload(scene.calls, 'sendMessage')?.text).toBe(cardFor());
+  });
+
+  it('SC-id4 the account card after a login and the status card share one file_id', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.bot.handleUpdate(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)));
+    await scene.bot.handleUpdate(textUpdate('/start'));
+    const [account, status] = photoOf(scene.calls);
+    expect(account).toBeInstanceOf(InputFile);
+    expect(status).toBe(CARD_FILE_IDS.at(-1));
+  });
+
+  // #875: the access read goes beside the record, and the pin off the chain
+  it('H-par1 the access read starts while /users/start is still on its way; the card after both', async () => {
+    let record: (() => void) | undefined;
+    const recordStart = vi.fn<BackendClient['recordStart']>(
+      () =>
+        new Promise((resolve) => {
+          record = () => resolve(ACTIVE);
+        }),
+    );
+    const scene = setup({ recordStart });
+    const handled = scene.bot.handleUpdate(textUpdate('/start'));
+    await until('the record', () => recordStart.mock.calls.length === 1);
+    expect(scene.backend.readTradingAccess).toHaveBeenCalledWith('4242');
+    expect(scene.calls).toEqual([]);
+    record?.();
+    await handled;
+    expect(sentPayload(scene.calls, 'sendPhoto')?.caption).toBe(cardFor());
+  });
+
+  it.each([
+    ['a new user', userView()],
+    ['a blocked user', userView({ status: UserStatus.Blocked })],
+    [
+      'a waiting link',
+      userView({ pendingBrokerAccounts: [{ id: PENDING_ACCOUNT_ID, email: null }] }),
+    ],
+  ])(
+    'H-par2 for %s the access answer is dropped unlogged: no card, no warn',
+    async (_name, user) => {
+      const scene = setup({
+        user,
+        readTradingAccess: refused(404, UserErrorCode.UserNotFound),
+      });
+      await scene.bot.handleUpdate(textUpdate('/start'));
+      expect(sentPayload(scene.calls, 'sendPhoto')).toBeUndefined();
+      expect(scene.calls.map((call) => call.method)).toEqual(['sendMessage']);
+      expect(scene.logger.warn).not.toHaveBeenCalled();
+    },
+  );
+
+  it('H-pin1 the unpin and the pin come after the handler is done, in that order', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.handleOnly(textUpdate('/start'));
+    expect(scene.calls.map((call) => call.method)).toEqual(['sendPhoto']);
+    await scene.detached.settled();
+    expect(scene.calls.map((call) => call.method)).toEqual([
+      'sendPhoto',
+      'unpinAllChatMessages',
+      'pinChatMessage',
+    ]);
+  });
+
+  it('H-pin3 the account card after a login is pinned off the chain too', async () => {
+    const scene = setup({ user: ACTIVE });
+    await scene.handleOnly(callbackUpdate(confirmCallbackData(PENDING_ACCOUNT_ID)));
+    expect(scene.calls.map((call) => call.method)).not.toContain('pinChatMessage');
+    await scene.detached.settled();
+    expect(sentPayload(scene.calls, 'pinChatMessage')?.message_id).toBe(CARD_MESSAGE_ID);
   });
 
   it('names the status card when the pin is refused', async () => {
@@ -710,14 +843,14 @@ describe('/menu', () => {
   });
 
   it('greets a user without an account with the welcome and its button', async () => {
-    const { bot, backend, calls } = setup();
+    const { bot, calls } = setup();
     await bot.handleUpdate(textUpdate('/menu'));
     const message = sentPayload(calls, 'sendMessage');
     expect(message?.text).toBe(TEXTS.welcome.value);
     expect(inlineButtons(message)).toEqual([
       { text: LABELS.connectButton, callback_data: CONNECT_CALLBACK_DATA },
     ]);
-    expect(backend.readTradingAccess).not.toHaveBeenCalled();
+    expect(sentPayload(calls, 'sendPhoto')).toBeUndefined();
   });
 
   it('sends the welcome video when one is configured', async () => {
@@ -1616,7 +1749,12 @@ describe('the account card', () => {
           bodies.set(method, Buffer.concat(chunks));
           const result =
             method === 'sendPhoto'
-              ? { message_id: CARD_MESSAGE_ID, date: 1, chat: { id: USER.id, type: 'private' } }
+              ? {
+                  message_id: CARD_MESSAGE_ID,
+                  date: 1,
+                  chat: { id: USER.id, type: 'private' },
+                  photo: [{ file_id: 'card-file', file_unique_id: 'u', width: 1, height: 1 }],
+                }
               : true;
           response.setHeader('content-type', 'application/json');
           response.end(JSON.stringify({ ok: true, result }));
@@ -1631,6 +1769,7 @@ describe('the account card', () => {
     it('uploads the picture from assets.ts as the photo', async () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
+      const detached = detachedWork();
       const bot = createBot({
         languages: userLanguagesWith(),
         intentTracker: stubTracker(),
@@ -1638,6 +1777,7 @@ describe('the account card', () => {
         sessionResumer: stubSessionResumer(),
         signalWaiter: stubSignalWaiter(),
         shownSignals: stubShownSignals(),
+        detached,
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.reject(new Error('unused'))),
@@ -1680,6 +1820,7 @@ describe('the account card', () => {
       });
 
       await bot.handleUpdate(confirm());
+      await detached.settled();
 
       expect([...bodies.keys()]).toEqual([
         'answerCallbackQuery',
@@ -1697,6 +1838,7 @@ describe('the account card', () => {
     it('uploads the same picture under the status card on /start (#24)', async () => {
       const { bodies, apiRoot } = await recordingServer();
       const logger = fakeLogger();
+      const detached = detachedWork();
       const bot = createBot({
         languages: userLanguagesWith(),
         intentTracker: stubTracker(),
@@ -1704,6 +1846,7 @@ describe('the account card', () => {
         sessionResumer: stubSessionResumer(),
         signalWaiter: stubSignalWaiter(),
         shownSignals: stubShownSignals(),
+        detached,
         token: '123456:AA-bot-token',
         backend: {
           recordStart: vi.fn(() => Promise.resolve(userView({ hasActiveBrokerAccount: true }))),
@@ -1746,6 +1889,7 @@ describe('the account card', () => {
       });
 
       await bot.handleUpdate(startUpdate('/start'));
+      await detached.settled();
 
       expect([...bodies.keys()]).toEqual(['sendPhoto', 'unpinAllChatMessages', 'pinChatMessage']);
       expect(bodies.get('sendPhoto')?.includes(readFileSync(ACCOUNT_CARD_PHOTO_PATH))).toBe(true);
@@ -2877,6 +3021,7 @@ describe('the Bot API timeout', () => {
       sessionResumer: stubSessionResumer(),
       signalWaiter: stubSignalWaiter(),
       shownSignals: stubShownSignals(),
+      detached: detachedWork(),
       token: '123456:AA-bot-token',
       // no handler runs in this test: the call under test is bot.api.sendMessage itself
       backend: {

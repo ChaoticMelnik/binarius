@@ -80,6 +80,7 @@ import {
   inlineStyles,
   keyboardRows,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   sessionStatusText,
@@ -211,6 +212,7 @@ function setup(
     sessionResumer,
     signalWaiter,
     shownSignals: options.shownSignals ?? stubShownSignals(),
+    detached: detachedWork(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.shareOff === true ? {} : { shareStorageChatId: -1001234567890 }),
     ...(options.sleep === undefined ? {} : { sleep: options.sleep }),
@@ -1502,6 +1504,19 @@ describe('the summary in one message (#318, #537)', () => {
     stopReason: TradingSessionStopReason.NoSignalTimeout,
   });
   const CARD_ROWS = STOPPED_ROWS;
+  // #321, #538, #875: «📤 Поделиться» on top, in the send itself; the query names the session only
+  const SHARE_ROW = [
+    {
+      text: LABELS.sessionShareButton,
+      switch_inline_query_chosen_chat: {
+        query: shareQuery(SESSION_ID),
+        allow_user_chats: true,
+        allow_group_chats: true,
+        allow_channel_chats: true,
+      },
+    },
+  ];
+  const SHARED_ROWS = [SHARE_ROW, ...CARD_ROWS];
   const captionOf = (view: TradingSessionView, label: PairLabel | null = pairLabel(PAIR_EURUSD)) =>
     sessionTexts.sessionSummaryText(label, PAIR_EURUSD.id, view).value;
   // the tracker's entry of a started session: its summary is what the tracker calls
@@ -1553,7 +1568,7 @@ describe('the summary in one message (#318, #537)', () => {
     await entry.summary(DONE);
     expect(scene.claimSessionSummary.mock.calls).toEqual([[SESSION_ID, String(USER.id)]]);
     const sent = scene.calls.slice(before).map((call) => call.method);
-    expect(sent).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
+    expect(sent).toEqual(['sendPhoto']);
     const photo = payloadOf(scene.calls, 'sendPhoto');
     expect(photo?.chat_id).toBe(USER.id);
     expect(photo?.photo).toBeInstanceOf(InputFile);
@@ -1568,7 +1583,7 @@ describe('the summary in one message (#318, #537)', () => {
     // #709: the caption ends with the summary's last line, no referral link
     expect(photo?.caption).not.toContain('t.me/');
     expect(lines.at(-1)).not.toMatch(/^🤖/);
-    expect(rowsOf(photo)).toEqual(CARD_ROWS);
+    expect(rowsOf(photo)).toEqual(SHARED_ROWS);
     expect(scene.logger.warn).not.toHaveBeenCalled();
   });
 
@@ -1609,14 +1624,12 @@ describe('the summary in one message (#318, #537)', () => {
     expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
       'sendPhoto',
       'sendMessage',
-      'editMessageReplyMarkup',
     ]);
     const text = summaryText(scene);
     expect(text?.text).toBe(captionOf(DONE));
     expect(text?.parse_mode).toBe('HTML');
     expect(text).not.toHaveProperty('disable_notification');
-    expect(rowsOf(text)).toEqual(CARD_ROWS);
-    expect(payloadOf(scene.calls, 'editMessageReplyMarkup')?.message_id).toBe(TEXT_CARD_MESSAGE_ID);
+    expect(rowsOf(text)).toEqual(SHARED_ROWS);
     expect(warnings(scene.logger)).toEqual(['trading session card refused: sent as text']);
     expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
       method: 'sendPhoto',
@@ -1658,11 +1671,9 @@ describe('the summary in one message (#318, #537)', () => {
     const entry = await entryOf(scene);
     const before = scene.calls.length;
     await entry.summary(DONE);
-    expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
-      'sendMessage',
-      'editMessageReplyMarkup',
-    ]);
+    expect(scene.calls.slice(before).map((call) => call.method)).toEqual(['sendMessage']);
     expect(summaryText(scene)?.text).toBe(captionOf(DONE));
+    expect(rowsOf(summaryText(scene))).toEqual(SHARED_ROWS);
     expect(warnings(scene.logger)).toEqual(['trading session card not drawn']);
   });
 
@@ -1704,11 +1715,10 @@ describe('the summary in one message (#318, #537)', () => {
       expect(scene.calls.slice(before).map((call) => call.method)).toEqual([
         'sendPhoto',
         'sendPhoto',
-        'editMessageReplyMarkup',
       ]);
-      expect(
-        scene.calls.filter((call) => call.method === 'sendPhoto').at(-1)?.payload.caption,
-      ).toBe(captionOf(DONE));
+      const photos = scene.calls.slice(before).map((call) => call.payload);
+      expect(photos.at(-1)?.caption).toBe(captionOf(DONE));
+      expect(photos.map((photo) => rowsOf(photo))).toEqual([SHARED_ROWS, SHARED_ROWS]);
       expect(scene.logger.warn).not.toHaveBeenCalled();
     },
   );
@@ -1765,6 +1775,7 @@ describe('the summary in one message (#318, #537)', () => {
       'trading session summary not sent',
     ]);
     expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
+    expect(rowsOf(summaryText(scene))).toEqual(SHARED_ROWS);
   });
 
   it('K19 a session that names no asset claims nothing and is an error', async () => {
@@ -1798,50 +1809,15 @@ describe('the summary in one message (#318, #537)', () => {
     expect(scene.logger.error).not.toHaveBeenCalled();
   });
 
-  // #321, #538: «📤 Поделиться» on top, by one edit after the send; the query names the session only
-  const SHARE_ROW = [
-    {
-      text: LABELS.sessionShareButton,
-      switch_inline_query_chosen_chat: {
-        query: shareQuery(SESSION_ID),
-        allow_user_chats: true,
-        allow_group_chats: true,
-        allow_channel_chats: true,
-      },
-    },
-  ];
-
-  it("K8 puts «📤 Поделиться» over the summary's own rows, its query the session's id", async () => {
+  it("K9' the photo itself carries «📤 Поделиться» over the summary's own rows, no later edit", async () => {
     const scene = setup({ readSession: () => Promise.resolve(DONE) });
     await (await entryOf(scene)).summary(DONE);
-    expect(sendsOf(scene).slice(-2)).toEqual(['sendPhoto', 'editMessageReplyMarkup']);
-    const edit = payloadOf(scene.calls, 'editMessageReplyMarkup');
-    expect(edit?.chat_id).toBe(USER.id);
-    expect(edit?.message_id).toBe(CARD_MESSAGE_ID);
-    const rows = rowsOf(edit) as unknown[][];
+    expect(sendsOf(scene).slice(-1)).toEqual(['sendPhoto']);
+    expect(methods(scene.calls)).not.toContain('editMessageReplyMarkup');
+    const rows = rowsOf(payloadOf(scene.calls, 'sendPhoto')) as unknown[][];
     expect(rows[0]).toEqual(SHARE_ROW);
     expect(rows.slice(1)).toEqual(CARD_ROWS);
     expect(scene.logger.warn).not.toHaveBeenCalled();
-  });
-
-  it('K9 a refused edit is a warning only: the summary keeps its keyboard, no retry, no «not sent»', async () => {
-    const scene = setup({ readSession: () => Promise.resolve(DONE) });
-    scene.apiErrors.set('editMessageReplyMarkup', {
-      ok: false,
-      error_code: 400,
-      description: 'Bad Request: message to edit not found',
-    });
-    await (await entryOf(scene)).summary(DONE);
-    expect(
-      methods(scene.calls).filter((method) => method === 'editMessageReplyMarkup'),
-    ).toHaveLength(1);
-    expect(rowsOf(payloadOf(scene.calls, 'sendPhoto'))).toEqual(CARD_ROWS);
-    expect(warnings(scene.logger)).toEqual(['trading session share button not attached']);
-    expect(scene.logger.warn.mock.calls[0]?.[0]).toMatchObject({
-      method: 'editMessageReplyMarkup',
-      telegramErrorCode: 400,
-      sessionId: SESSION_ID,
-    });
   });
 
   it('K10 without the storage channel the summary goes without «📤 Поделиться», and no warning', async () => {
@@ -1861,12 +1837,7 @@ describe('the summary in one message (#318, #537)', () => {
     expect(photo?.caption).toBe(
       sessionTexts.sessionSummaryText(null, bare.lastIntent!.assetId, bare).value,
     );
-    expect(rowsOf(photo)).toEqual([DEPOSIT, INVITE_MENU]);
-    expect(rowsOf(payloadOf(scene.calls, 'editMessageReplyMarkup'))).toEqual([
-      SHARE_ROW,
-      DEPOSIT,
-      INVITE_MENU,
-    ]);
+    expect(rowsOf(photo)).toEqual([SHARE_ROW, DEPOSIT, INVITE_MENU]);
   });
 });
 

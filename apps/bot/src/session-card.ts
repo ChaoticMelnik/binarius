@@ -1,4 +1,4 @@
-import { Resvg } from '@resvg/resvg-js';
+import { renderAsync } from '@resvg/resvg-js';
 import {
   CARD_COLOR,
   fitSize,
@@ -220,12 +220,14 @@ export const SESSION_CARD_FONT_FILES: readonly string[] = [
   'Inter-Bold.ttf',
 ].map((file) => sharedFile('fonts', file));
 
-export const renderSessionCard = (
+// renderAsync draws on libuv's pool, fonts read there too, so the bot's event loop is free while a
+// card is drawn (#875, Rule 72); the synchronous Resvg.render() would hold every update meanwhile.
+export const renderSessionCard = async (
   svg: string,
   fontFiles: readonly string[] = SESSION_CARD_FONT_FILES,
-): Buffer =>
-  new Resvg(svg, {
-    font: { fontFiles: [...fontFiles], loadSystemFonts: false, defaultFontFamily: 'Inter' },
-  })
-    .render()
-    .asPng();
+): Promise<Buffer> =>
+  (
+    await renderAsync(svg, {
+      font: { fontFiles: [...fontFiles], loadSystemFonts: false, defaultFontFamily: 'Inter' },
+    })
+  ).asPng();

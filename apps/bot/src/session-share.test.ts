@@ -24,6 +24,7 @@ import {
   stubTracker,
   type ApiCall,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { sessionShareCaption } from './texts';
 
@@ -52,6 +53,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     ...(options.storageOff === true ? {} : { shareStorageChatId: STORAGE_CHAT_ID }),
   });
   const api = captureApi(bot);
@@ -285,6 +287,49 @@ describe('the inline share answer (#538)', () => {
     const scene = setup();
     await scene.ask(QUERY, 'group');
     expect(answersOf(scene.calls)).toEqual([photoResult(PROMO_FILE_ID)]);
+  });
+
+  // #875, Rule 72: one drawing and one post per session and process
+  it('S11 a second query of the same session is answered by the kept file id, nothing drawn or posted', async () => {
+    const scene = setup();
+    await scene.ask(QUERY);
+    await scene.ask(QUERY);
+    expect(scene.readSessionShare).toHaveBeenCalledTimes(2);
+    expect(postsOf(scene.calls)).toHaveLength(1);
+    expect(answersOf(scene.calls)).toEqual([
+      photoResult(PROMO_FILE_ID),
+      photoResult(PROMO_FILE_ID),
+    ]);
+    expect(scene.logger.warn).not.toHaveBeenCalled();
+  });
+
+  it('S12 a kept file id the answer refuses is forgotten: the next query posts the card again', async () => {
+    const scene = setup();
+    await scene.ask(QUERY);
+    scene.apiErrors.set('answerInlineQuery', {
+      ok: false,
+      error_code: 400,
+      description: 'Bad Request: wrong file identifier/HTTP URL specified',
+    });
+    await scene.ask(QUERY);
+    scene.apiErrors.delete('answerInlineQuery');
+    await scene.ask(QUERY);
+    expect(postsOf(scene.calls)).toHaveLength(2);
+    expect(answersOf(scene.calls)).toHaveLength(3);
+    expect(warnings(scene.logger)).toEqual(['inline query not answered']);
+  });
+
+  it("S13 the owner's read comes before the kept id: a refused read answers empty", async () => {
+    const readSessionShare = vi
+      .fn<BackendClient['readSessionShare']>()
+      .mockResolvedValueOnce(DONE)
+      .mockImplementationOnce(notFound);
+    const scene = setup({ readSessionShare });
+    await scene.ask(QUERY);
+    await scene.ask(QUERY);
+    expect(readSessionShare).toHaveBeenCalledTimes(2);
+    expect(answersOf(scene.calls)).toEqual([photoResult(PROMO_FILE_ID), EMPTY]);
+    expect(postsOf(scene.calls)).toHaveLength(1);
   });
 
   it('S10 logs the chosen result with its session, and calls nothing', async () => {

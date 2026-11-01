@@ -9,7 +9,7 @@ import {
 } from '@binarius/shared';
 import { BackendError, backendErrorFields, type BackendClient } from './backend-client';
 import type { Logger } from './logging';
-import { LANGUAGE_CACHE_MAX } from './timing';
+import { LANGUAGE_CACHE_MAX, LANGUAGE_MISSING_TTL_MS } from './timing';
 
 // The language of the texts the bot is writing right now (#508, docs/bot-texts.md → Languages).
 // The middleware puts the user's language into this store before any handler runs, so every text
@@ -37,30 +37,36 @@ export const currentLanguage = (): BotLanguage => {
 export const runWithLanguage = <T>(language: BotLanguage, run: () => T): T =>
   store.run(language, run);
 
-// Telegram id → language, the oldest entry out first. No TTL: users.language changes only by the
-// first /start's INSERT and by this bot's own POST /users/language, and one bot process polls.
+// Telegram id → language, the oldest entry out first. A row's language has no TTL: users.language
+// changes only by the first /start's INSERT and by this bot's own POST /users/language, and one bot
+// process polls. A user with no row yet keeps the Telegram client's language for `ttlMs` (#875).
 export interface UserLanguages {
   get(telegramUserId: number): BotLanguage | undefined;
-  set(telegramUserId: number, language: BotLanguage): void;
+  set(telegramUserId: number, language: BotLanguage, ttlMs?: number): void;
   delete(telegramUserId: number): void;
 }
 
 export function createUserLanguages({
   maxEntries = LANGUAGE_CACHE_MAX,
-}: { maxEntries?: number } = {}): UserLanguages {
-  const entries = new Map<number, BotLanguage>();
+  now = Date.now,
+}: { maxEntries?: number; now?: () => number } = {}): UserLanguages {
+  const entries = new Map<number, { language: BotLanguage; until?: number }>();
   return {
     get(telegramUserId) {
-      const language = entries.get(telegramUserId);
-      if (language === undefined) return undefined;
+      const entry = entries.get(telegramUserId);
+      if (entry === undefined) return undefined;
+      entries.delete(telegramUserId);
+      if (entry.until !== undefined && now() >= entry.until) return undefined;
       // a Map keeps insertion order: re-inserting makes the entry the newest
-      entries.delete(telegramUserId);
-      entries.set(telegramUserId, language);
-      return language;
+      entries.set(telegramUserId, entry);
+      return entry.language;
     },
-    set(telegramUserId, language) {
+    set(telegramUserId, language, ttlMs) {
       entries.delete(telegramUserId);
-      entries.set(telegramUserId, language);
+      entries.set(
+        telegramUserId,
+        ttlMs === undefined ? { language } : { language, until: now() + ttlMs },
+      );
       if (entries.size > maxEntries) {
         const oldest = entries.keys().next();
         if (oldest.done !== true) entries.delete(oldest.value);
@@ -102,9 +108,12 @@ async function languageOf(
     languages.set(from.id, language);
     return language;
   } catch (error) {
-    // no users row yet: the first /start writes it, and its answer fills the cache
-    if (error instanceof BackendError && error.reason === UserErrorCode.UserNotFound)
+    // no users row yet: the first /start writes it, and its answer fills the cache; until then the
+    // fallback is kept a while, so each update before it does not read again (#875)
+    if (error instanceof BackendError && error.reason === UserErrorCode.UserNotFound) {
+      languages.set(from.id, fallback, LANGUAGE_MISSING_TTL_MS);
       return fallback;
+    }
     // not cached, so the next update reads again
     logger.warn(
       { ...errorLogFields(error), ...backendErrorFields(error) },

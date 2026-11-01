@@ -267,7 +267,8 @@ card's own entry, on all three paths and on the text card that replaces a refuse
 after an OAuth login carries it too ([bot-navigation.md](bot-navigation.md)).
 
 **The picture.** `apps/bot/src/assets/account-card.jpg`, its path in `assets.ts`, uploaded as an
-`InputFile` with every card — no `file_id` cache, accepted at one card per account activation.
+`InputFile` once per process, then sent by the `file_id` of the first answer's largest size, the
+status card's too (#875, `media-files.ts`, Rule 72; [bot-menu.md → Delivery and the pin](bot-menu.md#delivery-and-the-pin)).
 The bot runs from `src` (tsx), so the path resolves there; the Dockerfile's `COPY . .` puts the
 file in the image. `assets.test.ts` checks it is a JPEG inside the Bot API's photo limits (10 MB,
 width + height ≤ 10 000, ratio ≤ 20), and a test in `bot.test.ts` lets grammY upload it to a
@@ -291,7 +292,9 @@ clearing every pin is what leaves one card pinned; the user's own pins in the bo
 owner's choice). In a private chat neither call needs rights. Each may fail: one `warn` line with
 the method and the Telegram code, and the next step runs — a failed unpin still pins, a failed
 pin changes nothing about the connection, which is already committed. Neither is retried, and the
-caption does not claim the card is pinned.
+caption does not claim the card is pinned. Since #875 both run off the user's chain, once the
+handler has returned (`detached.ts`), so the confirm button's path is 1 / 3 and the code step's
+2 / 2 in `HANDLER_CALLS`.
 
 What is logged is the error's identity, the method and the code (`telegramErrorFields`), never
 the payload: the caption holds the user's address. `logging.test.ts` reads those lines at `trace`
@@ -823,13 +826,15 @@ stop cuts either sleep short. `polling.test.ts` P1–P14 hold each of these on a
 
 The handler budget is not a sentence about the handlers, it is computed from `HANDLER_CALLS`,
 which declares what each handler does on its longest path: `/start` and `/menu` are two backend
-calls and up to four Bot API calls (the access read, then the status card: the photo refused, the
-text, the unpin, the pin — [bot-menu.md](bot-menu.md)); the demo button is one backend call and two
+calls and up to two Bot API calls (the access read beside the record, then the status card: the
+photo refused, the text; the unpin and the pin run off the chain since #875 —
+[bot-menu.md](bot-menu.md)); the demo button is one backend call and two
 Bot API calls, and each demo screen after it one backend call and up to three Bot API calls (the
 query answered, the edit refused, the screen sent anew — [bot-demo.md](bot-demo.md)), except
 «📊 Анализ», three backend calls (the catalog, the signal, the access read for the stake label —
-#297) and up to four Bot API calls (the query answered, «⏳», then the signal's card as a photo and
-«⏳» deleted, or a text result's edit refused and sent anew — #482, [bot-demo.md](bot-demo.md#timing)); the
+#297) and up to four Bot API calls (the query answered, «⏳», then «⏳» edited into the signal's
+card and that edit refused, or a text result's edit refused and sent anew — #482, #875,
+[bot-demo.md](bot-demo.md#timing)); the
 stake button is four backend calls (the catalog and the access read together but counted one after
 the other, the intent and its one retry) and two Bot API calls, and «🔄 Обновить» two backend
 calls and up to three Bot API calls ([bot-demo-trade.md](bot-demo-trade.md)); the resend button is one

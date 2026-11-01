@@ -71,6 +71,7 @@ import {
   inlineStyles,
   keyboardRows,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import {
   LABELS,
@@ -130,6 +131,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
   });
   const api = captureApi(bot);
   api.answers.set('sendMessage', messageAnswer(TEXT_CARD_MESSAGE_ID));

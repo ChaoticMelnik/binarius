@@ -93,13 +93,14 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   `listTrackedSessions()` (#567, `GET /trading/sessions/tracked?limit=2000`, its own body ceiling
   `MAX_TRACKED_SESSIONS_BODY_BYTES`, 2 MiB).
 - `apps/bot/src/session-share.ts` (#321, #538) — `shareQuery`, `SHARE_PATTERN`,
-  `INLINE_QUERY_LIMIT`, `shareFallbackLink`, `shareButton`, `attachShareButton` (the card's edit
-  after the send) and `createSessionShareComposer({ backend, logger, storageChatId })`: the inline
-  query and the chosen result.
+  `INLINE_QUERY_LIMIT`, `shareFallbackLink`, `shareButton` (the row the summary's send carries,
+  #875) and `createSessionShareComposer({ backend, logger, storageChatId })`: the inline query, its
+  promo card's `file_id` kept by session (`PROMO_FILE_IDS_MAX`), and the chosen result.
   `bot.ts` mounts it on the bot itself, not under the private-chat filter: inline updates carry
   no chat.
 - `apps/bot/src/session-card.ts` — `sessionCardModel`, `sessionCardSvg` and `renderSessionCard`
-  (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js` and the fonts in
+  (#318): the card's words and counts, its SVG, its PNG through `@resvg/resvg-js`'s `renderAsync`
+  (#875, off the event loop) and the fonts in
   `packages/shared/fonts/` (Inter 4.1, OFL, `OFL.txt` beside them; there since #881, which draws
   the backend's daily summary card with them). The palette and the text helpers are
   `packages/shared/src/svg-card.ts`.
@@ -206,11 +207,10 @@ pnpm test --project unit apps/bot/src   # needs no database or Redis
   tracker, once the session is done, its final text is on screen and the final mark is set:
         POST /trading/sessions/<id>/summary { telegramUserId }   (#318, #537, at most once)
         → sendPhoto to the session message's chat, with sound: the card, the whole summary as its
-          caption (no link since #709), «🔁 Ещё сессия» and the end of path; no trade (no_signal_timeout),
-          a drawing that threw or a photo refused for good → sendMessage of the same caption;
-          429 → the wait of retry_after (≤ 5 s) and sendPhoto once more
-        → editMessageReplyMarkup of it: «📤 Поделиться» on top of those rows (#321; not on a session
-          without a trade)
+          caption (no link since #709), «📤 Поделиться» on top (#321, in the send itself since #875;
+          not on a session without a trade), «🔁 Ещё сессия» and the end of path; no trade
+          (no_signal_timeout), a drawing that threw or a photo refused for good → sendMessage of the
+          same caption and keyboard; 429 → the wait of retry_after (≤ 5 s) and sendPhoto once more
   backend's sender, the fallback (#537): no status message - on the tick of the final mark; else
         30 min after it and nobody claimed - sendMessage of the text summary with sound
 the bot's start (after the profile), then every 10 min                          (#567)
@@ -794,10 +794,10 @@ One entry per session id, in process memory, like the intent tracker
   the first poll of an entry with a view and nothing to record; a pressed entry's first poll, the
   record, goes at once — `SESSION_TRACK_POLL_MS` = 10 s (a trade's open-to-settle
   cycle is at least the worker's catch-up grace, 10 s), `SESSION_TRACK_DEADLINE_MS` = `SESSION_MAX_DURATION_MS` + 10 min,
-  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 4 × 8 s + 5 s = 47 s (#537): an attempt's read and edit, then
-  the summary's claim and `sendPhoto`, on a 429 the wait (`SESSION_SUMMARY_RETRY_WAIT_MS`, 5 s) and
-  `sendPhoto` again, and the `editMessageReplyMarkup` that adds «📤 Поделиться» (#321); a photo
-  refused for good sends the text in place of the retry, 5 s shorter. The chain also checks
+  `SESSION_TRACK_DRAIN_MS` = 2 × 5 s + 3 × 8 s + 5 s = 39 s (#537, #875): an attempt's read and
+  edit, then the summary's claim and `sendPhoto` with «📤 Поделиться» in it, on a 429 the wait
+  (`SESSION_SUMMARY_RETRY_WAIT_MS`, 5 s) and `sendPhoto` again; a photo refused for good sends the
+  text in place of the retry, 5 s shorter. The chain also checks
   `2 × SESSION_RESUME_INTERVAL_MS < SESSION_SUMMARY_FALLBACK_MS` (20 min < 30 min).
 - `SESSION_RESUME_INTERVAL_MS` = 10 min (#567): one list and one catalog read per bot process per
   pass, and a link of the chain through the pace below.
@@ -876,8 +876,6 @@ id or the symbol.
   retry, no text
 - `trading session summary names no asset` (#537, `error`): neither the settings nor a last intent
   name the asset; nothing claimed, the backend's fallback closes the step
-- `trading session share button not attached` (#321): the card is sent but has no «📤 Поделиться»:
-  the edit failed (`method: editMessageReplyMarkup`, `telegramErrorCode`); with `sessionId`.
 - `trading session not shared` (#321, #538): the inline handler's read failed other than 404
   (`backendStatus`, `backendReason`, `sessionId`), `reason: storage_off` (a new button's query with
   `SHARE_STORAGE_CHAT_ID` unset) or `reason: no_file_id` (the post's result named no size). A 404 —
@@ -1240,8 +1238,8 @@ open block (#700) adds a call per trade: its send (with the waiting message's de
 step 1) or edit, then the result's edit — its own step in `serve` with its own pace and check of
 `stop()`, so the worst path in flight stays the gone edit's above. The bot's recovery after a restart adds up to 4 first polls a second on the same
 token (`SESSION_RESUME_PER_SECOND`, #567): up to 4 first polls a second, and only a stopped
-session's is an edit (#536, `mayDraw`) — up to 16 calls when each entry's summary is due (#537:
-a 429 adds one photo) ([risk
+session's is an edit (#536, `mayDraw`) — up to 12 calls when each entry's summary is due (#537:
+a 429 adds one photo; #875: the share row is in the photo) ([risk
 47](#accepted-risks)). The wait for a signal (#664) adds up to 5 edits a second
 (`SIGNAL_WAIT_EDITS_PER_SECOND`, with a burst of 5 after a quiet second since #869 — at most 10 in
 that second; its scanner captions, #859, are inside them, at most 2 a tick): about 38 a second in
@@ -1762,14 +1760,16 @@ Telegram's own forwarding, which carries the caption with the balance (accepted 
   carries the photo, so the list comes as a new message at once, with no `warn` (until #761 the edit
   was tried, refused with «there is no text in the message to edit» and logged per press). «📊 Анализ»
   of a card sent before #858 (and the analysis card's «🔄 Заново») tries no edit (#482): the press carries the photo, so
-  «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, the
-  card goes as a photo and «⏳» is deleted ([bot-demo.md → The analysis](bot-demo.md#the-analysis)).
+  «⏳» goes as a new message at once, and its result is edited into it, or, for a signal, «⏳»
+  becomes the card by `editMessageMedia` (#875, [bot-demo.md → The analysis](bot-demo.md#the-analysis)).
 - **The renderer.** `@resvg/resvg-js` 2.6.2 (MPL-2.0), a prebuilt native module per platform, about
-  30 ms per card on the bot's event loop. It loads only `packages/shared/fonts/Inter-*.ttf`
-  (`loadSystemFonts: false`): the alpine image has no fonts, and without a font resvg drops the
-  text without an error. The backend's daily summary card (#881, [mailing.md](mailing.md#the-daily-summary-881))
-  is drawn with the same fonts by the same version, through `renderAsync` (libuv's pool), so the
-  backend's event loop is free during a render. `pnpm check` renders on the host's build and holds that the lockfile has
+  30 ms per card. Since #875 the bot draws through `renderAsync` (libuv's pool), as the backend's
+  daily summary card (#881, [mailing.md](mailing.md#the-daily-summary-881)) does: the event loop
+  is free while a card is drawn, a 1 ms timer ticks during it (`session-card.test.ts` R3), and no
+  code of the bot draws with the synchronous `Resvg` (R4, Rule 72). It loads only
+  `packages/shared/fonts/Inter-*.ttf` (`loadSystemFonts: false`) — resvg 2.6.2 takes font files,
+  not buffers, so it reads them inside each render, on the pool: the alpine image has no fonts,
+  and without a font resvg drops the text without an error. `pnpm check` renders on the host's build and holds that the lockfile has
   the `linux-x64-musl` and `linux-arm64-musl` builds (`lockfile-musl.test.ts`); that the musl build
   loads in the image is the owner's check:
 
@@ -1787,11 +1787,10 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 
 - **The button.** Only with `SHARE_STORAGE_CHAT_ID` set (`apps/bot/src/env.ts`; unset, the bot
   logs `share button off: SHARE_STORAGE_CHAT_ID is not set` at start and the summary goes with its
-  #318 keyboard alone). The card is sent with its #318 keyboard and then gets the row
-  `switch_inline_query_chosen_chat` = `share:<sessionId>` on top, by one `editMessageReplyMarkup`
-  that sets the whole keyboard again (the share row, then every row of `sessionCardKeyboard`). A
-  failed edit → no button, one `warn`, no retry; the card's own `trading session card not sent`
-  does not fire.
+  #318 keyboard alone). The card is sent with the row `switch_inline_query_chosen_chat` =
+  `share:<sessionId>` on top of every row of `sessionCardKeyboard`, in the send itself (#875; until
+  then a second call, an `editMessageReplyMarkup` after the send); the text sent in place of the
+  photo, and the photo again after a 429, carry the same keyboard.
 - **The answer.** `SHARE_PATTERN` parses the query: a lower-case uuid, and after #321's form a
   `:` and a file id of 1–213 non-space characters; anything else is answered empty with no
   backend call. A matching query reads `POST /trading/sessions/:id/share { telegramUserId:
@@ -1825,7 +1824,11 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 - **The storage channel.** `sendPhotoToStorage(api, SHARE_STORAGE_CHAT_ID, png)` posts the PNG
   without sound, without a caption or a keyboard; the answer names the largest size's `file_id`
   (`photo.at(-1)`). Posts are never deleted: Bot API does not document that a `file_id` outlives
-  its message, so nothing relies on it. One post per press after Telegram's 300 s cache; a refused
+  its message, so nothing relies on it. Since #875 the `file_id` is kept by session in the process
+  (an LRU of `PROMO_FILE_IDS_MAX`, 10 000): a second query for the same session, after the owner's
+  read (Rule 13: always first), is answered by it with nothing drawn or posted; an answer refused
+  for its file forgets it, so the next query draws and posts again; a restart draws again. One
+  post per session and process after Telegram's 300 s cache; a refused
   post (403 the bot is not an admin, 400 the chat is wrong, 429 the channel's ≈ 20 messages a
   minute) → `trading session promo not uploaded` and the empty answer, no retry.
 - **The result** is `InlineQueryResultCachedPhoto` with `id` = the session's id, the posted
@@ -1914,8 +1917,8 @@ storage channel for its `file_id`; the owner proof is the backend's read of the 
 18. **No repeat on an unknown outcome of `/stop`** (#122): the stop may have committed; the truth is
     in the session's message (the tracker's edit at the stop), and a second `/stop` answers
     «Активных сессий нет.».
-19. **One more Bot API call per card** (#321): a failed `editMessageReplyMarkup` leaves the card
-    without «📤 Поделиться», and nothing retries it — a done session sends no second card. Without
+19. **The share row rides on the card** (#321, #875): a card that is not delivered has no
+    «📤 Поделиться» either, and a done session sends no second card. Without
     `SHARE_STORAGE_CHAT_ID` no card gets the button (#538).
 20. **The query is visible in the input field** for a moment after the press (#321): since #538
     it is `share:<sessionId>`, the session's id, which answers nothing to anyone but its owner; an

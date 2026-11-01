@@ -76,6 +76,7 @@ import {
   inlineStyles,
   keyboardRows,
   stubShownSignals,
+  detachedWork,
 } from './testing';
 import { intentStatusText, LABELS, setBotTextSources, TEXTS } from './texts';
 
@@ -127,6 +128,7 @@ function setup(
     sessionResumer: stubSessionResumer(),
     signalWaiter: stubSignalWaiter(),
     shownSignals: stubShownSignals(),
+    detached: detachedWork(),
     ...(options.cashierUrl === null ? {} : { cashierUrl: options.cashierUrl ?? CASHIER_URL }),
     ...(options.languages === undefined ? {} : { languages: options.languages }),
   });
